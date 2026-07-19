@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-AGU is a Python basketball video analysis project. The FastAPI service lives in `app/`: `app/main.py` starts the API, `app/analysis/` contains tracking, inference, fusion, VLM review, and task orchestration, `app/models/` contains R(2+1)D model and preprocessing code, and `app/video/` writes annotated outputs. Training and dataset utilities are at the repository root (`train_mac.py`, `train.py`, `dataset.py`) with support scripts in `scripts/` and shared helpers in `utils/`. Tests live in `tests/`. Example media is in `examples/`; generated outputs and large local data should stay in `dataset/`, `model_checkpoints/`, `analysis_outputs/`, and `output_videos/`.
+AGU is a Python basketball video analysis project. The FastAPI service lives in `app/`: `app/main.py` starts the API, `app/analysis/` contains tracking, inference, fusion, VLM review, and task orchestration, `app/models/` contains R(2+1)D model and preprocessing code, and `app/video/` writes annotated outputs. The single training entry point is `train_mac.py`; `dataset.py`, support scripts in `scripts/`, and shared helpers in `utils/` provide dataset and training utilities. Tests live in `tests/`. Example media is in `examples/`; generated outputs and large local data should stay in `dataset/`, `model_checkpoints/`, `analysis_outputs/`, and `output_videos/`.
 
 ## Build, Test, and Development Commands
 

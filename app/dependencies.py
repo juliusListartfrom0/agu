@@ -6,7 +6,6 @@ import torch
 from fastapi import Depends
 
 from app.config import Settings, get_settings
-from app.models.r2plus1d import build_r2plus1d_model
 from app.analysis.service import AnalysisService
 
 # We'll use a global var to hold the loaded model created during app lifespan

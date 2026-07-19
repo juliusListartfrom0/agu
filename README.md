@@ -7,12 +7,12 @@
 
 ### 项目简介
 
-AGU 是一个可扩展的开源篮球视频分析引擎与 reference pipeline，组合了球员跟踪、片段级动作分类、身份与衣服明暗证据、比分牌对账、可选本地 VLM 复核和标注视频输出。当前 0.x 定位是垂直领域 engine/toolkit，不宣称为通用视频 AI 框架。
+AGU 是一个可扩展的开源篮球视频分析引擎与 reference pipeline，组合了传统视觉、动作模型、名单人脸识别、本地 VLM、事件账本和独立验收。当前 0.x 定位是垂直领域 engine/toolkit，不宣称为通用视频 AI 框架。
 
 AGU 的目标不是成为小程序后端或完整篮球 SaaS，而是作为可被其他系统调用的分析引擎：
 
 ```text
-basketball video -> player tracks -> action clips -> structured JSON + optional annotated video
+raw game video -> perception and identity -> event graph -> official box score -> sealed evaluation
 ```
 
 当前仓库提供：
@@ -21,7 +21,9 @@ basketball video -> player tracks -> action clips -> structured JSON + optional 
 - 可安装的 `agu-basketball` Python 包和 `agu` CLI；`python -m app.cli` 保持兼容。
 - Docker 自托管部署示例。
 - 面向 Mac/CPU/MPS 的训练入口 `train_mac.py`。
-- 兼容旧流程的脚本：`train.py`、`hybrid_analysis.py`、`hybrid_service.py`。
+- 原片独立推理、Codex 辅助训练标注、名单人脸注册去重和严格验收脚本。
+
+当前正式方案、角色边界、入口清单和已知能力状态见 [`docs/current-solution.md`](docs/current-solution.md)。旧的一体化分析入口、重复训练入口和一次性手工测试脚本已经删除；现有 FastAPI、`agu` CLI、v3 动作模型兼容链和 `action_proxy_v1` 只作为稳定兼容层保留，不能冒充正式技术统计。
 
 当前部署目标是 `model_checkpoints/r2plus1d_v3/best.pt`。推理预处理固定匹配 v3 训练分布：OpenCV BGR、resize 到 `112x112`、值域保持 `[0,255]`，不做 RGB 转换、`/255` 或 Kinetics normalize。
 
@@ -257,10 +259,7 @@ agu analyze --video examples/lebron_shoots.mp4 --profile profiles/accurate.toml
 │       └── preprocessing.py  v3 对齐预处理
 ├── dataset.py                SpaceJam 数据集包装
 ├── train_mac.py              推荐训练脚本
-├── train.py                  历史训练脚本
-├── hybrid_analysis.py        旧的一体化脚本
-├── hybrid_service.py         旧的简易 HTTP 服务
-├── scripts/                  辅助脚本
+├── scripts/                  正式推理、训练标注、评测与维护入口
 ├── requirements.txt
 ├── pytest.ini
 ├── .env.example
@@ -337,6 +336,10 @@ BASKETBALL_FACE_DETECTION_MODEL_PATH=model_checkpoints/opencv_face/face_detectio
 BASKETBALL_FACE_RECOGNITION_MODEL_PATH=model_checkpoints/opencv_face/face_recognition_sface_2021dec.onnx
 BASKETBALL_FACE_DETECTION_SCORE_THRESHOLD=0.60
 BASKETBALL_FACE_IDENTITY_ALLOW_FALLBACK=true
+BASKETBALL_FACE_GALLERY_PATH=
+BASKETBALL_FACE_GALLERY_SIMILARITY_THRESHOLD=0.45
+BASKETBALL_FACE_GALLERY_MINIMUM_MARGIN=0.08
+BASKETBALL_FACE_ENROLLED_MINIMUM_QUALITY=0.65
 BASKETBALL_VLM_MODE=low-confidence
 BASKETBALL_OLLAMA_MODEL=qwen3-vl:4b
 BASKETBALL_OLLAMA_HOST=http://127.0.0.1:11434
@@ -355,6 +358,43 @@ BASKETBALL_PORT=8765
 ```
 
 球员面部身份默认使用 OpenCV YuNet + SFace 本地适配器。模型权重不进入仓库，分别放到上述两个配置路径；模型缺失时 `opencv_sface_if_available` 会回退到 Haar 检脸与通用外观特征，不影响服务启动。YuNet 与 SFace 可从 OpenCV Zoo 获取，运行时不需要联网。SFace 仅在同一轨迹至少两张脸形成占多数的一致聚类时输出，避免轨迹 ID 切换、背身或背景人物污染面部身份。
+
+官方统计身份去重可使用哈希封存的标注人脸图库。先准备
+`agu.annotated-face-list.v1` 清单，再运行 `scripts/build_face_gallery.py` 生成
+`agu.face-gallery.v1`；`scripts/build_official_identity_graph.py` 用
+`--face-gallery` 及两个人脸模型参数加载图库。AGU 运行时只接收人脸模板，由
+YuNet + SFace 自行识别原片轨迹：同一图库身份可合并，不同图库身份禁止合并，
+低质量或匹配间隔不足的脸保持匿名。清单必须声明 `benchmark_disjoint: true`；
+同一验收比赛的高光、失误、投丢片段和技术统计不得作为该比赛的运行时图库来源。
+没有现成人脸清单时，可先用
+`scripts/build_face_enrollment_candidates.py` 从独立的注册视频直接检出人脸并生成逐簇审核图，
+再用 `scripts/approve_face_enrollment_candidates.py` 将穷尽式的批准、合并和拒绝决定转换为
+`agu.annotated-face-list.v1`。这一步只标注“是否为同一个人”并剔除裁判/无效脸，不标注比赛动作；
+候选清单和审核决定都由 SHA-256 绑定，未处理完任一候选簇会失败。
+来自多个独立注册来源的已审核列表可用 `scripts/merge_annotated_face_lists.py` 合并；
+合并决定同样必须绑定所有源清单并穷尽处理每个源身份，避免同一球员在图库中重复注册。
+正式个人技术统计应在候选生成时启用
+`scripts/build_official_event_candidates.py --require-face-gallery-identity`。该门禁只保留已由封存人脸注册库锚定的 canonical player；注册身份只能通过直接人脸证据或两侧都可信且号码相同的球衣证据扩展，身体 ReID 只能聚合匿名轨迹，不能单独继承注册姓名。匿名轨迹、裁判和图库匹配不确定的人员不能直接进入个人统计。人脸库为空或未提供身份图时命令会失败关闭。
+身份图输入还必须来自启用 `player_tracking=true` 的感知产物；无跟踪的通用检测结果会被拒绝，
+避免把统一临时 ID 当成球员身份。
+注册身份还受 `BASKETBALL_FACE_ENROLLED_MINIMUM_QUALITY` 门禁控制（默认 `0.65`）。
+低于该质量的远景或模糊人脸即使余弦分数过线也保持匿名，且不能作为向其他轨迹传播注册身份的直接证据。
+
+```json
+{
+  "schema_version": "agu.annotated-face-list.v1",
+  "benchmark_disjoint": true,
+  "annotation_producer": "codex-assisted",
+  "persons": [{
+    "person_id": "black-player-01",
+    "team_id": "raw-dark",
+    "samples": [
+      {"path": "faces/black-player-01-a.jpg", "bbox": [20, 10, 140, 150]},
+      {"path": "faces/black-player-01-b.jpg", "bbox": [18, 12, 138, 152]}
+    ]
+  }]
+}
+```
 
 ### 启动 API
 
@@ -486,7 +526,6 @@ high_confidence           可选，覆盖高置信度阈值
 ./venv/bin/python scripts/check_training.py --history-path histories/history_r2plus1d_v3.txt
 ./venv/bin/python scripts/gen_augmented.py --minority-only --multiplier 3
 ./venv/bin/python scripts/gen_splits.py --annotation-path dataset/annotation_dict.json
-./venv/bin/python scripts/manual_test_run.py
 ./venv/bin/python scripts/build_identity_duplicate_report.py \
   --analysis-json analysis_outputs/<analysis-id>.json \
   --output-json analysis_outputs/perf_runs/identity-duplicate-report.json \
@@ -523,16 +562,16 @@ high_confidence           可选，覆盖高置信度阈值
 
 全量常态使用建议复用同一个 `--vlm-cache-path`。脚本会在每个 player 的 VLM 判断完成后立即写入缓存；如果中途停止，下一次重跑会跳过已验证过的框选截图。报告截图面向人工审阅时，建议至少使用 `--dedupe-players --max-players 18`；当存在大量噪声短轨迹时，可再叠加 `--min-roster-score 18` 和 `--require-vlm-player`，避免把重复身份或明确非球员框写成独立球员报告。
 
-### Legacy 入口状态
+### 入口状态
 
 | 文件 | 状态 | 建议 |
 | --- | --- | --- |
 | `app/main.py` | 主服务入口 | 推荐 |
 | `python -m app.cli` | API CLI 客户端 | 推荐 |
 | `train_mac.py` | 当前训练入口 | 推荐 |
-| `train.py` | 历史训练入口 | 暂保留，后续合并 |
-| `hybrid_analysis.py` | 历史一体化脚本 | 后续转正式 CLI 或归档 |
-| `hybrid_service.py` | 历史简易 HTTP 服务 | FastAPI 已覆盖，后续归档 |
+| `scripts/run_official_*.py` | 原片正式候选发现与 AGU 自主推理 | 当前实验入口 |
+| `scripts/build_face_*.py` | Codex 辅助名单标注与 AGU 人脸注册 | 离线训练/注册入口 |
+| `scripts/evaluate_official_bundle.py` | 冻结预测后的独立验收 | 正式评测入口 |
 
 ### 测试
 
@@ -593,6 +632,78 @@ Current identity and statistics behavior:
 - `long_video.identity_merge_decisions[]` exposes optional VLM post-processing decisions when `vlm_identity_merge_enabled=true`.
 - `long_video.merged_players[]` exposes confirmed-merge statistics when `confirmed_identity_merges[]` is supplied in the request.
 - `statistics.points`, `assists`, `rebounds`, `blocks`, and `steals` are action-proxy estimates, not official box-score truth. `shoot` clips are exposed as `shot_attempts` and `point_candidate_count`; `points` remains 0 until made-shot, free-throw, or scoreboard-linked scoring confirmation exists. The `statistics.status`, `estimated_fields`, and `candidate_fields` fields make that contract explicit. Block, rebound, steal, and point evidence should be confirmed through event candidates, owner candidates, ball/rim/possession evidence, VLM, scoreboard audit, or human review.
+
+The experimental official-stat foundation is opt-in with
+`BASKETBALL_OFFICIAL_STATS_ENABLED=true`. It provides normalized ball/rim/player
+detections, ball trajectories, possession/shot state machines, dependent event
+relations, immutable review revisions, deterministic official aggregation, and
+raw-only sealed evaluation. It does **not** promote the current action candidates
+to official statistics. A compatible basketball detector must be configured via
+`BASKETBALL_OFFICIAL_DETECTOR_BACKEND` and
+`BASKETBALL_OFFICIAL_DETECTOR_MODEL_PATH`; missing perception evidence yields
+`unknown`/review work, never a fabricated count. Ultralytics is an optional
+AGPL/commercial-license adapter. Prefer a license-compatible ONNX or Apache-2.0
+deployment backend for an open-source release.
+
+Codex is not part of AGU runtime recognition. It may create isolated annotation
+truth and acceptance reports only. `scripts/run_official_perception.py` produces
+traditional detector/tracker/team candidates;
+`scripts/run_official_autonomous_inference.py` asks the configured local Ollama
+VLM to adjudicate bounded raw-video windows. The acceptance evaluator must use
+`scripts/evaluate_official_bundle.py --require-agu-autonomous`; this rejects any
+Codex/human-confirmed event or reference-derived provenance. Configure the path
+with `BASKETBALL_OFFICIAL_PLAYER_TRACKING_ENABLED`,
+`BASKETBALL_OFFICIAL_PLAYER_TRACKER_CONFIG`, `BASKETBALL_OFFICIAL_VLM_ENABLED`,
+`BASKETBALL_OFFICIAL_VLM_CONFIDENCE`, `BASKETBALL_OFFICIAL_VLM_FRAMES`, and
+`BASKETBALL_OFFICIAL_VLM_IMAGE_WIDTH`, and
+`BASKETBALL_OFFICIAL_VLM_CONTEXT_LENGTH`. Long dense windows use the separate
+`BASKETBALL_OFFICIAL_VLM_TIMEOUT` rather than the short clip default.
+`BASKETBALL_OFFICIAL_VLM_CONTACT_SHEET` is an experimental layout switch and is
+off by default because current qwen3-vl:4b validation increased false shots.
+For two-pass VLM actor review, `BASKETBALL_OFFICIAL_ACTION_OWNER_MODEL_PATH`
+may point to an experimental hash-sealed AGU action-owner model. The traditional model ranks
+AGU-generated player candidates before overlays are rendered; the VLM must
+still validate the visible actor, so the model does not prefill an event answer.
+Codex-authored training labels are accepted only through a SHA-bound,
+acceptance-disjoint training manifest and are recorded in output provenance.
+The setting is empty by default: a model must pass both cross-video training
+validation and a separate raw-video acceptance gate before production use.
+Traditional ball/rim trajectory outcomes take precedence over conflicting VLM
+guesses, made shots deterministically reject linked rebound candidates, and a
+3-point label requires grounded line/feet/release evidence. The offline
+candidate builder also supports `--shooter-lookback-sec` to keep identity
+candidates near the resolved shot outcome instead of across a long noisy
+cluster. Rebound candidates carry a traditional multi-frame stable-control
+score: repeated early ball proximity ranks ahead of a one-frame tip, while the
+VLM still decides the visible actor. After the clean semantic pass establishes
+an offensive or defensive rebound, the actor pass is restricted to the only
+team consistent with the already confirmed missed shot. The optional
+`--max-cluster-span-sec` experiment caps sparse ball/rim chains; it is disabled
+by default because the 0--60 second acceptance probe improved recall but added
+false candidates.
+
+For reusable raw-only identity, build a sealed identity graph after perception
+and pass it into candidate construction:
+
+```bash
+python scripts/build_official_identity_graph.py \
+  --perception perception.json --video game.mov \
+  --output identity.json \
+  --embedding-backend torchvision_mobilenet_v3_small \
+  --embedding-threshold 0.92
+
+python scripts/build_official_event_candidates.py \
+  --perception perception.json --video game.mov --game-id game-001 \
+  --identity-graph identity.json --output candidates.json
+```
+
+The identity artifact is bound to the raw video hash and records embedding and
+graph provenance. The optional `torchreid_osnet_x0_25` backend requires a local
+`torchreid` installation and weights; keep it optional rather than adding its
+heavy runtime dependencies to the base service. Thresholds must be calibrated
+on same-time different-player negative pairs. Lowering the cosine threshold to
+force a roster-sized identity count can silently merge different players.
+
 - `long_video.scoreboard_summary` is emitted when `scoreboard_audit=true`; CLI `accurate` and `vlm-full` enable it by default. The v3 audit detects complete dark physical panels, tracks camera motion across 13 consecutive frames, and reads three raw phases, two sharpened boundary frames, and one temporal fusion. Install `requirements-ocr.txt` to let the optional offline RapidOCR adapter read large side-score digits first; unavailable or low-confidence OCR falls back to the configured VLM. Results are published only after burst/cross-anchor consensus and cross-time score/clock checks. `inconsistent_scoreboard` means evidence disagreed and no final score was published.
 
 Setup:

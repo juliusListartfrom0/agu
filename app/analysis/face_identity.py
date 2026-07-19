@@ -4,11 +4,10 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional, Protocol, Sequence
 
 import cv2
 import numpy as np
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -19,6 +18,22 @@ class FaceIdentityResult:
     model_id: str
     sample_count: int
     quality: float
+
+
+@dataclass(frozen=True)
+class DetectedFace:
+    """One YuNet detection with its SFace embedding and aligned face crop."""
+
+    bbox: tuple[int, int, int, int]
+    confidence: float
+    embedding: np.ndarray
+    aligned_crop: np.ndarray
+
+
+class FaceIdentityAdapter(Protocol):
+    model_id: str
+
+    def embed_player_crops(self, crops_bgr: Sequence[np.ndarray]) -> Optional[FaceIdentityResult]: ...
 
 
 class OpenCvSFaceIdentityAdapter:
@@ -69,6 +84,21 @@ class OpenCvSFaceIdentityAdapter:
             quality=quality,
         )
 
+    def detect_frame_faces(
+        self,
+        frame_bgr: np.ndarray,
+        *,
+        minimum_face_size: int = 24,
+    ) -> list[DetectedFace]:
+        """Detect and embed every sufficiently large face in a full raw frame."""
+
+        with self._lock:
+            return self._detect_faces(
+                frame_bgr,
+                minimum_face_size=minimum_face_size,
+                require_upper_player_region=False,
+            )
+
     def _select_consistent_embeddings(
         self,
         embeddings: Sequence[np.ndarray],
@@ -79,9 +109,7 @@ class OpenCvSFaceIdentityAdapter:
         similarities = matrix @ matrix.T
         medoid_index = int(np.argmax(similarities.mean(axis=1)))
         selected_indices = [
-            index
-            for index, similarity in enumerate(similarities[medoid_index])
-            if float(similarity) >= 0.50
+            index for index, similarity in enumerate(similarities[medoid_index]) if float(similarity) >= 0.50
         ]
         required_count = max(2, (len(embeddings) + 1) // 2)
         if len(selected_indices) < required_count:
@@ -100,39 +128,65 @@ class OpenCvSFaceIdentityAdapter:
     def _embed_best_face(self, player_crop: np.ndarray) -> Optional[np.ndarray]:
         if player_crop is None or player_crop.size == 0 or min(player_crop.shape[:2]) < 20:
             return None
-        height, width = player_crop.shape[:2]
-        self._detector.setInputSize((width, height))
-        _, faces = self._detector.detect(player_crop)
-        if faces is None:
+        faces = self._detect_faces(
+            player_crop,
+            minimum_face_size=10,
+            require_upper_player_region=True,
+        )
+        if not faces:
             return None
+        height, width = player_crop.shape[:2]
+        return max(
+            faces,
+            key=lambda item: item.confidence - abs(((item.bbox[0] + item.bbox[2] / 2.0) / width) - 0.5) * 0.15,
+        ).embedding
 
-        candidates = []
+    def _detect_faces(
+        self,
+        image: np.ndarray,
+        *,
+        minimum_face_size: int,
+        require_upper_player_region: bool,
+    ) -> list[DetectedFace]:
+        if image is None or image.size == 0 or min(image.shape[:2]) < minimum_face_size:
+            return []
+        height, width = image.shape[:2]
+        self._detector.setInputSize((width, height))
+        _, faces = self._detector.detect(image)
+        if faces is None:
+            return []
+        detected: list[DetectedFace] = []
         for face in faces:
             face_width = float(face[2])
             face_height = float(face[3])
             center_x = (float(face[0]) + face_width / 2.0) / width
             center_y = (float(face[1]) + face_height / 2.0) / height
-            if (
-                face_width >= 10.0
-                and face_height >= 10.0
-                and -0.02 <= center_x <= 1.02
-                and -0.02 <= center_y <= 0.42
-            ):
-                centered_score = float(face[-1]) - abs(center_x - 0.5) * 0.15
-                candidates.append((centered_score, face))
-        if not candidates:
-            return None
-
-        face = max(candidates, key=lambda candidate: candidate[0])[1]
-        try:
-            aligned = self._recognizer.alignCrop(player_crop, face)
-            embedding = self._recognizer.feature(aligned).reshape(-1).astype(np.float32)
-        except cv2.error as exc:
-            LOGGER.debug("SFace rejected a detected face crop: %s", exc)
-            return None
-        if embedding.size == 0:
-            return None
-        return _l2_normalize(embedding)
+            if face_width < minimum_face_size or face_height < minimum_face_size:
+                continue
+            if require_upper_player_region and not (-0.02 <= center_x <= 1.02 and -0.02 <= center_y <= 0.42):
+                continue
+            try:
+                aligned = self._recognizer.alignCrop(image, face)
+                embedding = self._recognizer.feature(aligned).reshape(-1).astype(np.float32)
+            except cv2.error as exc:
+                LOGGER.debug("SFace rejected a detected face crop: %s", exc)
+                continue
+            if embedding.size == 0:
+                continue
+            detected.append(
+                DetectedFace(
+                    bbox=(
+                        max(0, int(round(float(face[0])))),
+                        max(0, int(round(float(face[1])))),
+                        max(1, int(round(face_width))),
+                        max(1, int(round(face_height))),
+                    ),
+                    confidence=float(face[-1]),
+                    embedding=_l2_normalize(embedding),
+                    aligned_crop=aligned.copy(),
+                )
+            )
+        return detected
 
 
 def build_face_identity_adapter(

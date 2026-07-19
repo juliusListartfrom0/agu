@@ -5,8 +5,9 @@ AGU documentation is organized by user intent.
 ## Tutorials
 
 - Repository quick start: `../README.md`
+- Current autonomous statistics solution and retained scope: `current-solution.md`
 - Public contract benchmark: `../examples/benchmark/README.md`
-- Training walkthrough and current plan: `training-plan.md`
+- Dataset and training preparation: `datasets.md`
 
 ## How-to Guides
 
@@ -27,6 +28,8 @@ AGU documentation is organized by user intent.
 ## Explanation and Governance
 
 - Open-source scope and component boundaries: `open-source-scope-assessment.md`
+- Complete player box-score implementation plan: `complete-box-score-plan.md`
+- Reference-assisted full-game statistics audit: `reference-assisted-game-audit.md`
 - Codex development workflow: `harness/WORKFLOW.md`
 - Current task state: `harness/TASK-BOARD.md`
 - Nine-MOV scoreboard and identity validation: `harness/NINE-MOV-VALIDATION-20260713.md`

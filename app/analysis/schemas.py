@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -103,6 +104,251 @@ class PlayerBoxScoreEstimateResponse(BaseModel):
     estimated_fields: List[str] = Field(default_factory=list)
     candidate_fields: List[str] = Field(default_factory=list)
     notes: List[str] = Field(default_factory=list)
+
+
+OfficialEventStatus = Literal[
+    "candidate",
+    "vision_confirmed",
+    "edge_vlm_confirmed",
+    "codex_confirmed",
+    "human_confirmed",
+    "needs_review",
+    "rejected",
+]
+
+
+class EventEvidenceResponse(BaseModel):
+    evidence_id: str
+    kind: str
+    source_video_id: str
+    start_frame: int
+    end_frame: int
+    confidence: float = 0.0
+    artifact_ref: Optional[str] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GameEventResponse(BaseModel):
+    """One immutable revision of an auditable basketball event."""
+
+    event_id: str
+    revision: int = Field(ge=1)
+    event_type: Literal[
+        "field_goal_attempt",
+        "free_throw_attempt",
+        "rebound",
+        "assist",
+        "block",
+        "steal",
+        "turnover",
+        "foul",
+    ]
+    source_video_id: str
+    start_frame: int
+    end_frame: int
+    release_frame: Optional[int] = None
+    outcome_frame: Optional[int] = None
+    team_id: Optional[str] = None
+    primary_player_id: Optional[str] = None
+    secondary_player_id: Optional[str] = None
+    shot_value: Optional[Literal[1, 2, 3]] = None
+    outcome: Optional[Literal["made", "missed", "unknown"]] = None
+    rebound_type: Optional[Literal["offensive", "defensive", "team", "unknown"]] = None
+    status: OfficialEventStatus = "candidate"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence: List[EventEvidenceResponse] = Field(default_factory=list)
+    related_event_ids: List[str] = Field(default_factory=list)
+    supersedes_revision: Optional[int] = None
+    reviewer: Optional[str] = None
+    reason: str = ""
+
+
+class ReviewDecisionResponse(BaseModel):
+    decision_id: str
+    event_id: str
+    expected_revision: int = Field(ge=1)
+    decision: Literal["add", "confirm", "revise", "reject", "needs_review"]
+    reviewer_type: Literal["edge_vlm", "codex", "human"]
+    reviewer: str
+    input_sha256: str
+    labels: Dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: List[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str = ""
+
+
+class OfficialPlayerBoxScoreResponse(BaseModel):
+    player_id: str
+    team_id: str
+    points: int = 0
+    two_pt_made: int = 0
+    two_pt_attempted: int = 0
+    three_pt_made: int = 0
+    three_pt_attempted: int = 0
+    free_throw_made: int = 0
+    free_throw_attempted: int = 0
+    field_goals_made: int = 0
+    field_goals_attempted: int = 0
+    offensive_rebounds: int = 0
+    defensive_rebounds: int = 0
+    rebounds: int = 0
+    assists: int = 0
+    blocks: int = 0
+    steals: int = 0
+    turnovers: int = 0
+    fouls: int = 0
+    event_ids: List[str] = Field(default_factory=list)
+    unresolved_event_count: int = 0
+
+
+class BoxScoreReconciliationIssueResponse(BaseModel):
+    code: str
+    severity: Literal["info", "warning", "error"]
+    message: str
+    event_ids: List[str] = Field(default_factory=list)
+
+
+class BoxScoreReconciliationReportResponse(BaseModel):
+    valid: bool
+    accepted_event_count: int
+    unresolved_event_count: int
+    team_event_points: Dict[str, int] = Field(default_factory=dict)
+    expected_team_points: Dict[str, int] = Field(default_factory=dict)
+    unexplained_points: Dict[str, int] = Field(default_factory=dict)
+    issues: List[BoxScoreReconciliationIssueResponse] = Field(default_factory=list)
+
+
+class OfficialBoxScoreResponse(BaseModel):
+    ruleset: str = "conservative-amateur-v1"
+    status: Literal["official", "provisional", "needs_review"] = "provisional"
+    players: List[OfficialPlayerBoxScoreResponse] = Field(default_factory=list)
+    accepted_event_ids: List[str] = Field(default_factory=list)
+    reconciliation: BoxScoreReconciliationReportResponse
+
+
+class RawVideoAssetResponse(BaseModel):
+    video_id: str
+    filename: str
+    sha256: str
+    size_bytes: int
+
+
+class OfficialIdentityTrackletResponse(BaseModel):
+    tracklet_id: str
+    source_video_id: str
+    source_player_id: str
+    team_id: str
+    start_frame: int
+    end_frame: int
+    observation_count: int
+    crop_count: int
+    embedding: List[float] = Field(default_factory=list)
+    embedding_model: str
+    appearance_signature: Dict[str, float] = Field(default_factory=dict)
+    sampled_boxes: List[Dict[str, float]] = Field(default_factory=list)
+    face_embedding: List[float] = Field(default_factory=list)
+    face_embedding_model: Optional[str] = None
+    face_sample_count: int = 0
+    face_embedding_quality: float = Field(default=0.0, ge=0.0, le=1.0)
+    gallery_person_id: Optional[str] = None
+    gallery_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class OfficialCanonicalIdentityResponse(BaseModel):
+    player_id: str
+    team_id: str
+    tracklet_ids: List[str] = Field(default_factory=list)
+    source_player_ids: List[str] = Field(default_factory=list)
+    jersey_number: Optional[str] = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: List[str] = Field(default_factory=list)
+
+
+class OfficialIdentityGraphArtifactResponse(BaseModel):
+    schema_version: str = "agu.official-identity.v1"
+    raw_videos: List[RawVideoAssetResponse]
+    config_sha256: str
+    model_provenance: Dict[str, str] = Field(default_factory=dict)
+    tracklets: List[OfficialIdentityTrackletResponse] = Field(default_factory=list)
+    identities: List[OfficialCanonicalIdentityResponse] = Field(default_factory=list)
+    tracklet_to_player_id: Dict[str, str] = Field(default_factory=dict)
+    source_player_to_player_ids: Dict[str, List[str]] = Field(default_factory=dict)
+    artifact_sha256: str = ""
+
+
+class RawOnlyPredictionBundleResponse(BaseModel):
+    schema_version: str = "agu.raw-only.v1"
+    game_id: str
+    raw_videos: List[RawVideoAssetResponse]
+    config_sha256: str
+    model_provenance: Dict[str, str] = Field(default_factory=dict)
+    events: List[GameEventResponse] = Field(default_factory=list)
+    inference_completed_at: str
+    events_sha256: str
+    bundle_sha256: str
+
+
+class Point2DResponse(BaseModel):
+    x: float
+    y: float
+
+
+class BoundingBoxResponse(BaseModel):
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
+
+class PerceptionDetectionResponse(BaseModel):
+    detection_id: str
+    frame: int
+    object_type: Literal["player", "basketball", "rim", "backboard", "referee"]
+    bbox: BoundingBoxResponse
+    confidence: float = Field(ge=0.0, le=1.0)
+    track_id: Optional[str] = None
+    player_id: Optional[str] = None
+    team_id: Optional[str] = None
+    keypoints: Dict[str, Point2DResponse] = Field(default_factory=dict)
+    backend: str
+
+
+class BallTrackPointResponse(BaseModel):
+    frame: int
+    center: Point2DResponse
+    confidence: float = Field(ge=0.0, le=1.0)
+    visible: bool = True
+    predicted: bool = False
+
+
+class BallTrackResponse(BaseModel):
+    track_id: str
+    points: List[BallTrackPointResponse] = Field(default_factory=list)
+    backend: str = "agu_ball_track_v1"
+
+
+class CourtCalibrationResponse(BaseModel):
+    calibration_id: str
+    source_video_id: str
+    start_frame: int
+    end_frame: int
+    image_points: List[Point2DResponse]
+    court_points: List[Point2DResponse]
+    homography: List[List[float]]
+    rim_center: Optional[Point2DResponse] = None
+    reprojection_error_px: float
+    status: Literal["valid", "needs_review", "invalid"]
+    method: str
+
+
+class PossessionTransitionResponse(BaseModel):
+    frame: int
+    from_state: str
+    to_state: str
+    team_id: Optional[str] = None
+    player_id: Optional[str] = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: List[str] = Field(default_factory=list)
 
 
 class LongVideoPlayerSummaryResponse(BaseModel):

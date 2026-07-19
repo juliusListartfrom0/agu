@@ -156,11 +156,17 @@ class OllamaVLMVerifier:
         host: str = "http://127.0.0.1:11434",
         timeout: float = 45.0,
         image_width: int = 224,
+        context_length: int = 4096,
+        seed: int = 0,
     ) -> None:
+        if context_length <= 0:
+            raise ValueError("context_length must be positive")
         self.model = model
         self.host = host.rstrip("/")
         self.timeout = timeout
         self.image_width = image_width
+        self.context_length = context_length
+        self.seed = seed
 
     def verify(
         self,
@@ -421,7 +427,12 @@ class OllamaVLMVerifier:
             "prompt": self._build_jersey_number_prompt(scope),
             "images": images,
             "format": "json",
-            "options": {"temperature": 0.0, "num_predict": 180},
+            "options": {
+                "temperature": 0.0,
+                "num_predict": 180,
+                "num_ctx": self.context_length,
+                "seed": self.seed,
+            },
         }
         request = urllib.request.Request(
             f"{self.host}/api/generate",

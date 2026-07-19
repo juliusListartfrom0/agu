@@ -27,7 +27,6 @@ import os
 import signal
 import sys
 import time
-import traceback
 
 import numpy as np
 from tqdm import tqdm
@@ -43,11 +42,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import models
-from torch.utils.data import DataLoader, Subset, WeightedRandomSampler, random_split
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler, random_split  # noqa: F401
 from torch.utils.data._utils.collate import default_collate
 
 from dataset import BasketballDataset, VideoTransform
-from utils.checkpoints import init_session_history, save_weights, load_weights, write_history, read_history
+from utils.checkpoints import init_session_history, save_weights, write_history
 from utils.metrics import get_acc_f1_precision_recall
 
 # ── Labels ──────────────────────────────────────────────────────────────
@@ -469,7 +468,6 @@ def train_model(
     val_macro_f1 = 0.0
     val_balanced_acc = 0.0
     train_macro_f1 = 0.0
-    train_balanced_acc = 0.0
 
     global _shutdown_requested
 
@@ -534,7 +532,7 @@ def train_model(
                     inputs = safe_to_device(sample["video"].float(), device)
                     labels = safe_to_device(sample["action"].float(), device)
                     label_indices = torch.max(labels, 1)[1]
-                except Exception as e:
+                except Exception:
                     skip_count += 1
                     continue
 
@@ -683,7 +681,6 @@ def train_model(
                 train_recall = recall
                 train_cm_str = np.array_str(cm)
                 train_macro_f1 = macro_f1
-                train_balanced_acc = bal_acc
 
         # ── Phase 1: LR scheduler step ───────────────────────────────
         if scheduler is not None:
@@ -830,7 +827,7 @@ def main():
     # ── Device ──────────────────────────────────────────────────────
     device = torch.device(args.device) if args.device else auto_device()
     print(f"PyTorch {torch.__version__} | Device: {device}")
-    print(f"  Phase 1 Optimizations:")
+    print("  Phase 1 Optimizations:")
     print(f"    🔒 Freeze BN: {'NO' if args.no_freeze_bn else 'YES'}")
     print(f"    📊 Best metric: {args.best_metric}")
     print(f"    ⚖️  Class weights: {'NO' if args.no_class_weights else 'YES (inv-sqrt)'}")
@@ -856,7 +853,7 @@ def main():
             n_orig = len(json.load(f))
     except FileNotFoundError:
         print(f"❌ Annotation file not found: {args.annotation_path}")
-        print("   Please download the SpaceJam dataset first. See docs/training-plan.md")
+        print("   Please download the SpaceJam dataset first. See docs/datasets.md")
         sys.exit(1)
 
     try:
@@ -874,7 +871,6 @@ def main():
     print(f"Dataset: {n_total} samples (train={train_n}, val={val_n}, test={test_n})")
 
     # ── Args namespace for checkpoint utils ─────────────────────────
-    from easydict import EasyDict
     ckpt_dict = {
         "base_model_name": "r2plus1d_multiclass",
         "lr": args.lr,
@@ -882,7 +878,6 @@ def main():
         "model_path": args.model_dir,
         "history_path": args.history_path,
     }
-    ckpt_args = EasyDict(ckpt_dict)
     for k, v in ckpt_dict.items():
         if not hasattr(args, k):
             setattr(args, k, v)
@@ -986,7 +981,7 @@ def main():
     if scheduler_state_for_resume is not None:
         try:
             scheduler.load_state_dict(scheduler_state_for_resume)
-            print(f"  📉 Loaded scheduler state from checkpoint")
+            print("  📉 Loaded scheduler state from checkpoint")
         except Exception as e:
             print(f"  ⚠️  Could not load scheduler state: {e} (starting fresh)")
 

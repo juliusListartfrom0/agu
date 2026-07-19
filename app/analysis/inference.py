@@ -8,7 +8,7 @@ import torch
 
 from app.analysis.schemas import ModelPrediction
 
-# Label configuration from hybrid_analysis.py
+# Stable v3 action label configuration shared by training and inference.
 LABELS: Dict[int, str] = {
     0: "block",
     1: "pass",

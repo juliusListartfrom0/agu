@@ -252,6 +252,20 @@ Important request fields:
 
 Face identity is configured at service level with `BASKETBALL_FACE_IDENTITY_BACKEND`, `BASKETBALL_FACE_DETECTION_MODEL_PATH`, `BASKETBALL_FACE_RECOGNITION_MODEL_PATH`, and `BASKETBALL_FACE_DETECTION_SCORE_THRESHOLD`. The default `opencv_sface_if_available` backend uses local OpenCV YuNet and SFace ONNX models and falls back to Haar sampling when either model is unavailable.
 
+Official identity deduplication can additionally load a sealed
+`agu.face-gallery.v1` asset configured by `BASKETBALL_FACE_GALLERY_PATH`.
+Matching uses `BASKETBALL_FACE_GALLERY_SIMILARITY_THRESHOLD` (default `0.45`)
+and `BASKETBALL_FACE_GALLERY_MINIMUM_MARGIN` (default `0.08`). Registered identity
+assignment also requires `BASKETBALL_FACE_ENROLLED_MINIMUM_QUALITY` (default
+`0.65`); lower-quality track faces remain anonymous even when their centroid
+cosine passes. The gallery and
+query must use the same SFace model; the best same-team match must clear both
+gates and the track samples must pass the existing face-quality gate. A shared
+gallery person anchors a canonical ID, different gallery people form a hard
+no-merge constraint, and unmatched tracks retain traditional ReID plus an
+anonymous ID. Gallery enrollment must be benchmark-disjoint and cannot come
+from the same acceptance game's reference highlights or statistics.
+
 SFace output is quality-gated per local track: at least two face samples must form a majority cluster with internal cosine similarity of at least `0.50`. Unstable detections from track-ID switches, back-facing heads, or background people are omitted instead of being averaged into identity evidence. The resulting quality is exposed as `player_identity_features[].face_embedding_quality`.
 
 `result.long_video.segments[]` contains segment-level summary and VLM audit status:
@@ -377,6 +391,60 @@ evidence:
 | `status` | string | Confirmation requirement |
 | `evidence` | array | Human-readable evidence notes |
 | `owner_candidates` | array | Ranked nearby player candidates for actor selection or review |
+
+### Experimental official-stat contracts
+
+`GameEventResponse`, `ReviewDecisionResponse`, `OfficialBoxScoreResponse`, and
+`RawOnlyPredictionBundleResponse` are internal experimental contracts and are
+not yet added to the public analysis response. They enforce append-only event
+revisions, causal relations, accepted-status-only aggregation, score
+reconciliation, and a sealed raw-video-only evaluation boundary. The feature is
+off by default. Configuring a detector does not by itself make the output
+official; ball/rim/court/identity evidence and reconciliation gates must pass.
+Fine review decisions support `add` in addition to confirm/revise/reject when
+raw evidence contains an extra event absent from the coarse candidates (for
+example, a miss, offensive rebound and putback in one coarse window). Added
+events are hash-bound to the source bundle, begin at immutable revision 1 and
+must provide a complete valid `GameEventResponse` payload in `labels`.
+
+Codex/human-reviewed bundles are annotation artifacts, not AGU predictions.
+Autonomous acceptance requires provenance `producer=agu` and
+`inference_mode=traditional_cv+vlm`, permits only `vision_confirmed` and
+`edge_vlm_confirmed` automatic events, and rejects Codex/human/reference markers
+mechanically. The official VLM is bounded to traditional tracking/team
+candidates; incomplete labels remain `needs_review`.
+
+Official autonomous configuration uses
+`BASKETBALL_OFFICIAL_PLAYER_TRACKING_ENABLED`,
+`BASKETBALL_OFFICIAL_PLAYER_TRACKER_CONFIG`, `BASKETBALL_OFFICIAL_VLM_ENABLED`,
+`BASKETBALL_OFFICIAL_VLM_CONFIDENCE`, `BASKETBALL_OFFICIAL_VLM_FRAMES`, and
+`BASKETBALL_OFFICIAL_VLM_IMAGE_WIDTH`, and
+`BASKETBALL_OFFICIAL_VLM_CONTEXT_LENGTH`; use
+`BASKETBALL_OFFICIAL_VLM_TIMEOUT` for dense official-event windows.
+`BASKETBALL_OFFICIAL_VLM_CONTACT_SHEET` remains an opt-in experiment; the
+default sends chronological frames separately.
+`BASKETBALL_OFFICIAL_ACTION_OWNER_MODEL_PATH` optionally enables an experimental hash-sealed
+traditional action-owner ranker in the two-pass path. Its scores prioritize
+which AGU-generated track candidates are overlaid for the actor VLM; they do
+not populate `primary_player_id` without VLM confirmation. Model provenance
+includes the training-manifest hash, annotation producer, and benchmark-overlap
+gate so Codex training annotation cannot be confused with runtime review.
+The default is empty; leave-one-video-out training performance alone is not an
+integration gate, and an independently sealed raw-video evaluation is required.
+
+Autonomous fusion is fail-closed: a traditional made/missed trajectory cannot
+be overwritten by the semantic reviewer, a confirmed make rejects a dependent
+rebound, and a VLM three-point label is accepted only with explicit visible
+line/feet/beyond-arc evidence. `scripts/build_official_event_candidates.py`
+exposes `--shooter-lookback-sec` for temporal actor-candidate bounding.
+For official per-player output, pass a sealed face-gallery identity graph and
+`--require-face-gallery-identity`. The candidate builder then removes anonymous
+player tracks before actor ranking. Jersey OCR and body ReID may propagate an
+already enrolled canonical identity, but cannot promote an unregistered track
+to an official player. Missing/empty gallery anchors fail closed. The two-pass
+actor reviewer also requests a player/referee/non-player role label; a selected
+referee is withheld from confirmation, but this VLM role check is only a
+secondary precision guard and does not replace enrollment.
 
 `block_candidate` is intentionally conservative: a single block-classified clip
 is promoted only when its average confidence is high enough; otherwise AGU keeps

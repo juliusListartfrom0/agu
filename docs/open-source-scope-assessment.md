@@ -105,17 +105,15 @@ AGU 开源后最容易吸引贡献的方向：
 - `app/config.py` 基础配置。
 - `tests/` 中覆盖推理、API、任务状态、训练韧性的测试。
 - `train_mac.py`、`dataset.py`、`utils/metrics.py`、`utils/checkpoints.py`。
-- `.env.example`、`README.md`、`docs/training-plan.md`、`docs/optimization-plan.md`。
+- `.env.example`、`README.md`、`docs/datasets.md`、`docs/model-card.md`。
 - Docker 打包能力，但只作为通用部署示例。
 
-### P1：建议保留但需要清理
+### P1：已完成的清理
 
-- `train.py`：保留为 legacy 或统一到 `train_mac.py`，避免两个训练入口长期分叉。
-- `hybrid_analysis.py`：保留为 legacy CLI，或迁移为正式 CLI 后删除旧脚本。
-- `hybrid_service.py`：若 FastAPI 已覆盖，应标记废弃或剥离。
-- `analysis/data_visualization.py`、`analysis/video_analysis.py`：如果是可复用可视化工具，迁移到 `scripts/` 或 `examples/`；如果依赖私有数据，剥离。
-- `augment_videos.py`、`make_smoke_data.py`：保留为数据准备工具，但补文档。
-- `scratch/create_dummy_weights.py`：迁移到 `scripts/` 或测试 fixture 工具。
+- 训练统一到 `train_mac.py`，删除重复的 `train.py`。
+- 服务和 CLI 统一到 FastAPI 与 `app/cli.py`，删除 `hybrid_analysis.py` 和旧简易 HTTP 入口。
+- 删除未被正式入口调用的实验模型加载器、一次性手工测试脚本和导入即写文件的 smoke 脚本。
+- 视频、权重、数据集、缓存与生成结果保持在忽略目录，不作为包内容发布。
 
 ### P2：只保留文档级说明
 
@@ -211,16 +209,15 @@ AGU 不是：
 │   ├── check_training.py
 │   ├── gen_splits.py
 │   ├── gen_augmented.py
-│   ├── make_smoke_data.py
-│   └── create_dummy_weights.py
+│   └── official/training/review utilities
 ├── examples/
 │   ├── sample_request.json
 │   └── README.md
 ├── tests/
 ├── docs/
 │   ├── api.md
-│   ├── training-plan.md
-│   ├── optimization-plan.md
+│   ├── current-solution.md
+│   ├── datasets.md
 │   ├── deploy-and-verify.md
 │   └── open-source-scope-assessment.md
 ├── Dockerfile
@@ -281,19 +278,15 @@ AGU 不是：
 - `Dockerfile`
 - `requirements-service.txt`
 - `.env.example`
-- `docs/training-plan.md`
-- `docs/optimization-plan.md`
+- `docs/current-solution.md`
+- `docs/datasets.md`
 - `docs/deploy-and-verify.md`
 
-### 评估后处理
+### 已完成的剥离
 
-- `train.py`：合并或标记 legacy。
-- `hybrid_analysis.py`：转 CLI 或标记 legacy。
-- `hybrid_service.py`：FastAPI 已覆盖，建议剥离。
-- `analysis/` 根目录：检查是否仍有复用价值，必要时迁入 `scripts/`。
-- `C3D.py`：迁入 archive 或删除。
-- `CODE_REVIEW.md`、`REVIEW_OUTPUT.md`：迁入 `docs/archive/` 或剥离。
-- `claude.md`、`gemini.md`：剥离。
+- 重复训练、旧一体化分析和简易 HTTP 入口。
+- 一次性模型实验、手工测试和本地 smoke 数据生成代码。
+- `gateway-rs/`、私有协作记录及根目录历史实验代码。
 
 ### 剥离
 

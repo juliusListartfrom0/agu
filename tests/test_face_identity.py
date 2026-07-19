@@ -29,14 +29,15 @@ def test_sface_adapter_aggregates_normalized_face_embeddings(tmp_path):
         np.array([[4.0, 3.0]], dtype=np.float32),
     ]
 
-    with patch("app.analysis.face_identity.cv2.FaceDetectorYN.create", return_value=detector), patch(
-        "app.analysis.face_identity.cv2.FaceRecognizerSF.create",
-        return_value=recognizer,
+    with (
+        patch("app.analysis.face_identity.cv2.FaceDetectorYN.create", return_value=detector),
+        patch(
+            "app.analysis.face_identity.cv2.FaceRecognizerSF.create",
+            return_value=recognizer,
+        ),
     ):
         adapter = OpenCvSFaceIdentityAdapter(str(detector_model), str(recognizer_model))
-        result = adapter.embed_player_crops(
-            [np.full((80, 40, 3), 100, dtype=np.uint8) for _ in range(2)]
-        )
+        result = adapter.embed_player_crops([np.full((80, 40, 3), 100, dtype=np.uint8) for _ in range(2)])
 
     assert result is not None
     assert result.sample_count == 2
@@ -61,9 +62,12 @@ def test_sface_adapter_rejects_face_below_player_upper_body(tmp_path):
         ),
     )
 
-    with patch("app.analysis.face_identity.cv2.FaceDetectorYN.create", return_value=detector), patch(
-        "app.analysis.face_identity.cv2.FaceRecognizerSF.create",
-        return_value=MagicMock(),
+    with (
+        patch("app.analysis.face_identity.cv2.FaceDetectorYN.create", return_value=detector),
+        patch(
+            "app.analysis.face_identity.cv2.FaceRecognizerSF.create",
+            return_value=MagicMock(),
+        ),
     ):
         adapter = OpenCvSFaceIdentityAdapter(str(detector_model), str(recognizer_model))
         result = adapter.embed_player_crops([np.full((80, 40, 3), 100, dtype=np.uint8)])
@@ -93,14 +97,15 @@ def test_sface_adapter_rejects_inconsistent_track_faces(tmp_path):
         np.array([[-1.0, 0.0]], dtype=np.float32),
     ]
 
-    with patch("app.analysis.face_identity.cv2.FaceDetectorYN.create", return_value=detector), patch(
-        "app.analysis.face_identity.cv2.FaceRecognizerSF.create",
-        return_value=recognizer,
+    with (
+        patch("app.analysis.face_identity.cv2.FaceDetectorYN.create", return_value=detector),
+        patch(
+            "app.analysis.face_identity.cv2.FaceRecognizerSF.create",
+            return_value=recognizer,
+        ),
     ):
         adapter = OpenCvSFaceIdentityAdapter(str(detector_model), str(recognizer_model))
-        result = adapter.embed_player_crops(
-            [np.full((80, 40, 3), 100, dtype=np.uint8) for _ in range(3)]
-        )
+        result = adapter.embed_player_crops([np.full((80, 40, 3), 100, dtype=np.uint8) for _ in range(3)])
 
     assert result is None
 

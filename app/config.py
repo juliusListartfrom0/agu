@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Application-wide configuration loaded from environment variables or .env file.
 
-    All fields have sensible defaults matching the original hybrid_analysis.py
+    All fields have stable defaults for the FastAPI and CLI analysis paths.
     arguments so the app can start with zero configuration.
     """
 
@@ -55,8 +54,38 @@ class Settings(BaseSettings):
     face_recognition_model_path: str = "model_checkpoints/opencv_face/face_recognition_sface_2021dec.onnx"
     face_detection_score_threshold: float = 0.60
     face_identity_allow_fallback: bool = True
+    face_gallery_path: str = ""
+    face_gallery_similarity_threshold: float = 0.45
+    face_gallery_minimum_margin: float = 0.08
+    face_enrolled_minimum_quality: float = 0.65
+    face_identity_match_threshold: float = 0.45
+    face_identity_conflict_threshold: float = 0.30
     yolo_model_name: str = "yolov8n.pt"
     default_video: str = "examples/lebron_shoots.mp4"
+
+    # --- Official event perception (experimental, opt-in) ---
+    official_stats_enabled: bool = False
+    official_detector_backend: str = "off"  # off | ultralytics_yolo
+    official_detector_model_path: str = ""
+    official_detector_device: str = "cpu"
+    official_detector_imgsz: int = 704
+    official_detector_confidence: float = 0.10
+    official_player_tracking_enabled: bool = True
+    official_player_tracker_config: str = "bytetrack.yaml"
+    official_ball_max_distance_px: float = 90.0
+    official_ball_max_gap_frames: int = 4
+    official_court_max_reprojection_error_px: float = 8.0
+    official_shot_candidate_confidence: float = 0.60
+    official_rebound_suppression_make_confidence: float = 0.50
+    official_stats_ruleset: str = "conservative-amateur-v1"
+    official_vlm_enabled: bool = False
+    official_vlm_confidence: float = 0.80
+    official_vlm_frames: int = 12
+    official_vlm_image_width: int = 512
+    official_vlm_contact_sheet: bool = False
+    official_vlm_context_length: int = 16384
+    official_vlm_timeout: float = 180.0
+    official_action_owner_model_path: str = ""
 
     # --- VLM (Ollama) ---
     vlm_mode: str = "low-confidence"  # off | low-confidence | always

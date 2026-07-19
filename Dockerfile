@@ -24,7 +24,7 @@ COPY app ./app
 COPY utils ./utils
 COPY examples ./examples
 COPY scripts ./scripts
-COPY train.py train_mac.py dataset.py ./
+COPY train_mac.py dataset.py ./
 
 RUN mkdir -p /app/model_checkpoints /app/analysis_outputs /app/output_videos /app/service_inputs
 

@@ -7,7 +7,6 @@ import random
 
 import torch
 from torch.utils.data import Dataset
-from torchvision import transforms
 
 from app.models.preprocessing import preprocess_clip_numpy
 
