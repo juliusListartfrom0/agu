@@ -1,735 +1,735 @@
-# AGU
+# AGU — Basketball Video Analysis Engine
 
-- [中文版本](#中文版本)
-- [English Summary](#english-summary)
+[中文](#中文) · [English](#english)
 
-## 中文版本
+AGU 是一个以 Python、FastAPI、传统视觉模型与本地 VLM 为核心的开源篮球视频分析组件。项目同时保留稳定的通用分析 API，并持续建设面向完整比赛技术统计的原片自主识别链路。
 
-### 项目简介
+AGU is an open-source basketball video analysis component built with Python, FastAPI, conventional vision models, and local VLMs. It keeps a stable general-purpose analysis API while developing an autonomous raw-game pipeline for full box-score statistics.
 
-AGU 是一个可扩展的开源篮球视频分析引擎与 reference pipeline，组合了传统视觉、动作模型、名单人脸识别、本地 VLM、事件账本和独立验收。当前 0.x 定位是垂直领域 engine/toolkit，不宣称为通用视频 AI 框架。
+---
 
-AGU 的目标不是成为小程序后端或完整篮球 SaaS，而是作为可被其他系统调用的分析引擎：
+<a id="中文"></a>
+
+## 中文
+
+### 1. 项目定位
+
+AGU 的目标是从比赛原片中自主识别球员、动作和技术统计，并输出可审计的结构化结果。运行时答案必须来自 AGU 自身的传统模型与本地 VLM，不能由 Codex 或人工技术统计直接注入。
+
+Codex 仅承担两个隔离角色：
+
+- 训练前：辅助框选、动作标注和人脸候选审核，并生成可追溯、与验收比赛隔离的标注清单。
+- 模型冻结后：对独立原片结果做验收、误差归因和报告，不向推理过程提供答案。
+
+AGU 只提供分析引擎和稳定返回。统一鉴权、限流、跨服务聚合及 BFF/API 网关属于外部 `visual_coach` 项目，不在本仓库实现。
+
+### 2. 当前能力与真实性边界
+
+| 条目 | 当前状态 | 说明 |
+| --- | --- | --- |
+| FastAPI 异步分析 API | 可用 | 支持创建、查询、取消、重试和结果读取；任务状态保存在进程内存中。 |
+| v3 动作分类链路 | 可用，兼容用途 | R(2+1)D 输出动作代理标签；`action_proxy` 不能作为官方技术统计。 |
+| 跟踪、姿态、身份与 VLM 审核 | 可用/可配置 | 可按后端和本地模型路径启用；模型权重不随仓库分发。 |
+| 原片官方统计离线链路 | 已实现，实验阶段 | 感知、姿态、身份图、事件候选、AGU 自主推理、对账均有独立脚本；尚未接入默认 API 返回。 |
+| 人脸名单识别与身份去重 | 已实现，数据待补齐 | 支持 YuNet + SFace 人脸库、审核清单、身份图和严格名单约束；当前比赛名单覆盖不足。 |
+| Codex 标注防泄漏 | 已实现 | 训练标注清单必须记录源视频、任务类型和验收包，并进行 benchmark-disjoint 校验。 |
+| 单场比赛独立完成技术统计 | 尚未达到 | 当前不能宣称可无人干预、稳定完成整场比赛官方技术统计。 |
+| 最终正确率 ≥ 95% | 尚未证明 | 当前一场定位 F1 为 `0.8889`，严格身份正确率为 `0`，跨比赛 owner 覆盖为 `1/11`；还缺第二场完整六项独立真值。 |
+
+这里的最终正确率指冻结后的独立比赛验收结果，而不是训练集精度、单一动作分类准确率或人工/Codex 修正后的结果。内部较低门槛只能用于集成调试，不能替代 95% 产品验收。
+
+### 3. 两条分析链路
+
+#### 3.1 稳定兼容链路
 
 ```text
-raw game video -> perception and identity -> event graph -> official box score -> sealed evaluation
+视频
+  -> 球员检测与跟踪
+  -> v3 R(2+1)D 动作分类
+  -> 可选身份合并 / 姿态 / 记分牌审核 / VLM 抽检
+  -> AnalysisResponse + JSON + 可选标注视频
 ```
 
-当前仓库提供：
+这条链路服务于现有 API 和集成兼容。其动作结果是 `action_proxy`，不等价于投篮命中、篮板、助攻、抢断、盖帽等官方统计。
 
-- 基于 FastAPI 的异步视频分析服务。
-- 可安装的 `agu-basketball` Python 包和 `agu` CLI；`python -m app.cli` 保持兼容。
-- Docker 自托管部署示例。
-- 面向 Mac/CPU/MPS 的训练入口 `train_mac.py`。
-- 原片独立推理、Codex 辅助训练标注、名单人脸注册去重和严格验收脚本。
-
-当前正式方案、角色边界、入口清单和已知能力状态见 [`docs/current-solution.md`](docs/current-solution.md)。旧的一体化分析入口、重复训练入口和一次性手工测试脚本已经删除；现有 FastAPI、`agu` CLI、v3 动作模型兼容链和 `action_proxy_v1` 只作为稳定兼容层保留，不能冒充正式技术统计。
-
-当前部署目标是 `model_checkpoints/r2plus1d_v3/best.pt`。推理预处理固定匹配 v3 训练分布：OpenCV BGR、resize 到 `112x112`、值域保持 `[0,255]`，不做 RGB 转换、`/255` 或 Kinetics normalize。
-
-### 分析流程
-
-1. 默认把视频切成带 overlap 的 segment，避免动作在切片边界被截断。
-2. 在每个 segment 内读取视频并跟踪球员，默认使用 `YOLO` + ByteTrack，也支持 OpenCV legacy trackers。
-3. YOLO 默认走 CPU、低帧率和较低 `imgsz` 跟踪；这些加速参数均从 `BASKETBALL_` 配置或请求体读取。
-4. 按 `seq_length` 和 `vid_stride` 将球员轨迹切成重叠窗口；分段分析默认可使用更大的 `action_vid_stride` 减少重复推理。
-5. 对每个球员窗口运行 R(2+1)D 动作分类，默认优先使用 MPS（可用时）并回退 CPU/CUDA。
-6. 对低置信度片段可选调用本地 Ollama VLM 复核，也可对 segment contact sheet 做 VLM audit。
-7. 融合模型、VLM 和时序证据，并做 temporal smoothing。
-8. 输出 JSON 结果，可选生成标注视频。
-
-### 动作标签
+#### 3.2 原片官方统计链路
 
 ```text
-0 block
-1 pass
-2 run
-3 dribble
-4 shoot
-5 ball in hand
-6 defense
-7 pick
-8 no_action
-9 walk
+独立比赛原片
+  -> 感知包（球员、球、篮筐、轨迹）
+  -> 姿态包
+  -> 人脸名单 + 身份图
+  -> 原片事件候选
+  -> AGU 两阶段自主推理（传统模型 + 可选本地 VLM）
+  -> 官方统计包
+  -> 冻结后独立真值对账
 ```
 
-### 主要功能
+当前支持的统计维度为：
 
-- 异步分析 API：
-  - `POST /api/v1/analysis/run` 启动分析任务。
-  - `GET /api/v1/analysis/status/{task_id}` 查询任务状态和结果。
-- 多种跟踪方式：
-  - 默认 `YOLO`，使用 `bytetrack.yaml`。
-  - 可配置开源 tracker adapter：`BASKETBALL_TRACKER_BACKEND=bytetrack|botsort|custom`。
-  - BoT-SORT/ReID 可通过 `BASKETBALL_YOLO_REID_ENABLED`、`BASKETBALL_YOLO_REID_MODEL` 和自定义 tracker YAML 接入。
-  - OpenCV legacy trackers：`CSRT`、`MOSSE`、`KCF` 等。
-- 球员身份 embedding：
-  - 默认使用 `torchvision_mobilenet_v3_small` 生成 576 维 appearance embedding。
-  - 可选 `BASKETBALL_IDENTITY_EMBEDDING_BACKEND=torchreid_osnet_x0_25` 接入本地 `torchreid` OSNet ReID 后端。
-  - `sidecar_hsv_hist` 仅作为轻量 fallback/测试后端保留。
-- 模型推理：
-  - 从 checkpoint 加载 `R(2+1)D-18`。
-- 可选 VLM 复核：
-  - `off` / `low-confidence` / `always`。
-- 默认长视频分段：
-  - `segmented_analysis=true`，通过 `segment_duration_sec` 和 `segment_overlap_sec` 控制 segment。
-  - `result.long_video.segments[]` 提供分段统计与 VLM audit 状态。
-  - `result.player_identity_features[]` 提供局部轨迹模型 appearance embedding 和 continuity 特征。
-  - 可选 `BASKETBALL_JERSEY_NUMBER_VLM_ENABLED=true` 后，`player_identity_features[].jersey_number_candidates[]` 会输出 VLM 读取到的球衣号码候选。
-  - `result.long_video.players[]` 提供 segment-local 球员动作汇总和 `appearance_continuity_stitch_v2` 的轻量 `global_player_id` 身份候选；身份证据包含整身 embedding、躯干球衣明暗，以及可见正脸的本地 OpenCV 检测/embedding 侧路。
-  - `result.long_video.identity_duplicate_candidates[]` 提供疑似重复 `global_player_id` 的合并审核候选，不自动改写统计。
-  - duplicate candidate 会使用采样 frame-level bbox 判断同屏硬冲突和重复框重叠。
-  - 请求体可传 `confirmed_identity_merges[]`，确认后的聚合统计会输出到 `result.long_video.merged_players[]`，原始 `players[]` 不会被覆盖。
-  - 可选 `vlm_identity_merge_enabled=true` 后，VLM 会审核 duplicate candidates，并把高置信 same-player 决策转为 `confirmed_identity_merges[]`。
-  - `result.long_video.event_candidates[]` 提供 `block_candidate`、`rebound_candidate`、`steal_candidate` 事件线索，并通过 `owner_candidates[]` 输出候选事件归属球员排名。
-  - `result.long_video.identity_graph_summary` 汇总身份图节点、重复候选、确认合并和 VLM merge 决策数量。
-- 推理加速：
-  - `BASKETBALL_TRACKING_FPS=8.0` 对 YOLO 跟踪做低帧率采样。
-  - `BASKETBALL_YOLO_IMGSZ=320` 降低 YOLO 输入尺寸。
-  - `BASKETBALL_YOLO_DEVICE=cpu` 避免当前 Mac MPS 跑 YOLO 变慢。
-  - `BASKETBALL_R2PLUS1D_DEVICE=mps_if_available` 让 R(2+1)D 在支持时走 MPS。
-  - `BASKETBALL_ACTION_VID_STRIDE=24` 用于默认分段分析，减少重复动作窗口。
-  - `BASKETBALL_MAX_PLAYERS_PER_SEGMENT=12` 保留出现最稳定的球员轨迹，避免噪声 track 放大推理量。
-- 球员技术统计估算：
-  - `statistics.points`、`assists`、`rebounds`、`blocks`、`steals`。
-  - 当前为 `action_proxy_v1`，不是正式技术统计；`shoot` 会进入 `shot_attempts` / `point_candidate_count`，不会在未确认命中前直接写入正式 `points`。
-  - `statistics.status`、`estimated_fields`、`candidate_fields` 会标出哪些字段只是估算、哪些字段仍需事件确认；`points` 需要命中、罚球或比分牌/事件链路确认。
-  - `block` 不再直接计入正式 `statistics.blocks`；会先输出 `block_candidate`，等待球/篮筐/投篮或 VLM 确认。
-  - `rebound_candidate` 和 `steal_candidate` 由简化球权状态线索生成，仍需球检测、篮筐检测或 VLM/人工确认。
-  - `accurate` / `vlm-full` CLI preset 会默认开启 `scoreboard_audit`。审计会先用 OpenCV 搜索比分牌候选帧，再对候选时间进行 burst 采样，分别读取清晰帧和 LED 时序融合帧；只有同一时间至少两次读数一致且跨时间比分不下降时，才在 `long_video.scoreboard_summary` 输出最终比分。
-- 输出文件：
-  - JSON：`analysis_outputs/*.json`
-  - 视频：`output_videos/*.mp4`
-- 静态文件路径：
-- `/static/outputs`
-- `/static/videos`
+- 两分命中/出手、三分命中/出手；
+- 进攻篮板、防守篮板；
+- 助攻、抢断、盖帽。
 
-### 对外调用边界
+高光、投丢、失误视频和已有 CSV 只能用于训练参考、误差分析或冻结后验收；官方推理入口只接收原片产生的候选包，不读取这些答案资产。
 
-AGU 仓库只负责篮球视频分析服务，不承载统一 BFF、鉴权、限流、分组聚合或运营后台 API。统一 BFF/API 网关归属 `visual_coach` 的 Rust 重构实现，由 `visual_coach` 调用 AGU 获取分析任务状态与结果。
+### 4. 开源能力与 AGU 边界
 
-AGU 当前提供以下分析接口供外部 BFF 调用：
+AGU 优先以 adapter、配置和 feature flag 封装开源组件：
 
-- `POST /api/v1/analysis/tasks`
-- `GET /api/v1/analysis/tasks/{id}`
-- `GET /api/v1/analysis/tasks/{id}/result`
+- 视频 IO：OpenCV、FFmpeg；
+- 检测与跟踪：Ultralytics YOLO、ByteTrack、BoT-SORT；
+- 姿态：可配置本地姿态模型；
+- 人脸识别：OpenCV YuNet + SFace；
+- 动作识别：PyTorch R(2+1)D；
+- VLM：Ollama 兼容的本地模型；
+- API：FastAPI + Pydantic。
 
-这些接口复用 `POST /api/v1/analysis/run` 与 `GET /api/v1/analysis/status/{task_id}`，用于兼容外部统一 API 契约。
+Ultralytics 的 AGPL/商业许可需要部署方自行确认。仓库不绑定线上服务、密钥、固定模型路径或单一 GPU 环境；CPU、MPS、CUDA 和离线模型路径均通过配置层选择。RTMDet、RTMPose 等是可评估的替换方向，并不代表当前已内置对应 adapter。
 
-### 技术栈
+### 5. 快速开始
 
-- Python / FastAPI / Pydantic-Settings
-- PyTorch / TorchVision
-- OpenCV / YOLOv8
-- NumPy / scikit-learn
-- urllib，用于 Ollama HTTP client
-- pytest
-
-### 快速开始
-
-安装服务依赖：
+要求 Python 3.10+。模型权重、数据集和比赛视频不包含在仓库中。
 
 ```bash
+git clone <repository-url>
+cd agu
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-service.txt
+pip install -r requirements.txt
 cp .env.example .env
 ```
 
-框架开发或按能力安装：
-
-```bash
-pip install -e .
-pip install -e ".[api,inference]"
-pip install -e ".[tracking-ultralytics]"  # 单独复核 AGPL/商业许可边界
-pip install -e ".[ocr]"
-agu --version
-agu plugins doctor
-```
-
-启动 API：
+启动服务：
 
 ```bash
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 ```
 
-提交示例请求：
-
-```bash
-curl -sS -X POST http://127.0.0.1:8765/api/v1/analysis/run \
-  -H "Content-Type: application/json" \
-  -d '{
-    "video_path": "examples/lebron_shoots.mp4",
-    "vlm_mode": "off",
-    "generate_video": false,
-    "segmented_analysis": false,
-    "max_frames": 60
-  }'
-```
-
-使用 CLI（旧的 `python -m app.cli` 形式继续支持）：
-
-```bash
-agu analyze \
-  --video examples/lebron_shoots.mp4 \
-  --preset accurate \
-  --poll \
-  --summary \
-  --save-result analysis_outputs/example-analysis.json
-```
-
-查询任务：
-
-```bash
-agu status <task_id>
-```
-
-取消或重试任务：
-
-```bash
-agu cancel <task_id>
-agu retry <failed-or-cancelled-task-id>
-```
-
-取消、`max_runtime_sec` 截止时间均在 pipeline 进度边界协作生效；当前任务状态和原始请求保存在内存，服务重启后不提供恢复。
-
-CLI 常用 preset：
-
-| Preset | 用途 | 说明 |
-| --- | --- | --- |
-| `fast` | 快速冒烟 | 关闭 VLM audit，降低跟踪成本 |
-| `accurate` | 常规准确率优先 | 开启低置信 VLM、VLM audit、BoT-SORT/ReID、更高跟踪召回和 scoreboard audit；默认使用 30s segment / 3s overlap / 4 张 segment audit 帧 / 6 个质量与时序稳定性排序后的 scoreboard 候选 |
-| `vlm-full` | 全程 VLM 复核 | 在 `accurate` 基础上使用 `vlm_mode=always` 并启用 VLM identity merge |
-
-生成球员截图、证据视频和 roster 汇总：
-
-```bash
-python -m app.cli report \
-  --analysis-json analysis_outputs/example-analysis.json \
-  --video examples/lebron_shoots.mp4 \
-  --output-dir analysis_outputs/example-player-reports \
-  --dedupe-players \
-  --vlm-player-filter \
-  --min-roster-score 18
-```
-
-用人工事件 CSV 做可重复准确率评测：
-
-```bash
-python -m app.cli evaluate \
-  --analysis-json analysis_outputs/example-analysis.json \
-  --events-csv labels/events.csv \
-  --require-player \
-  --output-json analysis_outputs/example-eval.json \
-  --output-md analysis_outputs/example-eval.md
-```
-
-CLI 准确率路线和每阶段架构 review 见 `docs/cli-accuracy-roadmap.md`。
-
-CLI 也可从 TOML/JSON/YAML profile 读取默认值，显式参数优先：
-
-```bash
-agu analyze --video examples/lebron_shoots.mp4 --profile profiles/accurate.toml
-```
-
-插件通过 `agu.plugins` Python entry point 注册，并声明类型、能力、依赖、版本和可用性。最小示例见 `examples/plugins/minimal_plugin.py`，完整约定见 `docs/extensions.md`。
-
-### 目录结构
-
-```text
-.
-├── app/
-│   ├── main.py               FastAPI app 与生命周期
-│   ├── config.py             从 .env 读取配置
-│   ├── dependencies.py       全局 model/service 依赖
-│   ├── analysis/
-│   │   ├── router.py         /api/v1/analysis 路由
-│   │   ├── schemas.py        请求/返回 schema
-│   │   ├── service.py        分析流程编排
-│   │   ├── tracking.py       跟踪与窗口裁剪
-│   │   ├── inference.py      R(2+1)D 推理，v3 预处理入口
-│   │   ├── motion.py         运动特征
-│   │   ├── vlm.py            Ollama VLM 验证
-│   │   ├── fusion.py         模型 + VLM 融合 + 平滑
-│   │   └── task_manager.py   内存任务状态
-│   ├── video/
-│   │   └── writer.py         标注视频输出
-│   └── models/
-│       ├── r2plus1d.py       best.pt 加载器
-│       └── preprocessing.py  v3 对齐预处理
-├── dataset.py                SpaceJam 数据集包装
-├── train_mac.py              推荐训练脚本
-├── scripts/                  正式推理、训练标注、评测与维护入口
-├── requirements.txt
-├── pytest.ini
-├── .env.example
-└── README.md
-```
-
-以下目录是运行时数据，默认不入库：
-
-```text
-dataset/
-model_checkpoints/
-analysis_outputs/
-output_videos/
-```
-
-### 环境与配置
-
-推荐使用虚拟环境：
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-安装依赖：
-
-```bash
-pip install -r requirements-service.txt
-```
-
-依赖文件分工：
-
-| 文件 | 用途 |
-| --- | --- |
-| `requirements-service.txt` | FastAPI 服务、推理和 Docker 部署 |
-| `requirements-training.txt` | 训练、数据处理和实验 |
-| `requirements-dev.txt` | 测试、类型检查和开发工具 |
-| `requirements.txt` | 历史快照，保留用于兼容旧环境 |
-
-### 配置项
-
-配置通过前缀 `BASKETBALL_` 从环境变量或 `.env` 读取。示例：
-
-```text
-BASKETBALL_MODEL_PATH=model_checkpoints/r2plus1d_v3/
-BASKETBALL_BASE_MODEL_NAME=best
-BASKETBALL_START_EPOCH=0
-BASKETBALL_LR=0.0001
-BASKETBALL_NUM_CLASSES=10
-BASKETBALL_SEQ_LENGTH=16
-BASKETBALL_VID_STRIDE=8
-BASKETBALL_ACTION_VID_STRIDE=24
-BASKETBALL_BATCH_SIZE=8
-BASKETBALL_R2PLUS1D_DEVICE=mps_if_available
-BASKETBALL_YOLO_DEVICE=cpu
-BASKETBALL_TRACKING_FPS=8.0
-BASKETBALL_YOLO_IMGSZ=320
-BASKETBALL_MAX_PLAYERS_PER_SEGMENT=12
-BASKETBALL_TORCH_NUM_THREADS=10
-BASKETBALL_PROGRESS_LOG=true
-BASKETBALL_ANALYSIS_TIMEOUT_SEC=0.0
-BASKETBALL_TRACKER_TYPE=YOLO
-BASKETBALL_TRACKER_BACKEND=bytetrack
-BASKETBALL_YOLO_TRACKER_CONFIG=
-BASKETBALL_YOLO_REID_ENABLED=false
-BASKETBALL_YOLO_REID_MODEL=auto
-BASKETBALL_IDENTITY_EMBEDDING_BACKEND=torchvision_mobilenet_v3_small
-BASKETBALL_IDENTITY_EMBEDDING_WEIGHTS=default
-BASKETBALL_IDENTITY_EMBEDDING_DEVICE=mps_if_available
-BASKETBALL_IDENTITY_EMBEDDING_BATCH_SIZE=16
-BASKETBALL_IDENTITY_EMBEDDING_ALLOW_FALLBACK=true
-BASKETBALL_FACE_IDENTITY_BACKEND=opencv_sface_if_available
-BASKETBALL_FACE_DETECTION_MODEL_PATH=model_checkpoints/opencv_face/face_detection_yunet_2023mar.onnx
-BASKETBALL_FACE_RECOGNITION_MODEL_PATH=model_checkpoints/opencv_face/face_recognition_sface_2021dec.onnx
-BASKETBALL_FACE_DETECTION_SCORE_THRESHOLD=0.60
-BASKETBALL_FACE_IDENTITY_ALLOW_FALLBACK=true
-BASKETBALL_FACE_GALLERY_PATH=
-BASKETBALL_FACE_GALLERY_SIMILARITY_THRESHOLD=0.45
-BASKETBALL_FACE_GALLERY_MINIMUM_MARGIN=0.08
-BASKETBALL_FACE_ENROLLED_MINIMUM_QUALITY=0.65
-BASKETBALL_VLM_MODE=low-confidence
-BASKETBALL_OLLAMA_MODEL=qwen3-vl:4b
-BASKETBALL_OLLAMA_HOST=http://127.0.0.1:11434
-BASKETBALL_OLLAMA_TIMEOUT=45.0
-BASKETBALL_SCOREBOARD_OCR_BACKEND=rapidocr_if_available
-BASKETBALL_SCOREBOARD_OCR_CONFIDENCE=0.75
-BASKETBALL_JERSEY_NUMBER_VLM_ENABLED=false
-BASKETBALL_JERSEY_NUMBER_VLM_FRAMES=2
-BASKETBALL_LOW_CONFIDENCE=0.45
-BASKETBALL_HIGH_CONFIDENCE=0.70
-BASKETBALL_SMOOTHING_CONFIDENCE=0.60
-BASKETBALL_OUTPUT_DIR=analysis_outputs
-BASKETBALL_VIDEO_OUTPUT_DIR=output_videos
-BASKETBALL_HOST=127.0.0.1
-BASKETBALL_PORT=8765
-```
-
-球员面部身份默认使用 OpenCV YuNet + SFace 本地适配器。模型权重不进入仓库，分别放到上述两个配置路径；模型缺失时 `opencv_sface_if_available` 会回退到 Haar 检脸与通用外观特征，不影响服务启动。YuNet 与 SFace 可从 OpenCV Zoo 获取，运行时不需要联网。SFace 仅在同一轨迹至少两张脸形成占多数的一致聚类时输出，避免轨迹 ID 切换、背身或背景人物污染面部身份。
-
-官方统计身份去重可使用哈希封存的标注人脸图库。先准备
-`agu.annotated-face-list.v1` 清单，再运行 `scripts/build_face_gallery.py` 生成
-`agu.face-gallery.v1`；`scripts/build_official_identity_graph.py` 用
-`--face-gallery` 及两个人脸模型参数加载图库。AGU 运行时只接收人脸模板，由
-YuNet + SFace 自行识别原片轨迹：同一图库身份可合并，不同图库身份禁止合并，
-低质量或匹配间隔不足的脸保持匿名。清单必须声明 `benchmark_disjoint: true`；
-同一验收比赛的高光、失误、投丢片段和技术统计不得作为该比赛的运行时图库来源。
-没有现成人脸清单时，可先用
-`scripts/build_face_enrollment_candidates.py` 从独立的注册视频直接检出人脸并生成逐簇审核图，
-再用 `scripts/approve_face_enrollment_candidates.py` 将穷尽式的批准、合并和拒绝决定转换为
-`agu.annotated-face-list.v1`。这一步只标注“是否为同一个人”并剔除裁判/无效脸，不标注比赛动作；
-候选清单和审核决定都由 SHA-256 绑定，未处理完任一候选簇会失败。
-来自多个独立注册来源的已审核列表可用 `scripts/merge_annotated_face_lists.py` 合并；
-合并决定同样必须绑定所有源清单并穷尽处理每个源身份，避免同一球员在图库中重复注册。
-正式个人技术统计应在候选生成时启用
-`scripts/build_official_event_candidates.py --require-face-gallery-identity`。该门禁只保留已由封存人脸注册库锚定的 canonical player；注册身份只能通过直接人脸证据或两侧都可信且号码相同的球衣证据扩展，身体 ReID 只能聚合匿名轨迹，不能单独继承注册姓名。匿名轨迹、裁判和图库匹配不确定的人员不能直接进入个人统计。人脸库为空或未提供身份图时命令会失败关闭。
-身份图输入还必须来自启用 `player_tracking=true` 的感知产物；无跟踪的通用检测结果会被拒绝，
-避免把统一临时 ID 当成球员身份。
-注册身份还受 `BASKETBALL_FACE_ENROLLED_MINIMUM_QUALITY` 门禁控制（默认 `0.65`）。
-低于该质量的远景或模糊人脸即使余弦分数过线也保持匿名，且不能作为向其他轨迹传播注册身份的直接证据。
-
-```json
-{
-  "schema_version": "agu.annotated-face-list.v1",
-  "benchmark_disjoint": true,
-  "annotation_producer": "codex-assisted",
-  "persons": [{
-    "person_id": "black-player-01",
-    "team_id": "raw-dark",
-    "samples": [
-      {"path": "faces/black-player-01-a.jpg", "bbox": [20, 10, 140, 150]},
-      {"path": "faces/black-player-01-b.jpg", "bbox": [18, 12, 138, 152]}
-    ]
-  }]
-}
-```
-
-### 启动 API
-
-```bash
-cp .env.example .env
-./venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
-```
-
-健康检查：
+检查服务：
 
 ```bash
 curl http://127.0.0.1:8765/health
+curl http://127.0.0.1:8765/ready
 ```
 
-本地与线上部署验收方案见 `docs/deploy-and-verify.md`。
-
-API 契约见 `docs/api.md`，模型说明见 `docs/model-card.md`。
-权重说明见 `docs/checkpoints.md`，扩展接口见 `docs/extensions.md`。
-公开发布来源、许可证、数据集与权重策略见 `docs/release-notes.md` 和 `docs/datasets.md`。
-
-### 提交分析任务
+提交兼容分析任务：
 
 ```bash
 curl -X POST http://127.0.0.1:8765/api/v1/analysis/run \
-  -H "Content-Type: application/json" \
+  -H 'Content-Type: application/json' \
   -d '{
-    "video_path": "examples/lebron_shoots.mp4",
-    "vlm_mode": "low-confidence",
-    "max_frames": 180,
-    "generate_video": true,
-    "tracker_conf_thres": 0.3,
-    "tracker_iou_thres": 0.6,
-    "tracker_min_appear_ratio": 0.02,
-    "tracker_min_appear_abs": 5,
-    "segmented_analysis": true,
-    "segment_duration_sec": 15.0,
-    "segment_overlap_sec": 2.0,
-    "vlm_audit": true
+    "video_path": "/absolute/path/to/game.mp4",
+    "generate_video": false,
+    "vlm_mode": "off"
   }'
 ```
 
-返回示例：
-
-```text
-{"task_id":"...","status":"pending","message":"Analysis started asynchronously..."}
-```
-
-查询任务状态：
+查询状态：
 
 ```bash
 curl http://127.0.0.1:8765/api/v1/analysis/status/<task_id>
 ```
 
-### 请求参数
-
-```text
-video_path                必填，视频路径
-vlm_mode                  low-confidence | off | always
-boxes_file                可选，初始 boxes JSON
-max_frames                可选，限制读取帧数
-generate_video            是否生成标注视频
-tracker_conf_thres        默认 0.3
-tracker_iou_thres         默认 0.6
-tracker_min_appear_ratio  默认 0.02
-tracker_min_appear_abs    默认 5
-segmented_analysis        默认 true，统一走带 overlap 的分段分析
-long_video_mode           兼容字段，true 时也启用分段分析
-segment_duration_sec      默认 15.0
-segment_overlap_sec       默认 2.0
-segment_start_sec         默认 0.0，可用于局部 smoke
-segment_end_sec           可选，局部分析结束时间
-max_segments              可选，限制分段数量
-vlm_audit                 默认 true，对 segment contact sheet 做 VLM audit
-vlm_audit_frames          默认 6
-confirmed_identity_merges 可选，确认后的 global_player_id 合并列表，用于输出 merged_players
-vlm_identity_merge_enabled 可选，使用 VLM 审核 duplicate candidates 并自动生成 confirmed merge
-vlm_identity_merge_max_candidates 可选，限制发送给 VLM 的候选数量
-vlm_identity_merge_confidence 可选，VLM 合并确认阈值
-vid_stride                可选，覆盖默认窗口步长
-low_confidence            可选，覆盖低置信度阈值
-high_confidence           可选，覆盖高置信度阈值
-```
-
-### 训练
-
-推荐训练命令：
+使用 CLI：
 
 ```bash
-./venv/bin/python train_mac.py \
-  --device mps \
-  --batch-size 2 \
-  --epochs 20 \
-  --lr 1e-4 \
-  --annotation-path dataset/annotation_dict.json \
-  --augmented-path dataset/augmented_annotation_dict.json \
-  --video-dir dataset/examples/ \
-  --augmented-dir dataset/augmented-examples/ \
-  --model-dir model_checkpoints/r2plus1d_v3/ \
-  --history-path histories/history_r2plus1d_v3.txt
+python -m app.cli analyze /absolute/path/to/game.mp4 --preset fast --no-wait
+python -m app.cli status <task_id>
+python -m app.cli report \
+  --analysis-json analysis_outputs/<task_id>.json \
+  --video /absolute/path/to/game.mp4 \
+  --output-dir analysis_outputs/<task_id>-report
 ```
 
-续训：
+CLI 预设：
 
-```bash
-./venv/bin/python train_mac.py \
-  --resume model_checkpoints/r2plus1d_v3/best.pt \
-  --epochs 30
-```
+- `fast`：关闭 VLM，降低跟踪分辨率和采样频率，适合冒烟。
+- `accurate`：提高跟踪频率和分辨率，启用 BoT-SORT/ReID、分段审核和记分牌抽检。
+- `vlm-full`：在 `accurate` 基础上对所有候选启用 VLM 审核和身份合并。
 
-常用训练参数：
+### 6. API 契约
 
-```text
---accum-steps
---best-metric
---early-stop-patience
---weight-decay
---label-smoothing
---fc-dropout
---no-freeze-bn
---no-class-weights
---no-sampler
---use-augmentation
---force-resplit
-```
-
-### 辅助脚本
-
-```bash
-./venv/bin/python scripts/check_training.py --history-path histories/history_r2plus1d_v3.txt
-./venv/bin/python scripts/gen_augmented.py --minority-only --multiplier 3
-./venv/bin/python scripts/gen_splits.py --annotation-path dataset/annotation_dict.json
-./venv/bin/python scripts/build_identity_duplicate_report.py \
-  --analysis-json analysis_outputs/<analysis-id>.json \
-  --output-json analysis_outputs/perf_runs/identity-duplicate-report.json \
-  --screenshot-dir analysis_outputs/player_stat_screenshots_20260622 \
-  --contact-sheet analysis_outputs/perf_runs/identity-duplicate-review.jpg
-./venv/bin/python scripts/build_player_markdown_reports.py \
-  --analysis-json analysis_outputs/perf_runs/mov-full-current-20260622-224247.json \
-  --video-path path/to/video.mov \
-  --output-dir analysis_outputs/player_markdown_reports
-```
-
-该脚本除 `index.md`、每个球员的 Markdown 与证据素材外，还会额外输出：
-
-- `roster-summary.json`：面向程序消费的最终 roster 摘要，包含 `global_player_id`、阵营候选、号码候选、得分/篮板/助攻/抢断/盖帽、置信度、support score 与备注。
-- `roster-summary.md`：面向人工复核的最终 roster 表格与备注摘要。
-
-如需让 VLM 对绿色框选目标做二次复核，并过滤明确不是球员的结果：
-
-```bash
-./venv/bin/python scripts/build_player_markdown_reports.py \
-  --analysis-json analysis_outputs/perf_runs/mov-full-current-20260622-224247.json \
-  --video-path path/to/video.mov \
-  --output-dir analysis_outputs/player_markdown_reports_vlm_filtered \
-  --max-players 18 \
-  --dedupe-players \
-  --vlm-player-filter \
-  --require-vlm-player \
-  --vlm-model qwen3-vl:4b \
-  --vlm-concurrency 2 \
-  --vlm-timeout-sec 45 \
-  --vlm-cache-path analysis_outputs/player_markdown_reports_vlm_cache.json \
-  --vlm-progress
-```
-
-全量常态使用建议复用同一个 `--vlm-cache-path`。脚本会在每个 player 的 VLM 判断完成后立即写入缓存；如果中途停止，下一次重跑会跳过已验证过的框选截图。报告截图面向人工审阅时，建议至少使用 `--dedupe-players --max-players 18`；当存在大量噪声短轨迹时，可再叠加 `--min-roster-score 18` 和 `--require-vlm-player`，避免把重复身份或明确非球员框写成独立球员报告。
-
-### 入口状态
-
-| 文件 | 状态 | 建议 |
+| 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| `app/main.py` | 主服务入口 | 推荐 |
-| `python -m app.cli` | API CLI 客户端 | 推荐 |
-| `train_mac.py` | 当前训练入口 | 推荐 |
-| `scripts/run_official_*.py` | 原片正式候选发现与 AGU 自主推理 | 当前实验入口 |
-| `scripts/build_face_*.py` | Codex 辅助名单标注与 AGU 人脸注册 | 离线训练/注册入口 |
-| `scripts/evaluate_official_bundle.py` | 冻结预测后的独立验收 | 正式评测入口 |
+| `GET` | `/health` | 存活检查。 |
+| `GET` | `/ready` | 模型和服务就绪检查。 |
+| `POST` | `/api/v1/analysis/run` | 创建分析任务。 |
+| `GET` | `/api/v1/analysis/status/{task_id}` | 查询任务状态和结果。 |
+| `POST` | `/api/v1/analysis/tasks` | 创建任务的兼容别名。 |
+| `GET` | `/api/v1/analysis/tasks/{task_id}` | 查询任务的兼容别名。 |
+| `GET` | `/api/v1/analysis/tasks/{task_id}/result` | 读取完成结果。 |
+| `POST` | `/api/v1/analysis/tasks/{task_id}/cancel` | 协作式取消任务。 |
+| `POST` | `/api/v1/analysis/tasks/{task_id}/retry` | 重试失败或已取消任务。 |
 
-### 测试
+`video_path` 必填且必须位于配置允许的根目录中。常用默认值：
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `generate_video` | `true` | 生成标注视频。 |
+| `vlm_mode` | `low-confidence` | 仅审核低置信度候选；也支持 `off`、`always`。 |
+| `segmented_analysis` | `true` | 启用分段处理。 |
+| `segment_duration_sec` | `15` | 分段长度。 |
+| `segment_overlap_sec` | `2` | 相邻分段重叠。 |
+| `vlm_audit` | `true` | 启用任务级 VLM 抽检。 |
+| `scoreboard_audit` | `false` | 默认不启用记分牌抽检。 |
+
+完整请求、响应和任务状态说明见 [`docs/api.md`](docs/api.md)。任务注册表当前位于单个服务进程内；重启会丢失任务状态，多实例部署需要外部持久化和调度层。
+
+### 7. 原片官方统计工作流
+
+以下命令生成的包建议写入未纳入 Git 的输出目录。示例路径需要替换为本机实际文件。
 
 ```bash
-./venv/bin/python scripts/smoke_open_source.py
-./venv/bin/python -m pytest tests -q
-./venv/bin/python -m compileall app train_mac.py scripts
-./venv/bin/python scripts/validate_open_source_baseline.py
-./venv/bin/python scripts/evaluate_public_benchmark.py --strict
-./venv/bin/python -m build
+# 1. 原片感知
+python -m scripts.run_official_perception \
+  --video /absolute/path/to/game.mp4 \
+  --model /absolute/path/to/detector.pt \
+  --track-players \
+  --output analysis_outputs/game/perception.json
+
+# 2. 姿态
+python -m scripts.run_official_pose \
+  --video /absolute/path/to/game.mp4 \
+  --model /absolute/path/to/pose.pt \
+  --output analysis_outputs/game/pose.json
+
+# 3. 身份图
+python -m scripts.build_official_identity_graph \
+  --perception analysis_outputs/game/perception.json \
+  --video /absolute/path/to/game.mp4 \
+  --face-gallery analysis_outputs/game/face_gallery.json \
+  --output analysis_outputs/game/identity_graph.json
+
+# 4. 只从原片产物生成候选
+python -m scripts.build_official_event_candidates \
+  --perception analysis_outputs/game/perception.json \
+  --pose analysis_outputs/game/pose.json \
+  --identity-graph analysis_outputs/game/identity_graph.json \
+  --video /absolute/path/to/game.mp4 \
+  --game-id game_a \
+  --require-face-gallery-identity \
+  --output analysis_outputs/game/candidates.json
+
+# 5. AGU 自主统计；可选本地 VLM 两阶段审核
+python -m scripts.run_official_autonomous_inference \
+  --candidate-bundle analysis_outputs/game/candidates.json \
+  --video /absolute/path/to/game.mp4 \
+  --two-pass-vlm \
+  --output analysis_outputs/game/official_bundle.json
+
+# 6. 冻结后独立验收
+python -m scripts.evaluate_official_bundle \
+  --bundle analysis_outputs/game/official_bundle.json \
+  --truth /absolute/path/to/sealed_truth.csv \
+  --fps 30 \
+  --require-agu-autonomous \
+  --output analysis_outputs/game/evaluation.json
 ```
 
-### 贡献与许可证
+`BASKETBALL_OFFICIAL_STATS_ENABLED` 等官方统计配置目前用于实验能力和脚本默认值，不会自动把官方统计包接入 `/analysis/run`。在 API 正式切换前，兼容链路和官方链路必须保持明确区分。
 
-- 贡献指南：`CONTRIBUTING.md`
-- 许可证：`LICENSE`
-- 公开发布说明：`docs/release-notes.md`
-- 数据集获取说明：`docs/datasets.md`
-- 第三方许可证边界：`THIRD_PARTY_NOTICES.md`
-- 文档导航：`docs/README.md`
-- 安全策略：`SECURITY.md`
-- 版本历史：`CHANGELOG.md`
+### 8. 人脸名单、识别与去重
 
-当前验证状态以 `docs/harness/TASK-BOARD.md` 的最新任务记录为准。
-
-### 安全与运行时约束
-
-- `POST /api/v1/analysis/run` 会校验 `video_path`，防止简单路径穿越。
-- 默认仅允许分析仓库目录内的视频；可通过 `BASKETBALL_ALLOWED_VIDEO_ROOTS` 增加逗号分隔的本地目录或容器挂载目录，例如 `/Users/name/Movies,/mnt/videos`。
-- 任务状态和结果保存在内存 `TaskManager` 中，进程重启后会丢失。
-- 数据集、模型权重和输出目录默认不入库。
-- `app/models/preprocessing.py` 已按 v3 部署口径实现：BGR、`112x112`、`[0,255]`，不 `/255`，无 Kinetics normalize。
-
-### 开源发布状态
-
-- 仓库包含正式包元数据、CI、插件诊断、公开 contract benchmark、SBOM 工具和社区治理文件。
-- 每次发布仍必须复核第三方依赖、数据集和模型权重的许可证边界。
-- 数据集与权重不随仓库分发，需要自行准备 SpaceJam 标注和视频。
-- `requirements.txt` 不是严格 lockfile。
-- `examples/benchmark/` 只证明公开契约与评测器可复现，不代表生产模型准确率；真实模型发布必须另附带许可数据集上的 IDF1/HOTA、event F1、比分准确率与运行时间。
-
-## English Summary
-
-AGU is an open-source basketball video understanding engine. It focuses on video analysis only: player tracking, action classification, segmented long-video analysis, optional local VLM review, identity evidence, duplicate-identity review candidates, event candidates, and optional annotated outputs. It is not the BFF, authentication layer, rate limiter, product backend, or operations console.
-
-Current API entry points:
-
-- `POST /api/v1/analysis/run` starts an async analysis task.
-- `GET /api/v1/analysis/status/{task_id}` returns task progress and result.
-- `/api/v1/analysis/tasks*` aliases are kept for external gateway compatibility.
-
-Current identity and statistics behavior:
-
-- Long videos are analyzed through overlapped segments by default.
-- `player_identity_features[]` exposes model/fallback body embeddings, torso jersey luminance/dark-ratio features, optional frontal-face embeddings, and continuity evidence. Face detection uses the bundled OpenCV Haar cascade and falls back cleanly when no usable frontal face is visible.
-- `long_video.players[]` exposes lightweight `global_player_id` candidates.
-- `long_video.identity_duplicate_candidates[]` exposes review-only duplicate-ID merge candidates and does not rewrite statistics automatically.
-- `long_video.identity_merge_decisions[]` exposes optional VLM post-processing decisions when `vlm_identity_merge_enabled=true`.
-- `long_video.merged_players[]` exposes confirmed-merge statistics when `confirmed_identity_merges[]` is supplied in the request.
-- `statistics.points`, `assists`, `rebounds`, `blocks`, and `steals` are action-proxy estimates, not official box-score truth. `shoot` clips are exposed as `shot_attempts` and `point_candidate_count`; `points` remains 0 until made-shot, free-throw, or scoreboard-linked scoring confirmation exists. The `statistics.status`, `estimated_fields`, and `candidate_fields` fields make that contract explicit. Block, rebound, steal, and point evidence should be confirmed through event candidates, owner candidates, ball/rim/possession evidence, VLM, scoreboard audit, or human review.
-
-The experimental official-stat foundation is opt-in with
-`BASKETBALL_OFFICIAL_STATS_ENABLED=true`. It provides normalized ball/rim/player
-detections, ball trajectories, possession/shot state machines, dependent event
-relations, immutable review revisions, deterministic official aggregation, and
-raw-only sealed evaluation. It does **not** promote the current action candidates
-to official statistics. A compatible basketball detector must be configured via
-`BASKETBALL_OFFICIAL_DETECTOR_BACKEND` and
-`BASKETBALL_OFFICIAL_DETECTOR_MODEL_PATH`; missing perception evidence yields
-`unknown`/review work, never a fabricated count. Ultralytics is an optional
-AGPL/commercial-license adapter. Prefer a license-compatible ONNX or Apache-2.0
-deployment backend for an open-source release.
-
-Codex is not part of AGU runtime recognition. It may create isolated annotation
-truth and acceptance reports only. `scripts/run_official_perception.py` produces
-traditional detector/tracker/team candidates;
-`scripts/run_official_autonomous_inference.py` asks the configured local Ollama
-VLM to adjudicate bounded raw-video windows. The acceptance evaluator must use
-`scripts/evaluate_official_bundle.py --require-agu-autonomous`; this rejects any
-Codex/human-confirmed event or reference-derived provenance. Configure the path
-with `BASKETBALL_OFFICIAL_PLAYER_TRACKING_ENABLED`,
-`BASKETBALL_OFFICIAL_PLAYER_TRACKER_CONFIG`, `BASKETBALL_OFFICIAL_VLM_ENABLED`,
-`BASKETBALL_OFFICIAL_VLM_CONFIDENCE`, `BASKETBALL_OFFICIAL_VLM_FRAMES`, and
-`BASKETBALL_OFFICIAL_VLM_IMAGE_WIDTH`, and
-`BASKETBALL_OFFICIAL_VLM_CONTEXT_LENGTH`. Long dense windows use the separate
-`BASKETBALL_OFFICIAL_VLM_TIMEOUT` rather than the short clip default.
-`BASKETBALL_OFFICIAL_VLM_CONTACT_SHEET` is an experimental layout switch and is
-off by default because current qwen3-vl:4b validation increased false shots.
-For two-pass VLM actor review, `BASKETBALL_OFFICIAL_ACTION_OWNER_MODEL_PATH`
-may point to an experimental hash-sealed AGU action-owner model. The traditional model ranks
-AGU-generated player candidates before overlays are rendered; the VLM must
-still validate the visible actor, so the model does not prefill an event answer.
-Codex-authored training labels are accepted only through a SHA-bound,
-acceptance-disjoint training manifest and are recorded in output provenance.
-The setting is empty by default: a model must pass both cross-video training
-validation and a separate raw-video acceptance gate before production use.
-Traditional ball/rim trajectory outcomes take precedence over conflicting VLM
-guesses, made shots deterministically reject linked rebound candidates, and a
-3-point label requires grounded line/feet/release evidence. The offline
-candidate builder also supports `--shooter-lookback-sec` to keep identity
-candidates near the resolved shot outcome instead of across a long noisy
-cluster. Rebound candidates carry a traditional multi-frame stable-control
-score: repeated early ball proximity ranks ahead of a one-frame tip, while the
-VLM still decides the visible actor. After the clean semantic pass establishes
-an offensive or defensive rebound, the actor pass is restricted to the only
-team consistent with the already confirmed missed shot. The optional
-`--max-cluster-span-sec` experiment caps sparse ball/rim chains; it is disabled
-by default because the 0--60 second acceptance probe improved recall but added
-false candidates.
-
-For reusable raw-only identity, build a sealed identity graph after perception
-and pass it into candidate construction:
+身份流程以审核过的人脸名单为准：先从非验收片段生成候选，再审核、建库，最后由身份图把轨迹绑定到稳定球员 ID。
 
 ```bash
-python scripts/build_official_identity_graph.py \
-  --perception perception.json --video game.mov \
-  --output identity.json \
-  --embedding-backend torchvision_mobilenet_v3_small \
-  --embedding-threshold 0.92
+# 1. 从与验收比赛隔离的视频生成候选
+python -m scripts.build_face_enrollment_candidates \
+  --video /absolute/path/to/enrollment.mp4 \
+  --output-dir analysis_outputs/faces/crops \
+  --manifest analysis_outputs/faces/candidates.json \
+  --detector-model /absolute/path/to/face_detection_yunet.onnx \
+  --recognizer-model /absolute/path/to/face_recognition_sface.onnx \
+  --benchmark-disjoint
 
-python scripts/build_official_event_candidates.py \
-  --perception perception.json --video game.mov --game-id game-001 \
-  --identity-graph identity.json --output candidates.json
+# 2. 应用人工或 Codex 审核决定
+python -m scripts.approve_face_enrollment_candidates \
+  --candidates analysis_outputs/faces/candidates.json \
+  --decisions /absolute/path/to/decisions.json \
+  --output analysis_outputs/faces/approved.json
+
+# 3. 构建可复用人脸库
+python -m scripts.build_face_gallery \
+  --manifest analysis_outputs/faces/approved.json \
+  --detector-model /absolute/path/to/face_detection_yunet.onnx \
+  --recognizer-model /absolute/path/to/face_recognition_sface.onnx \
+  --output analysis_outputs/game/face_gallery.json
 ```
 
-The identity artifact is bound to the raw video hash and records embedding and
-graph provenance. The optional `torchreid_osnet_x0_25` backend requires a local
-`torchreid` installation and weights; keep it optional rather than adding its
-heavy runtime dependencies to the base service. Thresholds must be calibrated
-on same-time different-player negative pairs. Lowering the cosine threshold to
-force a roster-sized identity count can silently merge different players.
+验收比赛本身不得用于补录该比赛缺失的球员人脸；否则会破坏独立验收。无法严格匹配时应保留 `unknown`，不能用球衣颜色、轨迹顺序或 Codex 猜测代替身份真值。
 
-- `long_video.scoreboard_summary` is emitted when `scoreboard_audit=true`; CLI `accurate` and `vlm-full` enable it by default. The v3 audit detects complete dark physical panels, tracks camera motion across 13 consecutive frames, and reads three raw phases, two sharpened boundary frames, and one temporal fusion. Install `requirements-ocr.txt` to let the optional offline RapidOCR adapter read large side-score digits first; unavailable or low-confidence OCR falls back to the configured VLM. Results are published only after burst/cross-anchor consensus and cross-time score/clock checks. `inconsistent_scoreboard` means evidence disagreed and no final score was published.
+### 9. Codex 辅助标注防泄漏
 
-Setup:
+Codex 可以替代人工完成框选、动作和人脸候选标注，但只能产出训练资产。所有训练资产在使用前必须封存为带来源和哈希的清单，并声明隔离的验收包：
 
 ```bash
+python -m scripts.seal_training_annotation_manifest \
+  --producer codex \
+  --source-video /absolute/path/to/training_game.mp4 \
+  --annotation /absolute/path/to/annotations.json \
+  --task-type action_owner \
+  --benchmark-bundle /absolute/path/to/sealed_benchmark.json \
+  --output analysis_outputs/training/manifest.json
+```
+
+训练示例：
+
+```bash
+python -m scripts.train_action_owner_model \
+  --manifest analysis_outputs/training/manifest.json \
+  --annotations /absolute/path/to/action_owner_annotations.json \
+  --model-type extra_trees \
+  --output model_checkpoints/action_owner.json
+```
+
+禁止把高光、投丢、失误剪辑、CSV 技术统计、Codex 判断或验收真值作为运行时特征、提示词答案或回填规则。
+
+### 10. 配置
+
+配置统一由 `app/config.py` 的 `Settings` 读取，环境变量前缀为 `BASKETBALL_`。新增或修改变量时必须同步 `.env.example` 和相关文档。
+
+主要配置组：
+
+- v3 动作模型、类别映射、序列长度、步长和批量大小；
+- 检测器、跟踪器、ReID、姿态和球员身份模型；
+- YuNet/SFace 模型路径、人脸库和身份阈值；
+- Ollama 地址、VLM 模型、超时、审核和缓存；
+- 官方感知、候选、所有权模型、融合和质量阈值；
+- 输入允许根目录、上传目录、JSON/视频输出目录；
+- 服务主机、端口、日志级别和并发数。
+
+完整变量、默认值和注释以 [`.env.example`](.env.example) 为准。不要提交 `.env`、密钥、个人绝对路径、比赛数据、模型权重或生成结果。
+
+### 11. 模型训练与 v3 契约
+
+通用动作模型可使用：
+
+```bash
+python train_mac.py
+```
+
+兼容训练入口仍保留 `train.py`、`dataset.py` 和 `scripts/` 下的数据工具。除非训练、推理和回归测试同时更新，否则必须保持 v3 预处理契约：帧序列、空间变换、归一化、类别映射与 checkpoint 加载方式一致。
+
+训练数据、预训练权重和第三方数据集的许可证必须单独核验；代码开源不代表所有模型权重或数据自动获得相同许可。
+
+### 12. 目录结构
+
+```text
+app/
+  main.py                  FastAPI 入口与生命周期
+  config.py                BASKETBALL_ 配置
+  cli.py                   analyze/status/cancel/retry/report/evaluate/plugins
+  analysis/                跟踪、身份、推理、融合、VLM、任务编排
+  models/                  R(2+1)D 与 v3 预处理
+  video/                   标注视频输出
+scripts/                   官方统计、标注、训练和评估工具
+tests/                     pytest 回归测试
+docs/
+  api.md                   API 契约
+  harness/                 工作流、验收门禁和任务记录
+examples/                  轻量示例资源
+dataset/                   本地数据（不提交大文件）
+model_checkpoints/         本地权重（不提交）
+analysis_outputs/          结构化分析产物（不提交）
+output_videos/             生成视频（不提交）
+```
+
+### 13. 测试与验收
+
+```bash
+# 全量回归
+pytest
+
+# 按变更范围选择
+pytest tests/test_inference.py
+pytest tests/test_official_event_candidates.py tests/test_official_autonomous_inference.py
+
+# 仓库门禁
+bash scripts/codex_harness.sh verify --scope working-tree
+```
+
+服务代码或 API 文档变更还应执行 [`docs/harness/LOCAL-SERVICE-CURL-HOOK.md`](docs/harness/LOCAL-SERVICE-CURL-HOOK.md)：启动服务、检查 `/health` 和 `/ready`、提交轻量任务并查询状态。
+
+官方技术统计的最终验收要求：
+
+- 训练/调参与验收比赛严格隔离；
+- 模型、阈值、名单和配置在验收前冻结；
+- 至少两场完整、逐球员、六项统计的独立真值；
+- 事件定位、身份归属和逐球员统计均有独立指标；
+- 最终正确率不低于 95%，且结果来自 AGU 自主推理。
+
+### 14. 文档、贡献与安全
+
+- API：[`docs/api.md`](docs/api.md)
+- 本地验收：[`docs/harness/LOCAL-SERVICE-CURL-HOOK.md`](docs/harness/LOCAL-SERVICE-CURL-HOOK.md)
+- 开发工作流：[`docs/harness/WORKFLOW.md`](docs/harness/WORKFLOW.md)
+- 当前任务状态：[`docs/harness/TASK-BOARD.md`](docs/harness/TASK-BOARD.md)
+- 发布记录：[`CHANGELOG.md`](CHANGELOG.md)
+- 安全策略：[`SECURITY.md`](SECURITY.md)
+
+提交前请使用小而清晰的变更、补充对应测试并说明模型、checkpoint、预处理和 API 影响。发现安全问题时请按 `SECURITY.md` 私下报告，不要在公开 issue 中提交密钥、私人视频或身份数据。
+
+---
+
+<a id="english"></a>
+
+## English
+
+### 1. Project purpose
+
+AGU aims to identify players, actions, and box-score events autonomously from raw game footage and produce auditable structured results. Runtime answers must come from AGU's own conventional models and local VLMs. Codex or human-authored statistics must never be injected into inference.
+
+Codex has only two isolated roles:
+
+- Before training: assist with boxes, action labels, and face-candidate review, producing traceable annotations kept disjoint from benchmark games.
+- After model freeze: audit independent raw-footage results, attribute errors, and produce acceptance reports without supplying answers to inference.
+
+AGU provides only the analysis engine and stable responses. Unified authentication, rate limiting, cross-service aggregation, and the BFF/API gateway belong to the external `visual_coach` project.
+
+### 2. Current capabilities and truth boundary
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| Asynchronous FastAPI analysis | Available | Create, query, cancel, retry, and read results; task state is process-local memory. |
+| v3 action-classification path | Available for compatibility | R(2+1)D emits proxy actions; `action_proxy` is not an official box score. |
+| Tracking, pose, identity, and VLM review | Available/configurable | Backends and local model paths are configurable; weights are not distributed. |
+| Raw-only official-statistics pipeline | Implemented, experimental | Perception, pose, identity graph, candidates, autonomous inference, and evaluation are separate scripts; not in the default API response. |
+| Face-list recognition and deduplication | Implemented, data incomplete | Supports YuNet + SFace galleries, reviewed manifests, identity graphs, and strict roster constraints; current roster coverage is insufficient. |
+| Codex annotation firewall | Implemented | Training manifests record sources, task types, benchmark bundles, and benchmark-disjoint checks. |
+| Independent full-game statistics | Not achieved | The project cannot yet claim reliable unattended official statistics for a complete game. |
+| Final accuracy ≥ 95% | Not demonstrated | Current localization F1 is `0.8889`, strict identity accuracy is `0`, and cross-game owner coverage is `1/11`; a second complete six-stat independent truth set is also missing. |
+
+Final accuracy means evaluation on independent games after freeze. It is not training accuracy, isolated action-classification accuracy, or a result corrected by humans or Codex. Lower internal gates are integration aids only and do not replace the 95% product acceptance gate.
+
+### 3. Two analysis paths
+
+#### 3.1 Stable compatibility path
+
+```text
+video
+  -> player detection and tracking
+  -> v3 R(2+1)D action classification
+  -> optional identity merge / pose / scoreboard review / VLM audit
+  -> AnalysisResponse + JSON + optional annotated video
+```
+
+This path preserves the existing API and integrations. Its `action_proxy` output is not equivalent to official makes, rebounds, assists, steals, or blocks.
+
+#### 3.2 Raw-only official-statistics path
+
+```text
+independent raw game
+  -> perception bundle (players, ball, rim, tracks)
+  -> pose bundle
+  -> reviewed face roster + identity graph
+  -> raw-only event candidates
+  -> AGU two-stage autonomous inference (conventional models + optional local VLM)
+  -> official-statistics bundle
+  -> post-freeze comparison with independent truth
+```
+
+The current statistics schema covers:
+
+- two-point and three-point makes/attempts;
+- offensive and defensive rebounds;
+- assists, steals, and blocks.
+
+Highlight, miss, and turnover clips plus existing CSV statistics may be used only for training reference, error analysis, or post-freeze evaluation. The official inference entry point consumes raw-footage candidates and does not read those answer assets.
+
+### 4. Open-source capabilities and AGU boundaries
+
+AGU prefers adapters, configuration, and feature flags around open-source components:
+
+- video IO: OpenCV and FFmpeg;
+- detection and tracking: Ultralytics YOLO, ByteTrack, and BoT-SORT;
+- pose: configurable local pose models;
+- face recognition: OpenCV YuNet + SFace;
+- action recognition: PyTorch R(2+1)D;
+- VLM: local Ollama-compatible models;
+- API: FastAPI and Pydantic.
+
+Deployers must review Ultralytics AGPL/commercial licensing for their use. The repository does not bind the workflow to hosted services, secrets, fixed model paths, or one GPU environment; CPU, MPS, CUDA, and offline paths are configuration choices. RTMDet and RTMPose are candidate alternatives, not currently bundled adapters.
+
+### 5. Quick start
+
+Python 3.10+ is required. Model weights, datasets, and game footage are not included.
+
+```bash
+git clone <repository-url>
+cd agu
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-service.txt
+pip install -r requirements.txt
 cp .env.example .env
+```
+
+Start the service:
+
+```bash
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 ```
 
-Package and framework diagnostics:
+Check service health:
 
 ```bash
-pip install -e ".[api,inference]"
-agu --version
-agu plugins list
-python scripts/evaluate_public_benchmark.py --strict
+curl http://127.0.0.1:8765/health
+curl http://127.0.0.1:8765/ready
 ```
 
-Useful docs:
+Submit a compatibility analysis task:
 
-- API contract: `docs/api.md`
-- Model card: `docs/model-card.md`
-- Checkpoints: `docs/checkpoints.md`
-- Extensions: `docs/extensions.md`
-- Open-source release notes: `docs/release-notes.md`
-- Harness workflow and task board: `docs/harness/WORKFLOW.md`, `docs/harness/TASK-BOARD.md`
+```bash
+curl -X POST http://127.0.0.1:8765/api/v1/analysis/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "video_path": "/absolute/path/to/game.mp4",
+    "generate_video": false,
+    "vlm_mode": "off"
+  }'
+```
+
+Query its status:
+
+```bash
+curl http://127.0.0.1:8765/api/v1/analysis/status/<task_id>
+```
+
+Use the CLI:
+
+```bash
+python -m app.cli analyze /absolute/path/to/game.mp4 --preset fast --no-wait
+python -m app.cli status <task_id>
+python -m app.cli report \
+  --analysis-json analysis_outputs/<task_id>.json \
+  --video /absolute/path/to/game.mp4 \
+  --output-dir analysis_outputs/<task_id>-report
+```
+
+CLI presets:
+
+- `fast`: disables VLM and lowers tracking resolution and sampling for smoke tests.
+- `accurate`: increases tracking frequency and resolution and enables BoT-SORT/ReID, segmented audit, and scoreboard sampling.
+- `vlm-full`: adds all-candidate VLM review and identity merging to `accurate`.
+
+### 6. API contract
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Liveness check. |
+| `GET` | `/ready` | Model and service readiness. |
+| `POST` | `/api/v1/analysis/run` | Create an analysis task. |
+| `GET` | `/api/v1/analysis/status/{task_id}` | Read task status and result. |
+| `POST` | `/api/v1/analysis/tasks` | Compatibility alias for task creation. |
+| `GET` | `/api/v1/analysis/tasks/{task_id}` | Compatibility alias for task status. |
+| `GET` | `/api/v1/analysis/tasks/{task_id}/result` | Read a completed result. |
+| `POST` | `/api/v1/analysis/tasks/{task_id}/cancel` | Cooperatively cancel a task. |
+| `POST` | `/api/v1/analysis/tasks/{task_id}/retry` | Retry a failed or cancelled task. |
+
+`video_path` is required and must be under a configured allowed root. Common defaults:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `generate_video` | `true` | Generate an annotated video. |
+| `vlm_mode` | `low-confidence` | Review low-confidence candidates; `off` and `always` are also supported. |
+| `segmented_analysis` | `true` | Enable segmented processing. |
+| `segment_duration_sec` | `15` | Segment duration. |
+| `segment_overlap_sec` | `2` | Adjacent-segment overlap. |
+| `vlm_audit` | `true` | Enable task-level VLM sampling. |
+| `scoreboard_audit` | `false` | Scoreboard sampling is disabled by default. |
+
+See [`docs/api.md`](docs/api.md) for full requests, responses, and task states. The task registry is currently local to one service process; restarts lose task state, and multi-instance deployments require an external persistence and scheduling layer.
+
+### 7. Raw-only official-statistics workflow
+
+Write generated bundles to an ignored output directory. Replace all example paths with local files.
+
+```bash
+# 1. Raw-footage perception
+python -m scripts.run_official_perception \
+  --video /absolute/path/to/game.mp4 \
+  --model /absolute/path/to/detector.pt \
+  --track-players \
+  --output analysis_outputs/game/perception.json
+
+# 2. Pose
+python -m scripts.run_official_pose \
+  --video /absolute/path/to/game.mp4 \
+  --model /absolute/path/to/pose.pt \
+  --output analysis_outputs/game/pose.json
+
+# 3. Identity graph
+python -m scripts.build_official_identity_graph \
+  --perception analysis_outputs/game/perception.json \
+  --video /absolute/path/to/game.mp4 \
+  --face-gallery analysis_outputs/game/face_gallery.json \
+  --output analysis_outputs/game/identity_graph.json
+
+# 4. Candidates derived only from raw-footage artifacts
+python -m scripts.build_official_event_candidates \
+  --perception analysis_outputs/game/perception.json \
+  --pose analysis_outputs/game/pose.json \
+  --identity-graph analysis_outputs/game/identity_graph.json \
+  --video /absolute/path/to/game.mp4 \
+  --game-id game_a \
+  --require-face-gallery-identity \
+  --output analysis_outputs/game/candidates.json
+
+# 5. AGU autonomous statistics with optional two-pass local VLM review
+python -m scripts.run_official_autonomous_inference \
+  --candidate-bundle analysis_outputs/game/candidates.json \
+  --video /absolute/path/to/game.mp4 \
+  --two-pass-vlm \
+  --output analysis_outputs/game/official_bundle.json
+
+# 6. Independent post-freeze acceptance
+python -m scripts.evaluate_official_bundle \
+  --bundle analysis_outputs/game/official_bundle.json \
+  --truth /absolute/path/to/sealed_truth.csv \
+  --fps 30 \
+  --require-agu-autonomous \
+  --output analysis_outputs/game/evaluation.json
+```
+
+Official-statistics settings such as `BASKETBALL_OFFICIAL_STATS_ENABLED` currently support experimental capabilities and script defaults. They do not automatically attach the official bundle to `/analysis/run`; keep compatibility and official outputs distinct until the API is deliberately integrated.
+
+### 8. Face roster, recognition, and deduplication
+
+Identity is based on an approved face roster: generate candidates from non-benchmark footage, review them, build a gallery, and let the identity graph bind tracks to stable player IDs.
+
+```bash
+# 1. Generate candidates from benchmark-disjoint footage
+python -m scripts.build_face_enrollment_candidates \
+  --video /absolute/path/to/enrollment.mp4 \
+  --output-dir analysis_outputs/faces/crops \
+  --manifest analysis_outputs/faces/candidates.json \
+  --detector-model /absolute/path/to/face_detection_yunet.onnx \
+  --recognizer-model /absolute/path/to/face_recognition_sface.onnx \
+  --benchmark-disjoint
+
+# 2. Apply human or Codex review decisions
+python -m scripts.approve_face_enrollment_candidates \
+  --candidates analysis_outputs/faces/candidates.json \
+  --decisions /absolute/path/to/decisions.json \
+  --output analysis_outputs/faces/approved.json
+
+# 3. Build a reusable face gallery
+python -m scripts.build_face_gallery \
+  --manifest analysis_outputs/faces/approved.json \
+  --detector-model /absolute/path/to/face_detection_yunet.onnx \
+  --recognizer-model /absolute/path/to/face_recognition_sface.onnx \
+  --output analysis_outputs/game/face_gallery.json
+```
+
+Do not enroll missing players from the benchmark game itself; doing so breaks independent acceptance. A failed strict match must remain `unknown`. Jersey color, track order, or a Codex guess cannot replace identity truth.
+
+### 9. Codex-assisted annotation firewall
+
+Codex may replace manual labor for boxes, actions, and face-candidate annotations, but may produce training assets only. Before use, seal every asset into a source- and hash-aware manifest that names its disjoint benchmark bundle:
+
+```bash
+python -m scripts.seal_training_annotation_manifest \
+  --producer codex \
+  --source-video /absolute/path/to/training_game.mp4 \
+  --annotation /absolute/path/to/annotations.json \
+  --task-type action_owner \
+  --benchmark-bundle /absolute/path/to/sealed_benchmark.json \
+  --output analysis_outputs/training/manifest.json
+```
+
+Training example:
+
+```bash
+python -m scripts.train_action_owner_model \
+  --manifest analysis_outputs/training/manifest.json \
+  --annotations /absolute/path/to/action_owner_annotations.json \
+  --model-type extra_trees \
+  --output model_checkpoints/action_owner.json
+```
+
+Highlight, miss, or turnover clips, CSV box scores, Codex judgments, and benchmark truth must never become runtime features, prompt answers, or correction rules.
+
+### 10. Configuration
+
+`app/config.py` owns configuration through `Settings`, using the `BASKETBALL_` environment prefix. New or changed variables must also update `.env.example` and relevant documentation.
+
+Main groups include:
+
+- v3 action model, class mapping, sequence length, stride, and batch size;
+- detector, tracker, ReID, pose, and player-identity models;
+- YuNet/SFace paths, face gallery, and identity thresholds;
+- Ollama URL, VLM model, timeout, audit, and cache;
+- official perception, candidates, ownership models, fusion, and quality gates;
+- allowed input roots, upload directory, JSON output, and video output;
+- server host, port, logging, and concurrency.
+
+Use [`.env.example`](.env.example) as the complete annotated source of variables and defaults. Never commit `.env`, secrets, personal absolute paths, game data, model weights, or generated outputs.
+
+### 11. Model training and the v3 contract
+
+Train the general action model with:
+
+```bash
+python train_mac.py
+```
+
+Compatibility entry points remain in `train.py`, `dataset.py`, and data tools under `scripts/`. Preserve the v3 preprocessing contract—frame sequence, spatial transforms, normalization, class mapping, and checkpoint loading—unless training, inference, and regression tests change together.
+
+Licenses for training data, pretrained weights, and third-party datasets require separate review. Open-source code does not automatically grant identical rights to every weight or dataset.
+
+### 12. Repository layout
+
+```text
+app/
+  main.py                  FastAPI entry point and lifecycle
+  config.py                BASKETBALL_ configuration
+  cli.py                   analyze/status/cancel/retry/report/evaluate/plugins
+  analysis/                tracking, identity, inference, fusion, VLM, tasks
+  models/                  R(2+1)D and v3 preprocessing
+  video/                   annotated-video output
+scripts/                   official statistics, annotation, training, evaluation
+tests/                     pytest regression tests
+docs/
+  api.md                   API contract
+  harness/                 workflows, verification gates, task records
+examples/                  lightweight example assets
+dataset/                   local data; do not commit large files
+model_checkpoints/         local weights; do not commit
+analysis_outputs/          structured generated artifacts; do not commit
+output_videos/             generated videos; do not commit
+```
+
+### 13. Tests and acceptance
+
+```bash
+# Full regression suite
+pytest
+
+# Examples selected by change scope
+pytest tests/test_inference.py
+pytest tests/test_official_event_candidates.py tests/test_official_autonomous_inference.py
+
+# Repository gate
+bash scripts/codex_harness.sh verify --scope working-tree
+```
+
+Service-code or API-documentation changes should also run [`docs/harness/LOCAL-SERVICE-CURL-HOOK.md`](docs/harness/LOCAL-SERVICE-CURL-HOOK.md): start the service, check `/health` and `/ready`, submit a lightweight task, and query its status.
+
+Final official-statistics acceptance requires:
+
+- strict separation of training/tuning games and benchmark games;
+- frozen models, thresholds, rosters, and configuration before evaluation;
+- at least two complete independent truth sets with all six per-player statistic groups;
+- separate metrics for localization, identity ownership, and per-player totals;
+- final accuracy of at least 95%, produced by AGU-autonomous inference.
+
+### 14. Documentation, contribution, and security
+
+- API: [`docs/api.md`](docs/api.md)
+- Local verification: [`docs/harness/LOCAL-SERVICE-CURL-HOOK.md`](docs/harness/LOCAL-SERVICE-CURL-HOOK.md)
+- Development workflow: [`docs/harness/WORKFLOW.md`](docs/harness/WORKFLOW.md)
+- Current task state: [`docs/harness/TASK-BOARD.md`](docs/harness/TASK-BOARD.md)
+- Releases: [`CHANGELOG.md`](CHANGELOG.md)
+- Security policy: [`SECURITY.md`](SECURITY.md)
+
+Keep contributions small and explicit, add tests, and document model, checkpoint, preprocessing, and API effects. Report vulnerabilities privately through `SECURITY.md`; do not place secrets, private footage, or identity data in public issues.
