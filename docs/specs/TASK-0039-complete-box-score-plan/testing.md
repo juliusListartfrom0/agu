@@ -9,5 +9,5 @@
   OpenCV/OCR, edge VLM, Codex/manual annotation, license/fallback, v3, candidate
   recall, actor accuracy, and score reconciliation sections.
 - `git diff --check` passed.
-- `venv/bin/python scripts/verify_harness.py` passed.
+- `.venv/bin/python scripts/verify_harness.py` passed.
 - Post-planning synthesis was written to llm-wiki and indexed.
