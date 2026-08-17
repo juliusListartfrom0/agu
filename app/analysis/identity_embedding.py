@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,7 +9,6 @@ from typing import List, Sequence
 import cv2
 import numpy as np
 import torch
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -61,15 +61,20 @@ class TorchvisionMobileNetV3SmallEmbedder(BaseIdentityEmbedder):
         from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
 
         normalized_weights = (weights_name or "default").lower()
+        checkpoint_path: Path | None = None
         if normalized_weights in {"default", "imagenet", "imagenet1k_v1"}:
             weights = MobileNet_V3_Small_Weights.DEFAULT
             weight_label = "imagenet1k_v1"
         elif normalized_weights in {"none", "random", "untrained"}:
             weights = None
             weight_label = "none"
+        elif Path(weights_name).expanduser().is_file():
+            weights = None
+            checkpoint_path = Path(weights_name).expanduser()
+            weight_label = "domain_checkpoint"
         else:
             raise ValueError(
-                "identity_embedding_weights must be one of default, imagenet1k_v1, none; "
+                "identity_embedding_weights must be default, imagenet1k_v1, none, or a valid AGU checkpoint; "
                 f"got {weights_name!r}"
             )
 
@@ -78,6 +83,24 @@ class TorchvisionMobileNetV3SmallEmbedder(BaseIdentityEmbedder):
         self.batch_size = max(1, int(batch_size or 16))
         model = mobilenet_v3_small(weights=weights)
         self.features = torch.nn.Sequential(model.features, model.avgpool, torch.nn.Flatten()).to(self.device)
+        if checkpoint_path is not None:
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            from app.analysis.reid_training import REID_CHECKPOINT_SCHEMA
+
+            if not isinstance(checkpoint, dict) or checkpoint.get("schema_version") != REID_CHECKPOINT_SCHEMA:
+                raise ValueError(f"unsupported AGU ReID checkpoint: {checkpoint_path}")
+            if checkpoint.get("architecture") != "torchvision_mobilenet_v3_small":
+                raise ValueError(f"ReID checkpoint architecture mismatch: {checkpoint_path}")
+            state_dict = checkpoint.get("feature_state_dict")
+            if not isinstance(state_dict, dict):
+                raise ValueError(f"ReID checkpoint has no feature state dict: {checkpoint_path}")
+            self.features.load_state_dict(state_dict, strict=True)
+            checkpoint_sha = _file_sha256(checkpoint_path)
+            manifest_sha = str(checkpoint.get("training_manifest_sha256") or "unknown")
+            self.model_id = (
+                "torchvision_mobilenet_v3_small_domain_"
+                f"{checkpoint_sha[:12]}_manifest_{manifest_sha[:12]}_embedding_v1"
+            )
         self.features.eval()
 
     def embed_crops(self, crops_bgr: Sequence[np.ndarray]) -> IdentityEmbeddingResult:
@@ -226,3 +249,11 @@ def _l2_normalize(vector: np.ndarray) -> np.ndarray:
     if norm > 0.0:
         return vector / norm
     return vector
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

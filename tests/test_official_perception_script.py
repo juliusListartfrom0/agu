@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from app.analysis.schemas import BoundingBoxResponse, PerceptionDetectionResponse
-from scripts.run_official_perception import _filter_rims_by_image_geometry, run_perception_scan
+from scripts.run_official_perception import (
+    _filter_object_types,
+    _filter_rims_by_image_geometry,
+    run_perception_scan,
+)
 
 
 def test_official_perception_scan_rejects_invalid_sampling(tmp_path: Path) -> None:
@@ -62,3 +66,22 @@ def test_rim_geometry_filter_rejects_only_lower_frame_rims() -> None:
     )
 
     assert [item.detection_id for item in filtered] == ["upper", "ball"]
+
+
+def test_object_type_filter_supports_specialist_perception_passes() -> None:
+    detections = [
+        PerceptionDetectionResponse(
+            detection_id=object_type,
+            frame=10,
+            object_type=object_type,
+            bbox=BoundingBoxResponse(x1=0, y1=0, x2=10, y2=10),
+            confidence=0.8,
+            backend="test",
+        )
+        for object_type in ("player", "basketball", "rim")
+    ]
+
+    assert [
+        item.object_type for item in _filter_object_types(detections, ("basketball",))
+    ] == ["basketball"]
+    assert _filter_object_types(detections, ()) == detections

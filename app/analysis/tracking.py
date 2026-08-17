@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import json
 import math
 import tempfile
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import cv2
-import json
 import numpy as np
-
 
 TRACKER_TYPES = {
     "BOOSTING": lambda: cv2.legacy.TrackerBoosting_create(),
@@ -84,11 +83,7 @@ def select_active_track_ids(
 ) -> List[int]:
     """Select stable player track IDs, optionally capped by strongest tracks."""
     min_appearances = max(min_appear_abs, int(frame_count * min_appear_ratio))
-    active_track_ids = [
-        tid
-        for tid, count in appearance_counts.items()
-        if count >= min_appearances
-    ]
+    active_track_ids = [tid for tid, count in appearance_counts.items() if count >= min_appearances]
     if not active_track_ids and appearance_counts:
         active_track_ids = [max(appearance_counts, key=appearance_counts.get)]
 
@@ -106,8 +101,7 @@ def densify_track_boxes(
     """Build dense box rows while only interpolating brief detector dropouts."""
     missing_box = (0.0, 0.0, 0.0, 0.0)
     tracks: Dict[int, List[Optional[Tuple[float, float, float, float]]]] = {
-        track_id: [frame_boxes.get(track_id) for frame_boxes in raw_track_data]
-        for track_id in active_track_ids
+        track_id: [frame_boxes.get(track_id) for frame_boxes in raw_track_data] for track_id in active_track_ids
     }
     for track_id, boxes in tracks.items():
         known_indices = [index for index, box in enumerate(boxes) if box is not None]
@@ -183,7 +177,7 @@ def extract_tracked_frames(
     min_appear_ratio: float = 0.02,
     min_appear_abs: int = 5,
     device: Optional[str] = None,
-    yolo_model_name: str = "yolov8n.pt",
+    yolo_model_name: str = "model_checkpoints/yolov8n.pt",
     tracker_backend: str = "bytetrack",
     yolo_tracker_config: str = "",
     reid_enabled: bool = False,
@@ -217,8 +211,8 @@ def extract_tracked_frames(
         Tuple of (video_frames, player_boxes, width, height, colors).
     """
     if tracker_type.upper() == "YOLO":
-        from ultralytics import YOLO
         import torch
+        from ultralytics import YOLO
 
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -266,7 +260,7 @@ def extract_tracked_frames(
         for idx, r in enumerate(results):
             if max_frames is not None and idx >= max_frames:
                 break
-            
+
             video_frames.append(r.orig_img.copy())
 
             frame_boxes = {}
@@ -276,7 +270,7 @@ def extract_tracked_frames(
                 for box, track_id in zip(xywh, ids):
                     track_id = int(track_id)
                     appearance_counts[track_id] = appearance_counts.get(track_id, 0) + 1
-                    
+
                     x_center, y_center, w, h = box
                     x = x_center - w / 2
                     y = y_center - h / 2
@@ -305,9 +299,9 @@ def extract_tracked_frames(
         )
 
         colors: List[Tuple[int, int, int]] = [
-            (255, 0, 0),    # Red
-            (0, 0, 255),    # Blue
-            (0, 180, 0),    # Green
+            (255, 0, 0),  # Red
+            (0, 0, 255),  # Blue
+            (0, 180, 0),  # Green
             (255, 160, 0),  # Orange
             (180, 0, 180),  # Purple
             (0, 180, 180),  # Cyan
@@ -365,7 +359,9 @@ def extract_tracked_frames(
             else:
                 success, tracked_boxes = trackers.update(frame)
                 if not success:
-                    fallback = player_boxes[-1] if player_boxes else tuple(tuple(float(v) for v in box) for box in init_boxes)
+                    fallback = (
+                        player_boxes[-1] if player_boxes else tuple(tuple(float(v) for v in box) for box in init_boxes)
+                    )
                     player_boxes.append(fallback)
                 else:
                     player_boxes.append(tuple(tuple(float(v) for v in box) for box in tracked_boxes))
@@ -409,7 +405,7 @@ def crop_video(
         if w <= 1 or h <= 1:
             video.append(np.zeros((h_out, w_out, 3), dtype=np.uint8))
             continue
-        cropped = frame[max(y, 0): max(y + h, 0), max(x, 0): max(x + w, 0)]
+        cropped = frame[max(y, 0) : max(y + h, 0), max(x, 0) : max(x + w, 0)]
         try:
             resized = cv2.resize(cropped, dsize=(w_out, h_out), interpolation=cv2.INTER_NEAREST)
         except cv2.error:

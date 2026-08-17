@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from collections import Counter, defaultdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -15,7 +16,7 @@ import numpy as np
 from app.analysis.face_gallery import FaceGallery, match_face_gallery
 from app.analysis.face_identity import FaceIdentityAdapter
 from app.analysis.identity_embedding import BaseIdentityEmbedder
-from app.analysis.identity_graph import IdentityGraph, IdentityTracklet
+from app.analysis.identity_graph import CanonicalPlayerIdentity, IdentityGraph, IdentityTracklet
 from app.analysis.schemas import (
     JerseyNumberCandidateResponse,
     OfficialCanonicalIdentityResponse,
@@ -47,6 +48,7 @@ def build_official_identity_artifact(
     minimum_observations: int = 3,
     maximum_crops: int = 8,
     maximum_tracklet_gap_sec: float = 2.0,
+    maximum_tracklets: int = 2000,
     face_identity_adapter: FaceIdentityAdapter | None = None,
     face_gallery: FaceGallery | None = None,
     face_gallery_similarity_threshold: float = 0.45,
@@ -59,6 +61,7 @@ def build_official_identity_artifact(
     jersey_number_minimum_crops: int = 4,
     jersey_number_minimum_consensus: int = 2,
     jersey_source_player_ids: set[str] | None = None,
+    source_player_ids: set[str] | None = None,
 ) -> OfficialIdentityGraphArtifactResponse:
     """Build an AGU identity graph, optionally anchored by a sealed face gallery."""
 
@@ -66,7 +69,12 @@ def build_official_identity_artifact(
         raise ValueError("perception payloads and videos must be non-empty and have equal length")
     if not 0.0 <= embedding_threshold <= 1.0:
         raise ValueError("embedding_threshold must be in [0,1]")
-    if minimum_observations <= 0 or maximum_crops <= 0 or maximum_tracklet_gap_sec <= 0:
+    if (
+        minimum_observations <= 0
+        or maximum_crops <= 0
+        or maximum_tracklet_gap_sec <= 0
+        or maximum_tracklets <= 0
+    ):
         raise ValueError("identity observation, crop and gap settings must be positive")
     if face_gallery is not None and face_identity_adapter is None:
         raise ValueError("face gallery requires a face identity adapter")
@@ -107,7 +115,15 @@ def build_official_identity_artifact(
         detections = [PerceptionDetectionResponse.model_validate(item) for item in payload.get("detections") or []]
         grouped: dict[str, list[PerceptionDetectionResponse]] = defaultdict(list)
         for detection in detections:
-            if detection.object_type == "player" and detection.player_id and detection.team_id:
+            if (
+                detection.object_type == "player"
+                and detection.player_id
+                and detection.team_id
+                and (
+                    source_player_ids is None
+                    or str(detection.player_id) in source_player_ids
+                )
+            ):
                 grouped[str(detection.player_id)].append(detection)
         maximum_gap = max(1, int(round(maximum_tracklet_gap_sec * source_fps)))
         for source_player_id, observations in sorted(grouped.items()):
@@ -118,13 +134,24 @@ def build_official_identity_artifact(
                 team_id = Counter(str(item.team_id) for item in segment if item.team_id).most_common(1)[0][0]
                 pending.append((tracklet_id, source_video_id, team_id, segment))
 
+    if len(pending) > maximum_tracklets:
+        raise ValueError(
+            "official identity tracklet count exceeds the safe graph limit: "
+            f"{len(pending)} > {maximum_tracklets}; increase minimum_observations "
+            "or improve detector tracking before retrying"
+        )
+
     selected = {
         tracklet_id: _select_observations(observations, maximum_crops)
         for tracklet_id, _source_video_id, _team_id, observations in pending
     }
+    gallery_team_ids = {
+        entry.team_id for entry in face_gallery.entries if entry.team_id
+    } if face_gallery is not None else set()
     crops = _read_tracklet_crops(video_paths, pending, selected)
     tracklet_responses: list[OfficialIdentityTrackletResponse] = []
     graph_tracklets: list[IdentityTracklet] = []
+    raw_team_by_tracklet: dict[str, str] = {}
     for tracklet_id, source_video_id, team_id, observations in pending:
         tracklet_crops = crops.get(tracklet_id) or []
         if not tracklet_crops:
@@ -141,9 +168,15 @@ def build_official_identity_artifact(
                 face_gallery,
                 face_result.embedding,
                 model_id=face_result.model_id,
-                team_id=team_id,
+                # Detector-side labels such as raw-dark/raw-light do not share
+                # the roster gallery's team namespace (for example LAL/BOS).
+                # Only use the team pre-filter when the label is actually
+                # present in the sealed gallery; a successful face match then
+                # supplies the canonical team ID.
+                team_id=team_id if team_id in gallery_team_ids else None,
                 similarity_threshold=face_gallery_similarity_threshold,
                 minimum_margin=face_gallery_minimum_margin,
+                minimum_entry_quality=enrolled_minimum_face_quality,
             )
             if (
                 face_gallery is not None
@@ -164,6 +197,12 @@ def build_official_identity_artifact(
             minimum_consensus=jersey_number_minimum_consensus,
             allowed_source_player_ids=jersey_source_player_ids,
         )
+        if gallery_match is not None and gallery_match.jersey_number is not None:
+            # Enrollment metadata is identity-only registration evidence from a
+            # benchmark-disjoint video.  A noisy benchmark crop must never
+            # overwrite the number attached to a direct face-gallery match.
+            jersey_number = gallery_match.jersey_number
+            jersey_confidence = gallery_match.confidence
         response = OfficialIdentityTrackletResponse(
             tracklet_id=tracklet_id,
             source_video_id=source_video_id,
@@ -196,6 +235,7 @@ def build_official_identity_artifact(
             gallery_confidence=gallery_match.confidence if gallery_match is not None else 0.0,
         )
         tracklet_responses.append(response)
+        raw_team_by_tracklet[tracklet_id] = team_id
         graph_tracklets.append(
             IdentityTracklet(
                 tracklet_id=tracklet_id,
@@ -225,12 +265,44 @@ def build_official_identity_artifact(
             )
         )
 
+    inferred_team_bindings = _infer_canonical_team_bindings(
+        tracklet_responses,
+        raw_team_by_tracklet=raw_team_by_tracklet,
+    )
+    if inferred_team_bindings:
+        tracklet_responses = [
+            item.model_copy(
+                update={
+                    "team_id": _team_after_inferred_binding(
+                        current_team_id=item.team_id,
+                        gallery_person_id=item.gallery_person_id,
+                        raw_team_id=raw_team_by_tracklet[item.tracklet_id],
+                        inferred_team_bindings=inferred_team_bindings,
+                    )
+                }
+            )
+            for item in tracklet_responses
+        ]
+        graph_tracklets = [
+            replace(
+                item,
+                team_id=_team_after_inferred_binding(
+                    current_team_id=item.team_id,
+                    gallery_person_id=item.gallery_person_id,
+                    raw_team_id=raw_team_by_tracklet[item.tracklet_id],
+                    inferred_team_bindings=inferred_team_bindings,
+                ),
+            )
+            for item in graph_tracklets
+        ]
+
     resolved = IdentityGraph(
         embedding_threshold=embedding_threshold,
         face_match_threshold=face_match_threshold,
         face_conflict_threshold=face_conflict_threshold,
         enrolled_minimum_face_quality=enrolled_minimum_face_quality,
     ).resolve(graph_tracklets)
+    resolved = _attach_registered_jersey_identities(resolved, face_gallery=face_gallery)
     response_by_id = {item.tracklet_id: item for item in tracklet_responses}
     identities: list[OfficialCanonicalIdentityResponse] = []
     tracklet_to_player_id: dict[str, str] = {}
@@ -257,6 +329,7 @@ def build_official_identity_artifact(
         "embedding_threshold": embedding_threshold,
         "minimum_observations": minimum_observations,
         "maximum_crops": maximum_crops,
+        "maximum_tracklets": maximum_tracklets,
         "maximum_tracklet_gap_sec": maximum_tracklet_gap_sec,
         "face_gallery_sha256": face_gallery.gallery_sha256 if face_gallery is not None else "",
         "face_gallery_similarity_threshold": face_gallery_similarity_threshold,
@@ -271,7 +344,12 @@ def build_official_identity_artifact(
         "jersey_number_minimum_crops": jersey_number_minimum_crops,
         "jersey_number_minimum_consensus": jersey_number_minimum_consensus,
         "jersey_source_player_ids": sorted(jersey_source_player_ids or []),
+        "source_player_ids": sorted(source_player_ids or []),
         "enrolled_identity_propagation": "direct_face_or_trusted_jersey",
+        "face_gallery_jersey_anchor_count": sum(
+            entry.jersey_number is not None for entry in face_gallery.entries
+        ) if face_gallery is not None else 0,
+        "inferred_team_bindings": inferred_team_bindings,
     }
     artifact = OfficialIdentityGraphArtifactResponse(
         raw_videos=raw_videos,
@@ -286,6 +364,9 @@ def build_official_identity_artifact(
             "jersey_number_reader": (
                 jersey_number_reader.model if jersey_number_reader is not None else "disabled"
             ),
+            "source_player_scope_count": str(len(source_player_ids or [])),
+            "source_player_scope_sha256": _canonical_sha256(sorted(source_player_ids or [])),
+            "inferred_team_binding_count": str(len(inferred_team_bindings)),
         },
         tracklets=tracklet_responses,
         identities=identities,
@@ -296,6 +377,123 @@ def build_official_identity_artifact(
         artifact.model_copy(update={"artifact_sha256": ""}).model_dump(mode="json")
     )
     return artifact
+
+
+def _infer_canonical_team_bindings(
+    tracklets: Sequence[OfficialIdentityTrackletResponse],
+    *,
+    raw_team_by_tracklet: Mapping[str, str],
+    minimum_anchor_count: int = 4,
+    minimum_dominance: float = 0.80,
+) -> dict[str, str]:
+    """Infer a one-to-one raw-uniform-to-roster-team map from face anchors."""
+
+    votes: dict[str, Counter[str]] = defaultdict(Counter)
+    anchor_counts: Counter[str] = Counter()
+    for tracklet in tracklets:
+        raw_team = raw_team_by_tracklet.get(tracklet.tracklet_id)
+        if not raw_team or not tracklet.gallery_person_id or tracklet.team_id == raw_team:
+            continue
+        votes[raw_team][tracklet.team_id] += max(0.0, float(tracklet.gallery_confidence))
+        anchor_counts[raw_team] += 1
+    raw_teams = sorted(votes)
+    canonical_teams = sorted({team for counts in votes.values() for team in counts})
+    if (
+        len(raw_teams) == 2
+        and len(canonical_teams) == 2
+        and all(anchor_counts[raw_team] >= minimum_anchor_count for raw_team in raw_teams)
+    ):
+        direct_score = sum(votes[raw][canonical] for raw, canonical in zip(raw_teams, canonical_teams))
+        crossed_score = sum(
+            votes[raw][canonical]
+            for raw, canonical in zip(raw_teams, reversed(canonical_teams))
+        )
+        total_weight = sum(sum(counts.values()) for counts in votes.values())
+        best_score = max(direct_score, crossed_score)
+        runner_up = min(direct_score, crossed_score)
+        if (
+            total_weight > 0.0
+            and best_score / total_weight >= 0.65
+            and best_score - runner_up >= 0.50
+        ):
+            selected = canonical_teams if direct_score >= crossed_score else list(reversed(canonical_teams))
+            return dict(zip(raw_teams, selected))
+    proposals: list[tuple[int, float, str, str]] = []
+    for raw_team, counts in votes.items():
+        total_weight = sum(counts.values())
+        canonical_team, support_weight = counts.most_common(1)[0]
+        dominance = support_weight / total_weight
+        if anchor_counts[raw_team] >= minimum_anchor_count and dominance >= minimum_dominance:
+            proposals.append((anchor_counts[raw_team], dominance, raw_team, canonical_team))
+    bindings: dict[str, str] = {}
+    claimed_canonical_teams: set[str] = set()
+    for _support, _dominance, raw_team, canonical_team in sorted(proposals, reverse=True):
+        if canonical_team in claimed_canonical_teams:
+            continue
+        bindings[raw_team] = canonical_team
+        claimed_canonical_teams.add(canonical_team)
+    return dict(sorted(bindings.items()))
+
+
+def _team_after_inferred_binding(
+    *,
+    current_team_id: str,
+    gallery_person_id: str | None,
+    raw_team_id: str,
+    inferred_team_bindings: Mapping[str, str],
+) -> str:
+    """Never let a weak uniform-cluster map overwrite a direct face team."""
+
+    if gallery_person_id:
+        return current_team_id
+    return inferred_team_bindings.get(raw_team_id, current_team_id)
+
+
+def _attach_registered_jersey_identities(
+    identities: Sequence[CanonicalPlayerIdentity],
+    *,
+    face_gallery: FaceGallery | None,
+) -> list[CanonicalPlayerIdentity]:
+    """Bind one unambiguous runtime jersey read to its enrolled face entry."""
+
+    if face_gallery is None:
+        return list(identities)
+    registered: dict[tuple[str, str], str] = {}
+    ambiguous_registered: set[tuple[str, str]] = set()
+    for entry in face_gallery.entries:
+        if not entry.team_id or entry.jersey_number is None:
+            continue
+        key = (entry.team_id, entry.jersey_number)
+        if key in registered and registered[key] != entry.person_id:
+            ambiguous_registered.add(key)
+        else:
+            registered[key] = entry.person_id
+    runtime_jersey_counts = Counter(
+        (item.team_id, item.jersey_number)
+        for item in identities
+        if item.jersey_number is not None
+        and not any(value.startswith("face_gallery=") for value in item.evidence)
+    )
+    output: list[CanonicalPlayerIdentity] = []
+    for identity in identities:
+        key = (identity.team_id, identity.jersey_number or "")
+        person_id = registered.get(key)
+        if (
+            person_id is None
+            or key in ambiguous_registered
+            or runtime_jersey_counts[key] != 1
+            or any(value.startswith("face_gallery=") for value in identity.evidence)
+        ):
+            output.append(identity)
+            continue
+        output.append(
+            replace(
+                identity,
+                player_id=person_id,
+                evidence=(*identity.evidence, f"face_gallery_jersey={person_id}"),
+            )
+        )
+    return output
 
 
 def _read_trusted_jersey_number(

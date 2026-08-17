@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
 
 from app.analysis.schemas import BoundingBoxResponse, PerceptionDetectionResponse
@@ -18,7 +19,10 @@ def attach_pose_keypoints(
         raise ValueError("maximum_frame_gap must be non-negative")
     if not 0 <= minimum_iou <= 1:
         raise ValueError("minimum_iou must be between zero and one")
-    poses = [item for item in pose_detections if item.object_type == "player" and item.keypoints]
+    poses_by_frame: dict[int, list[PerceptionDetectionResponse]] = defaultdict(list)
+    for item in pose_detections:
+        if item.object_type == "player" and item.keypoints:
+            poses_by_frame[item.frame].append(item)
     merged: list[PerceptionDetectionResponse] = []
     for detection in detections:
         if detection.object_type != "player":
@@ -26,8 +30,11 @@ def attach_pose_keypoints(
             continue
         candidates = [
             pose
-            for pose in poses
-            if abs(pose.frame - detection.frame) <= maximum_frame_gap
+            for frame in range(
+                detection.frame - maximum_frame_gap,
+                detection.frame + maximum_frame_gap + 1,
+            )
+            for pose in poses_by_frame.get(frame, ())
         ]
         scored = [(_box_iou(detection.bbox, pose.bbox), pose) for pose in candidates]
         if not scored:

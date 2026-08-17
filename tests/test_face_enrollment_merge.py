@@ -39,6 +39,10 @@ def test_merge_face_lists_combines_cross_source_identity() -> None:
     assert merged["benchmark_disjoint"] is True
     assert len(merged["persons"]) == 1
     assert len(merged["persons"][0]["samples"]) == 4
+    assert {sample["prototype_source_id"] for sample in merged["persons"][0]["samples"]} == {
+        "source_001:a",
+        "source_002:b",
+    }
 
 
 def test_merge_face_lists_requires_exhaustive_hash_bound_decisions() -> None:

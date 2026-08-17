@@ -34,6 +34,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minimum-observations", type=int, default=3)
     parser.add_argument("--maximum-crops", type=int, default=8)
     parser.add_argument("--maximum-tracklet-gap-sec", type=float, default=2.0)
+    parser.add_argument("--maximum-tracklets", type=int, default=2000)
+    parser.add_argument(
+        "--source-player-id",
+        action="append",
+        default=[],
+        help="Optional raw player ID allowlist for event-scoped identity resolution",
+    )
+    parser.add_argument(
+        "--event-candidate-bundle",
+        type=Path,
+        help="Derive the raw player allowlist from an official event-candidate bundle",
+    )
+    parser.add_argument(
+        "--event-candidate-player-prefix",
+        help=(
+            "Optional perception namespace such as 'perception-3:'; only matching "
+            "candidate IDs are used and the prefix is removed before raw-track lookup"
+        ),
+    )
     parser.add_argument("--face-gallery", type=Path)
     parser.add_argument(
         "--face-identity",
@@ -72,6 +91,14 @@ def main() -> int:
     args = parse_args()
     settings = get_settings()
     payloads = [json.loads(path.read_text(encoding="utf-8")) for path in args.perception]
+    source_player_ids = set(args.source_player_id)
+    if args.event_candidate_bundle is not None:
+        source_player_ids.update(
+            _candidate_player_ids(
+                json.loads(args.event_candidate_bundle.read_text(encoding="utf-8")),
+                source_prefix=args.event_candidate_player_prefix,
+            )
+        )
     embedder = build_identity_embedder(
         backend=args.embedding_backend,
         weights=args.embedding_weights,
@@ -117,6 +144,7 @@ def main() -> int:
         minimum_observations=args.minimum_observations,
         maximum_crops=args.maximum_crops,
         maximum_tracklet_gap_sec=args.maximum_tracklet_gap_sec,
+        maximum_tracklets=args.maximum_tracklets,
         face_identity_adapter=face_adapter,
         face_gallery=face_gallery,
         face_gallery_similarity_threshold=(
@@ -149,6 +177,7 @@ def main() -> int:
         jersey_number_minimum_crops=args.jersey_minimum_crops,
         jersey_number_minimum_consensus=args.jersey_minimum_consensus,
         jersey_source_player_ids=(set(args.jersey_source_player_id) if args.jersey_source_player_id else None),
+        source_player_ids=(source_player_ids or None),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(artifact.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -166,6 +195,39 @@ def main() -> int:
         )
     )
     return 0
+
+
+def _candidate_player_ids(
+    payload: dict[str, object],
+    *,
+    source_prefix: str | None = None,
+) -> set[str]:
+    """Collect raw actor IDs from sealed event evidence without reading truth."""
+
+    if payload.get("schema_version") != "agu.raw-only.v1":
+        raise ValueError("unsupported official event-candidate schema")
+    result: set[str] = set()
+    for event in payload.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        for evidence in event.get("evidence") or []:
+            if not isinstance(evidence, dict):
+                continue
+            details = evidence.get("details") or {}
+            if not isinstance(details, dict):
+                continue
+            candidates = [
+                str(item) for item in details.get("candidate_player_ids") or [] if item
+            ]
+            for observation in details.get("candidate_player_observations") or []:
+                if isinstance(observation, dict) and observation.get("player_id"):
+                    candidates.append(str(observation["player_id"]))
+            for candidate in candidates:
+                if source_prefix is None:
+                    result.add(candidate)
+                elif candidate.startswith(source_prefix):
+                    result.add(candidate.removeprefix(source_prefix))
+    return result
 
 
 if __name__ == "__main__":

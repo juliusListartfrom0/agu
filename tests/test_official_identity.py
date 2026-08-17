@@ -12,7 +12,11 @@ import pytest
 from app.analysis.face_gallery import parse_face_gallery, seal_face_gallery_payload
 from app.analysis.face_identity import FaceIdentityResult
 from app.analysis.identity_embedding import BaseIdentityEmbedder, IdentityEmbeddingResult
+from app.analysis.identity_graph import CanonicalPlayerIdentity
 from app.analysis.official_identity import (
+    _attach_registered_jersey_identities,
+    _infer_canonical_team_bindings,
+    _team_after_inferred_binding,
     build_official_identity_artifact,
     canonical_player_for_observation,
     canonicalize_perception_detections,
@@ -178,6 +182,65 @@ def test_official_identity_rejects_untracked_perception(tmp_path: Path) -> None:
         )
 
 
+def test_official_identity_fails_fast_when_tracking_is_too_fragmented(tmp_path: Path) -> None:
+    video = tmp_path / "period.mp4"
+    _video(video)
+    detections = [
+        _detection(frame, f"raw-track-{frame}", (10, 10, 35, 90))
+        for frame in range(6)
+    ]
+    payload = {
+        "schema_version": "agu.official-perception.v1",
+        "raw_video": {
+            "filename": video.name,
+            "sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+            "size_bytes": video.stat().st_size,
+            "source_fps": 10.0,
+            "frame_count": 6,
+        },
+        "detections": detections,
+    }
+
+    with pytest.raises(ValueError, match="safe graph limit"):
+        build_official_identity_artifact(
+            perception_payloads=[payload],
+            video_paths=[video],
+            embedder=MeanColorEmbedder(),
+            minimum_observations=1,
+            maximum_tracklets=5,
+        )
+
+
+def test_official_identity_can_limit_work_to_event_source_tracks(tmp_path: Path) -> None:
+    video = tmp_path / "period.mp4"
+    _video(video)
+    payload = {
+        "schema_version": "agu.official-perception.v1",
+        "raw_video": {
+            "filename": video.name,
+            "sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+            "size_bytes": video.stat().st_size,
+            "source_fps": 10.0,
+            "frame_count": 6,
+        },
+        "detections": [
+            *[_detection(frame, "event-track", (10, 10, 35, 90)) for frame in range(3)],
+            *[_detection(frame, "unrelated-track", (60, 10, 85, 90)) for frame in range(3)],
+        ],
+    }
+
+    artifact = build_official_identity_artifact(
+        perception_payloads=[payload],
+        video_paths=[video],
+        embedder=MeanColorEmbedder(),
+        minimum_observations=1,
+        source_player_ids={"event-track"},
+    )
+
+    assert {tracklet.source_player_id for tracklet in artifact.tracklets} == {"event-track"}
+    assert artifact.model_provenance["source_player_scope_count"] == "1"
+
+
 def test_official_identity_anchors_canonical_ids_to_face_gallery(tmp_path: Path) -> None:
     video = tmp_path / "period.mp4"
     _video(video)
@@ -206,14 +269,16 @@ def test_official_identity_anchors_canonical_ids_to_face_gallery(tmp_path: Path)
                 "entries": [
                     {
                         "person_id": "annotated-red",
-                        "team_id": "raw-dark",
+                        "team_id": "canonical-team",
+                        "jersey_number": "7",
                         "embedding": [1.0, 0.0],
                         "sample_count": 2,
                         "quality": 0.95,
                     },
                     {
                         "person_id": "annotated-blue",
-                        "team_id": "raw-dark",
+                        "team_id": "canonical-team",
+                        "jersey_number": "9",
                         "embedding": [0.0, 1.0],
                         "sample_count": 2,
                         "quality": 0.95,
@@ -239,6 +304,8 @@ def test_official_identity_anchors_canonical_ids_to_face_gallery(tmp_path: Path)
         "annotated-blue",
     }
     assert artifact.model_provenance["face_gallery"] == gallery.gallery_sha256
+    assert {tracklet.team_id for tracklet in artifact.tracklets} == {"canonical-team"}
+    assert {identity.jersey_number for identity in artifact.identities} == {"7", "9"}
 
     low_quality = build_official_identity_artifact(
         perception_payloads=[payload],
@@ -256,6 +323,60 @@ def test_official_identity_anchors_canonical_ids_to_face_gallery(tmp_path: Path)
         for evidence in identity.evidence
     )
     assert all(tracklet.gallery_person_id for tracklet in artifact.tracklets)
+
+
+def test_team_binding_requires_multiple_dominant_face_anchors() -> None:
+    def tracklet(tracklet_id: str, raw_team: str, canonical_team: str, person_id: str | None):
+        return MagicMock(
+            tracklet_id=tracklet_id,
+            team_id=canonical_team,
+            gallery_person_id=person_id,
+        )
+
+    tracklets = [
+        tracklet("a1", "raw-dark", "ATL", "p1"),
+        tracklet("a2", "raw-dark", "ATL", "p2"),
+        tracklet("a3", "raw-dark", "CHI", "p3"),
+        tracklet("b1", "raw-light", "CHI", "p4"),
+        tracklet("b2", "raw-light", "CHI", "p5"),
+        tracklet("weak", "raw-third", "ATL", "p6"),
+    ]
+
+    raw_teams = {
+        "a1": "raw-dark",
+        "a2": "raw-dark",
+        "a3": "raw-dark",
+        "b1": "raw-light",
+        "b2": "raw-light",
+        "weak": "raw-third",
+    }
+    assert _infer_canonical_team_bindings(
+        tracklets,
+        raw_team_by_tracklet=raw_teams,
+    ) == {}
+    assert _infer_canonical_team_bindings(
+        tracklets,
+        raw_team_by_tracklet=raw_teams,
+        minimum_dominance=0.60,
+        minimum_anchor_count=2,
+    ) == {"raw-dark": "ATL", "raw-light": "CHI"}
+
+
+def test_inferred_team_binding_never_overwrites_direct_gallery_team() -> None:
+    bindings = {"raw-dark": "ATL"}
+
+    assert _team_after_inferred_binding(
+        current_team_id="CHI",
+        gallery_person_id="2586",
+        raw_team_id="raw-dark",
+        inferred_team_bindings=bindings,
+    ) == "CHI"
+    assert _team_after_inferred_binding(
+        current_team_id="raw-dark",
+        gallery_person_id=None,
+        raw_team_id="raw-dark",
+        inferred_team_bindings=bindings,
+    ) == "ATL"
 
 
 def test_official_identity_uses_only_trusted_agu_jersey_reads(tmp_path: Path) -> None:
@@ -295,6 +416,87 @@ def test_official_identity_uses_only_trusted_agu_jersey_reads(tmp_path: Path) ->
         "raw-dark-jersey-9",
     }
     assert artifact.model_provenance["jersey_number_reader"] == "fixture-jersey-vlm"
+
+
+def test_registered_jersey_maps_to_face_entry_only_when_graph_key_is_unique() -> None:
+    gallery = parse_face_gallery(
+        seal_face_gallery_payload(
+            {
+                "model_id": "sface-test",
+                "source_manifest_sha256": "fixture",
+                "benchmark_disjoint": True,
+                "entries": [
+                    {
+                        "person_id": "registered-13",
+                        "team_id": "CHI",
+                        "jersey_number": "13",
+                        "embedding": [1.0, 0.0],
+                        "sample_count": 2,
+                        "quality": 0.95,
+                    }
+                ],
+            }
+        )
+    )
+    identity = CanonicalPlayerIdentity(
+        player_id="CHI-jersey-13",
+        team_id="CHI",
+        tracklet_ids=("track-1",),
+        jersey_number="13",
+        confidence=0.95,
+        evidence=("trusted_jersey=13",),
+    )
+
+    mapped = _attach_registered_jersey_identities([identity], face_gallery=gallery)
+    ambiguous = _attach_registered_jersey_identities([identity, identity], face_gallery=gallery)
+
+    assert mapped[0].player_id == "registered-13"
+    assert "face_gallery_jersey=registered-13" in mapped[0].evidence
+    assert all(item.player_id == "CHI-jersey-13" for item in ambiguous)
+
+
+def test_registered_jersey_ignores_existing_anchor_for_same_enrolled_person() -> None:
+    gallery = parse_face_gallery(
+        seal_face_gallery_payload(
+            {
+                "model_id": "sface-test",
+                "source_manifest_sha256": "fixture",
+                "benchmark_disjoint": True,
+                "entries": [
+                    {
+                        "person_id": "registered-1",
+                        "team_id": "CHI",
+                        "jersey_number": "1",
+                        "embedding": [1.0, 0.0],
+                        "sample_count": 2,
+                        "quality": 0.95,
+                    }
+                ],
+            }
+        )
+    )
+    anchored = CanonicalPlayerIdentity(
+        player_id="registered-1-ambiguous-fixture",
+        team_id="CHI",
+        tracklet_ids=("face-track",),
+        jersey_number="1",
+        confidence=0.95,
+        evidence=("trusted_jersey=1", "face_gallery=registered-1", "ambiguous_duplicate_anchor"),
+    )
+    runtime = CanonicalPlayerIdentity(
+        player_id="CHI-jersey-1",
+        team_id="CHI",
+        tracklet_ids=("runtime-track",),
+        jersey_number="1",
+        confidence=0.95,
+        evidence=("trusted_jersey=1",),
+    )
+
+    mapped = _attach_registered_jersey_identities([anchored, runtime], face_gallery=gallery)
+
+    assert mapped[0].player_id == "registered-1-ambiguous-fixture"
+    assert mapped[1].player_id == "registered-1"
+    assert "face_gallery_jersey=registered-1" in mapped[1].evidence
 
 
 def test_jersey_reader_passes_configured_context_to_ollama() -> None:
