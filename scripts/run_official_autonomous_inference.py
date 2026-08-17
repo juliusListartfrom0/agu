@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 from app.analysis.action_ownership import ActionOwnerModel  # noqa: E402
 from app.analysis.official_evaluation import verify_raw_only_bundle  # noqa: E402
 from app.analysis.official_inference import (  # noqa: E402
+    CacheAwareFallbackOfficialEventReviewer,
     OfficialEventReviewer,
     OllamaOfficialEventReviewer,
     TwoPassOfficialEventReviewer,
@@ -43,17 +44,79 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames", type=int, default=settings.official_vlm_frames)
     parser.add_argument("--image-width", type=int, default=settings.official_vlm_image_width)
     parser.add_argument("--context-length", type=int, default=settings.official_vlm_context_length)
+    parser.add_argument(
+        "--ollama-keep-alive",
+        type=int,
+        default=None,
+        help="Optional Ollama keep_alive value in seconds; use 0 to unload after each review",
+    )
+    parser.add_argument(
+        "--ollama-semantic-keep-alive",
+        type=int,
+        default=None,
+        help="Optional two-pass semantic keep_alive override so an accepted event can reuse the loaded model",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--contact-sheet", action=argparse.BooleanOptionalAction, default=settings.official_vlm_contact_sheet
     )
     parser.add_argument("--sample-fps", type=float, default=4.0)
+    parser.add_argument(
+        "--rim-detail-inset",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Add a raw-derived magnified rim inset to semantic frames using traditional detections",
+    )
     parser.add_argument("--review-pre-seconds", type=float, default=3.0)
     parser.add_argument("--review-post-seconds", type=float, default=3.0)
     parser.add_argument("--actor-pre-seconds", type=float, default=2.0)
     parser.add_argument("--actor-post-seconds", type=float, default=1.5)
+    parser.add_argument(
+        "--semantic-fallback-image-width",
+        type=int,
+        help="For primary semantic-cache misses only, use this lower image width",
+    )
+    parser.add_argument(
+        "--semantic-fallback-model",
+        help="For primary semantic-cache misses only, use this resource-safe model",
+    )
+    parser.add_argument(
+        "--semantic-fallback-context-length",
+        type=int,
+        help="For primary semantic-cache misses only, use this context length",
+    )
+    parser.add_argument(
+        "--semantic-fallback-keep-alive",
+        type=int,
+        help="Optional Ollama keep_alive seconds for the semantic fallback model",
+    )
+    parser.add_argument(
+        "--actor-fallback-image-width",
+        type=int,
+        help="For primary actor-cache misses only, use this lower image width",
+    )
+    parser.add_argument(
+        "--actor-fallback-model",
+        help="For primary actor-cache misses only, use this resource-safe model",
+    )
+    parser.add_argument(
+        "--actor-fallback-context-length",
+        type=int,
+        help="For primary actor-cache misses only, use this lower context length",
+    )
+    parser.add_argument(
+        "--actor-fallback-keep-alive",
+        type=int,
+        help="Optional Ollama keep_alive seconds for the actor fallback model",
+    )
     parser.add_argument("--maximum-identity-overlays", type=int, default=2)
     parser.add_argument("--two-pass-vlm", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--semantic-only-vlm",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Review clean event semantics without spending a second VLM call on actor identity",
+    )
     parser.add_argument("--cache", type=Path)
     parser.add_argument(
         "--action-owner-model",
@@ -76,6 +139,7 @@ class VideoEventFrameProvider:
         overlay_identities: bool = True,
         maximum_identity_overlays: int = 2,
         prefer_release_frame: bool = False,
+        rim_detail_inset: bool = False,
     ) -> None:
         self.video_path = video_path
         self.sample_fps = sample_fps
@@ -84,6 +148,7 @@ class VideoEventFrameProvider:
         self.overlay_identities = overlay_identities
         self.maximum_identity_overlays = maximum_identity_overlays
         self.prefer_release_frame = prefer_release_frame
+        self.rim_detail_inset = rim_detail_inset
         capture = cv2.VideoCapture(str(video_path))
         if not capture.isOpened():
             raise RuntimeError(f"unable to open video: {video_path}")
@@ -111,6 +176,8 @@ class VideoEventFrameProvider:
                 if not ok:
                     break
                 if (frame_number - start_frame) % stride == 0:
+                    if self.rim_detail_inset:
+                        frame = _add_rim_detail_inset(frame, event, frame_number=frame_number)
                     if self.overlay_identities:
                         frame = _overlay_candidate_identities(
                             frame,
@@ -169,7 +236,9 @@ def _review_frame_bounds(
         anchor = event.outcome_frame
     if anchor is None:
         for evidence in event.evidence:
-            value = evidence.details.get("candidate_event_frame")
+            value = evidence.details.get("review_anchor_frame")
+            if value is None:
+                value = evidence.details.get("candidate_event_frame")
             try:
                 anchor = int(value) if value is not None else None
             except (TypeError, ValueError):
@@ -181,6 +250,61 @@ def _review_frame_bounds(
     start = max(0, anchor - int(round(source_fps * pre_seconds)))
     end = anchor + int(round(source_fps * post_seconds))
     return start, end
+
+
+def _add_rim_detail_inset(
+    frame: np.ndarray,
+    event: GameEventResponse,
+    *,
+    frame_number: int,
+) -> np.ndarray:
+    """Magnify detector-grounded rim context without adding semantic labels."""
+
+    observations = [
+        item
+        for evidence in event.evidence
+        for item in (evidence.details.get("review_rim_observations") or [])
+        if isinstance(item, dict) and isinstance(item.get("rim_bbox"), dict)
+    ]
+    if not observations:
+        return frame
+    nearest = min(
+        observations,
+        key=lambda item: abs(int(item.get("frame", frame_number)) - frame_number),
+    )
+    rim = nearest["rim_bbox"]
+    try:
+        x1, y1, x2, y2 = (float(rim[key]) for key in ("x1", "y1", "x2", "y2"))
+    except (KeyError, TypeError, ValueError):
+        return frame
+    height, width = frame.shape[:2]
+    rim_width = max(1.0, x2 - x1)
+    rim_height = max(1.0, y2 - y1)
+    center_x = (x1 + x2) / 2.0
+    center_y = (y1 + y2) / 2.0
+    crop_width = max(rim_width * 7.0, width * 0.22)
+    crop_height = max(rim_height * 9.0, height * 0.32)
+    left = max(0, int(round(center_x - crop_width / 2.0)))
+    right = min(width, int(round(center_x + crop_width / 2.0)))
+    top = max(0, int(round(center_y - crop_height * 0.55)))
+    bottom = min(height, int(round(center_y + crop_height * 0.45)))
+    if right - left < 4 or bottom - top < 4:
+        return frame
+    inset_width = max(96, int(round(width * 0.34)))
+    inset_height = max(72, int(round(height * 0.34)))
+    detail = cv2.resize(frame[top:bottom, left:right], (inset_width, inset_height))
+    output = frame.copy()
+    target_left = width - inset_width - 8
+    target_top = height - inset_height - 8
+    output[target_top : target_top + inset_height, target_left : target_left + inset_width] = detail
+    cv2.rectangle(
+        output,
+        (target_left - 1, target_top - 1),
+        (target_left + inset_width, target_top + inset_height),
+        (0, 255, 255),
+        2,
+    )
+    return output
 
 
 def _overlay_candidate_identities(
@@ -337,6 +461,7 @@ def run_autonomous_inference(
     review_pre_seconds: float = 3.0,
     review_post_seconds: float = 3.0,
     overlay_identities: bool = True,
+    rim_detail_inset: bool = False,
 ) -> RawOnlyPredictionBundleResponse:
     source = verify_raw_only_bundle(candidate_bundle)
     if len(source.raw_videos) != 1 or source.raw_videos[0].filename != video_path.name:
@@ -347,6 +472,7 @@ def run_autonomous_inference(
         review_pre_seconds=review_pre_seconds,
         review_post_seconds=review_post_seconds,
         overlay_identities=overlay_identities,
+        rim_detail_inset=rim_detail_inset,
     )
     events = adjudicate_official_candidates(
         source.events,
@@ -369,6 +495,10 @@ def run_autonomous_inference(
         ),
     )
     action_owner_model = getattr(reviewer, "action_owner_model", None)
+    semantic_reviewer = getattr(reviewer, "semantic_reviewer", None)
+    semantic_fallback_reviewer = getattr(semantic_reviewer, "fallback_reviewer", None)
+    actor_reviewer = getattr(reviewer, "actor_reviewer", None)
+    actor_fallback_reviewer = getattr(actor_reviewer, "fallback_reviewer", None)
     action_owner_provenance = {}
     if isinstance(action_owner_model, ActionOwnerModel):
         artifact = action_owner_model.artifact
@@ -392,10 +522,36 @@ def run_autonomous_inference(
             "official_vlm_context_length": getattr(reviewer, "context_length"),
             "official_vlm_contact_sheet": getattr(reviewer, "contact_sheet"),
             "official_vlm_two_pass": isinstance(reviewer, TwoPassOfficialEventReviewer),
+            "official_vlm_review_mode": getattr(reviewer, "review_mode", "two_pass"),
+            "official_vlm_actor_fallback_dispatch_count": int(
+                getattr(actor_reviewer, "fallback_dispatch_count", 0)
+            ),
+            "official_vlm_actor_fallback_image_width": int(
+                getattr(actor_fallback_reviewer, "image_width", 0)
+            ),
+            "official_vlm_actor_fallback_context_length": int(
+                getattr(actor_fallback_reviewer, "context_length", 0)
+            ),
+            "official_vlm_actor_fallback_model": str(
+                getattr(actor_reviewer, "fallback_model", "")
+            ),
+            "official_vlm_semantic_fallback_dispatch_count": int(
+                getattr(semantic_reviewer, "fallback_dispatch_count", 0)
+            ),
+            "official_vlm_semantic_fallback_image_width": int(
+                getattr(semantic_fallback_reviewer, "image_width", 0)
+            ),
+            "official_vlm_semantic_fallback_context_length": int(
+                getattr(semantic_fallback_reviewer, "context_length", 0)
+            ),
+            "official_vlm_semantic_fallback_model": str(
+                getattr(semantic_reviewer, "fallback_model", "")
+            ),
             "action_owner_model_sha256": action_owner_provenance.get("action_owner_model_sha256", ""),
             "event_frame_sample_fps": sample_fps,
             "event_review_pre_seconds": review_pre_seconds,
             "event_review_post_seconds": review_post_seconds,
+            "event_rim_detail_inset": rim_detail_inset,
         },
         candidate_backend=source.model_provenance.get("candidate_backend", "agu_traditional_perception"),
         semantic_backend=reviewer.name,
@@ -420,6 +576,42 @@ def main() -> int:
         or args.actor_post_seconds < 0
     ):
         raise ValueError("confidence must be in [0,1]; frames/sample-fps must be positive; review bounds nonnegative")
+    if args.two_pass_vlm and args.semantic_only_vlm:
+        raise ValueError("--two-pass-vlm and --semantic-only-vlm are mutually exclusive")
+    actor_fallback_values = (
+        args.actor_fallback_image_width,
+        args.actor_fallback_context_length,
+    )
+    actor_fallback_requested = any(value is not None for value in actor_fallback_values) or any(
+        value is not None
+        for value in (args.actor_fallback_model, args.actor_fallback_keep_alive)
+    )
+    if actor_fallback_requested:
+        if not args.two_pass_vlm or any(value is None or value <= 0 for value in actor_fallback_values):
+            raise ValueError("actor fallback requires two-pass VLM and two positive fallback settings")
+        if args.actor_fallback_image_width > args.image_width:
+            raise ValueError("actor fallback image width must not exceed the primary setting")
+    if args.actor_fallback_keep_alive is not None and args.actor_fallback_keep_alive < 0:
+        raise ValueError("actor fallback keep-alive must be nonnegative")
+    semantic_fallback_values = (
+        args.semantic_fallback_image_width,
+        args.semantic_fallback_context_length,
+    )
+    semantic_fallback_requested = any(
+        value is not None for value in semantic_fallback_values
+    ) or any(
+        value is not None
+        for value in (args.semantic_fallback_model, args.semantic_fallback_keep_alive)
+    )
+    if semantic_fallback_requested:
+        if not args.two_pass_vlm or any(
+            value is None or value <= 0 for value in semantic_fallback_values
+        ):
+            raise ValueError("semantic fallback requires two-pass VLM and two positive fallback settings")
+        if args.semantic_fallback_image_width > args.image_width:
+            raise ValueError("semantic fallback image width must not exceed the primary setting")
+    if args.semantic_fallback_keep_alive is not None and args.semantic_fallback_keep_alive < 0:
+        raise ValueError("semantic fallback keep-alive must be nonnegative")
     source = RawOnlyPredictionBundleResponse.model_validate_json(args.candidate_bundle.read_text(encoding="utf-8"))
     cache_path = args.cache or args.output.with_suffix(".vlm-cache.json")
     if args.two_pass_vlm:
@@ -435,7 +627,7 @@ def main() -> int:
             maximum_identity_overlays=args.maximum_identity_overlays,
             prefer_release_frame=True,
         )
-        semantic_reviewer = OllamaOfficialEventReviewer(
+        primary_semantic_reviewer = OllamaOfficialEventReviewer(
             model=args.model,
             host=args.host,
             timeout=args.timeout,
@@ -443,9 +635,15 @@ def main() -> int:
             max_frames=args.frames,
             context_length=args.context_length,
             seed=args.seed,
+            keep_alive=(
+                args.ollama_semantic_keep_alive
+                if args.ollama_semantic_keep_alive is not None
+                else args.ollama_keep_alive
+            ),
             cache_path=cache_path.with_name(f"{cache_path.stem}.semantic{cache_path.suffix}"),
             contact_sheet=args.contact_sheet,
             review_mode="event_semantics",
+            rim_detail_inset=args.rim_detail_inset,
             frame_bounds_resolver=lambda event: _review_frame_bounds(
                 event,
                 source_fps=actor_provider.source_fps,
@@ -458,34 +656,117 @@ def main() -> int:
                 review_pre_seconds=args.review_pre_seconds,
                 review_post_seconds=args.review_post_seconds,
                 overlay_identities=False,
+                rim_detail_inset=args.rim_detail_inset,
             ).selected_frame_numbers,
         )
+        semantic_reviewer: OfficialEventReviewer = primary_semantic_reviewer
+        if args.semantic_fallback_image_width is not None:
+            semantic_reviewer = CacheAwareFallbackOfficialEventReviewer(
+                primary_reviewer=primary_semantic_reviewer,
+                fallback_reviewer=OllamaOfficialEventReviewer(
+                    model=args.semantic_fallback_model or args.model,
+                    host=args.host,
+                    timeout=args.timeout,
+                    image_width=args.semantic_fallback_image_width,
+                    max_frames=args.frames,
+                    context_length=args.semantic_fallback_context_length,
+                    seed=args.seed,
+                    keep_alive=(
+                        args.semantic_fallback_keep_alive
+                        if args.semantic_fallback_keep_alive is not None
+                        else args.ollama_semantic_keep_alive
+                    ),
+                    cache_path=cache_path.with_name(
+                        f"{cache_path.stem}.semantic-fallback{cache_path.suffix}"
+                    ),
+                    contact_sheet=args.contact_sheet,
+                    review_mode="event_semantics",
+                    rim_detail_inset=args.rim_detail_inset,
+                    frame_bounds_resolver=lambda event: _review_frame_bounds(
+                        event,
+                        source_fps=actor_provider.source_fps,
+                        pre_seconds=args.review_pre_seconds,
+                        post_seconds=args.review_post_seconds,
+                    ),
+                    frame_positions_resolver=VideoEventFrameProvider(
+                        args.video,
+                        sample_fps=args.sample_fps,
+                        review_pre_seconds=args.review_pre_seconds,
+                        review_post_seconds=args.review_post_seconds,
+                        overlay_identities=False,
+                        rim_detail_inset=args.rim_detail_inset,
+                    ).selected_frame_numbers,
+                ),
+            )
+
+        def actor_bounds_resolver(event: GameEventResponse) -> tuple[int, int]:
+            return _review_frame_bounds(
+                event,
+                source_fps=actor_provider.source_fps,
+                pre_seconds=args.actor_pre_seconds,
+                post_seconds=args.actor_post_seconds,
+                prefer_release_frame=True,
+            )
+        primary_actor_reviewer = OllamaOfficialEventReviewer(
+            model=args.model,
+            host=args.host,
+            timeout=args.timeout,
+            image_width=args.image_width,
+            max_frames=args.frames,
+            context_length=args.context_length,
+            seed=args.seed,
+            keep_alive=args.ollama_keep_alive,
+            cache_path=cache_path.with_name(f"{cache_path.stem}.actor{cache_path.suffix}"),
+            contact_sheet=args.contact_sheet,
+            review_mode="actor_identity",
+            frame_bounds_resolver=actor_bounds_resolver,
+            frame_positions_resolver=actor_provider.selected_frame_numbers,
+        )
+        actor_reviewer: OfficialEventReviewer = primary_actor_reviewer
+        if args.actor_fallback_image_width is not None:
+            actor_reviewer = CacheAwareFallbackOfficialEventReviewer(
+                primary_reviewer=primary_actor_reviewer,
+                fallback_reviewer=OllamaOfficialEventReviewer(
+                    model=args.actor_fallback_model or args.model,
+                    host=args.host,
+                    timeout=args.timeout,
+                    image_width=args.actor_fallback_image_width,
+                    max_frames=args.frames,
+                    context_length=args.actor_fallback_context_length,
+                    seed=args.seed,
+                    keep_alive=(
+                        args.actor_fallback_keep_alive
+                        if args.actor_fallback_keep_alive is not None
+                        else args.ollama_keep_alive
+                    ),
+                    cache_path=cache_path.with_name(
+                        f"{cache_path.stem}.actor-fallback{cache_path.suffix}"
+                    ),
+                    contact_sheet=args.contact_sheet,
+                    review_mode="actor_identity",
+                    frame_bounds_resolver=actor_bounds_resolver,
+                    frame_positions_resolver=actor_provider.selected_frame_numbers,
+                ),
+            )
         reviewer: OfficialEventReviewer = TwoPassOfficialEventReviewer(
             semantic_reviewer=semantic_reviewer,
-            actor_reviewer=OllamaOfficialEventReviewer(
-                model=args.model,
-                host=args.host,
-                timeout=args.timeout,
-                image_width=args.image_width,
-                max_frames=args.frames,
-                context_length=args.context_length,
-                seed=args.seed,
-                cache_path=cache_path.with_name(f"{cache_path.stem}.actor{cache_path.suffix}"),
-                contact_sheet=args.contact_sheet,
-                review_mode="actor_identity",
-                frame_bounds_resolver=lambda event: _review_frame_bounds(
-                    event,
-                    source_fps=actor_provider.source_fps,
-                    pre_seconds=args.actor_pre_seconds,
-                    post_seconds=args.actor_post_seconds,
-                    prefer_release_frame=True,
-                ),
-                frame_positions_resolver=actor_provider.selected_frame_numbers,
-            ),
+            actor_reviewer=actor_reviewer,
             actor_frame_provider=actor_provider,
             action_owner_model=action_owner_model,
         )
     else:
+        semantic_provider = (
+            VideoEventFrameProvider(
+                args.video,
+                sample_fps=args.sample_fps,
+                review_pre_seconds=args.review_pre_seconds,
+                review_post_seconds=args.review_post_seconds,
+                overlay_identities=False,
+                rim_detail_inset=args.rim_detail_inset,
+            )
+            if args.semantic_only_vlm
+            else None
+        )
         reviewer = OllamaOfficialEventReviewer(
             model=args.model,
             host=args.host,
@@ -494,8 +775,26 @@ def main() -> int:
             max_frames=args.frames,
             context_length=args.context_length,
             seed=args.seed,
+            keep_alive=args.ollama_keep_alive,
             cache_path=cache_path,
             contact_sheet=args.contact_sheet,
+            review_mode="event_semantics" if args.semantic_only_vlm else "combined",
+            rim_detail_inset=args.rim_detail_inset and args.semantic_only_vlm,
+            frame_bounds_resolver=(
+                lambda event: _review_frame_bounds(
+                    event,
+                    source_fps=semantic_provider.source_fps,
+                    pre_seconds=args.review_pre_seconds,
+                    post_seconds=args.review_post_seconds,
+                )
+            )
+            if semantic_provider is not None
+            else None,
+            frame_positions_resolver=(
+                semantic_provider.selected_frame_numbers
+                if semantic_provider is not None
+                else None
+            ),
         )
     result = run_autonomous_inference(
         candidate_bundle=source,
@@ -505,7 +804,8 @@ def main() -> int:
         sample_fps=args.sample_fps,
         review_pre_seconds=args.review_pre_seconds,
         review_post_seconds=args.review_post_seconds,
-        overlay_identities=not args.two_pass_vlm,
+        overlay_identities=not (args.two_pass_vlm or args.semantic_only_vlm),
+        rim_detail_inset=args.rim_detail_inset and (args.two_pass_vlm or args.semantic_only_vlm),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")

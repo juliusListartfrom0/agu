@@ -39,6 +39,7 @@ class OfficialVLMResult:
     reason: str
     labels: Mapping[str, Any]
     available: bool = True
+    observables: Mapping[str, bool | None] | None = None
 
 
 class OfficialEventReviewer(Protocol):
@@ -73,6 +74,8 @@ class OllamaOfficialEventReviewer:
         review_mode: str = "combined",
         frame_bounds_resolver: FrameBoundsResolver | None = None,
         frame_positions_resolver: FramePositionsResolver | None = None,
+        rim_detail_inset: bool = False,
+        keep_alive: int | str | None = None,
     ) -> None:
         self.model = model
         self.host = host.rstrip("/")
@@ -88,9 +91,15 @@ class OllamaOfficialEventReviewer:
         self.review_mode = review_mode
         self.frame_bounds_resolver = frame_bounds_resolver
         self.frame_positions_resolver = frame_positions_resolver
+        self.rim_detail_inset = rim_detail_inset
+        self.keep_alive = keep_alive
         self._cache = _load_result_cache(cache_path)
 
-    def review(self, event: GameEventResponse, frames: Sequence[np.ndarray]) -> OfficialVLMResult:
+    def _prepare_review(
+        self,
+        event: GameEventResponse,
+        frames: Sequence[np.ndarray],
+    ) -> tuple[list[np.ndarray], list[str], str, str]:
         selected = _evenly_select_frames(frames, self.max_frames)
         if self.contact_sheet:
             sheet = build_temporal_contact_sheet(
@@ -102,35 +111,82 @@ class OllamaOfficialEventReviewer:
         else:
             image_frames = list(selected)
         images = encode_frames_jpeg(image_frames, max_width=self.image_width)
+        prompt = _official_event_prompt(
+            event,
+            review_mode=self.review_mode,
+            rim_detail_inset=self.rim_detail_inset,
+        )
+        cache_key = (
+            f"{self.model}:input=prompt-bound-v18:mode={self.review_mode}:"
+            f"sheet={self.contact_sheet}:width={self.image_width}:"
+            f"frames={self.max_frames}:ctx={self.context_length}:seed={self.seed}:think=off:"
+            f"rim_inset={self.rim_detail_inset}:"
+            f"prompt={_text_sha256(prompt)}:images={_encoded_images_sha256(images)}"
+        )
+        return list(selected), images, prompt, cache_key
+
+    def _cached_result(
+        self,
+        event: GameEventResponse,
+        cache_key: str,
+    ) -> OfficialVLMResult | None:
+        cached = self._cache.get(cache_key)
+        if not isinstance(cached, dict):
+            return None
+        present = cached.get("event_present")
+        cached_labels = dict(cached.get("labels") or {})
+        cached_observables = dict(cached.get("observables") or {})
+        if self.review_mode == "event_semantics":
+            present = _gate_semantic_event_presence(
+                event, present, cached_observables
+            )
+        parsed_cached = {
+            **cached_labels,
+            **cached_observables,
+            "reason": str(cached.get("reason") or ""),
+        }
+        if present is True:
+            _recover_single_player_alias_from_reason(event, parsed_cached)
+        labels = _validated_vlm_labels(
+            event,
+            parsed_cached,
+            require_visual_outcome_evidence=self.review_mode != "actor_identity",
+        )
+        if self.review_mode == "actor_identity":
+            labels.update(_validated_actor_role(parsed_cached))
+        return OfficialVLMResult(
+            event_present=present,
+            confidence=float(cached.get("confidence") or 0.0),
+            reason=str(cached.get("reason") or ""),
+            labels=labels,
+            available=bool(cached.get("available", True)),
+            observables=cached_observables,
+        )
+
+    def cached_review(
+        self,
+        event: GameEventResponse,
+        frames: Sequence[np.ndarray],
+    ) -> OfficialVLMResult | None:
+        """Return an exact input-bound cache hit without invoking the backend."""
+
+        _, images, _, cache_key = self._prepare_review(event, frames)
+        if not images:
+            return None
+        return self._cached_result(event, cache_key)
+
+    def review(self, event: GameEventResponse, frames: Sequence[np.ndarray]) -> OfficialVLMResult:
+        selected, images, prompt, cache_key = self._prepare_review(event, frames)
         if not images:
             return OfficialVLMResult(None, 0.0, "no event frames available", {}, available=False)
-        cache_key = (
-            f"{self.model}:input=readable-player-alias-v12-role-gated:mode={self.review_mode}:"
-            f"sheet={self.contact_sheet}:width={self.image_width}:"
-            f"frames={self.max_frames}:ctx={self.context_length}:seed={self.seed}:"
-            f"event={_event_sha256(event)}:images={_encoded_images_sha256(images)}"
-        )
-        cached = self._cache.get(cache_key)
-        if isinstance(cached, dict):
-            present = cached.get("event_present")
-            cached_labels = dict(cached.get("labels") or {})
-            parsed_cached = {**cached_labels, "reason": str(cached.get("reason") or "")}
-            if present is True:
-                _recover_single_player_alias_from_reason(event, parsed_cached)
-            labels = _validated_vlm_labels(event, parsed_cached)
-            if self.review_mode == "actor_identity":
-                labels.update(_validated_actor_role(parsed_cached))
-            return OfficialVLMResult(
-                event_present=present,
-                confidence=float(cached.get("confidence") or 0.0),
-                reason=str(cached.get("reason") or ""),
-                labels=labels,
-                available=bool(cached.get("available", True)),
-            )
+        cached_result = self._cached_result(event, cache_key)
+        if cached_result is not None:
+            return cached_result
         payload = {
             "model": self.model,
             "stream": False,
-            "prompt": _official_event_prompt(event, review_mode=self.review_mode),
+            "think": False,
+            "prompt": prompt,
             "images": images,
             "format": "json",
             "options": {
@@ -140,6 +196,8 @@ class OllamaOfficialEventReviewer:
                 "seed": self.seed,
             },
         }
+        if self.keep_alive is not None:
+            payload["keep_alive"] = self.keep_alive
         request = urllib.request.Request(
             f"{self.host}/api/generate",
             data=json.dumps(payload).encode("utf-8"),
@@ -161,11 +219,12 @@ class OllamaOfficialEventReviewer:
             if self.frame_positions_resolver is not None
             else []
         )
-        frame_start, frame_end = (
+        resolved_frame_bounds = (
             self.frame_bounds_resolver(event)
             if self.frame_bounds_resolver is not None
-            else (event.start_frame, event.end_frame)
+            else None
         )
+        frame_start, frame_end = resolved_frame_bounds or (event.start_frame, event.end_frame)
         for source_key, target_key in (
             ("release_frame_index", "release_frame"),
             ("outcome_frame_index", "outcome_frame"),
@@ -177,17 +236,65 @@ class OllamaOfficialEventReviewer:
             )
             if mapped is not None:
                 parsed_with_frames[target_key] = mapped
-        labels = _validated_vlm_labels(event, parsed_with_frames)
+        labels = _validated_vlm_labels(
+            event,
+            parsed_with_frames,
+            require_visual_outcome_evidence=self.review_mode != "actor_identity",
+        )
         if self.review_mode == "actor_identity":
             labels.update(_validated_actor_role(parsed_with_frames))
+        observables = {
+            field: parse_optional_bool(parsed.get(field))
+            for field in (
+                "shot_release_visible",
+                "controlled_ball_before_release",
+                "ball_separated_from_hands",
+                "ball_progresses_toward_rim_after_release",
+                "free_throw_attempt",
+                "tipoff_or_jump_ball",
+                "dead_ball_or_inbound",
+                "ball_above_rim_before",
+                "ball_inside_rim_cylinder",
+                "ball_below_rim_after",
+                "ball_contacts_rim_and_exits",
+                "ball_misses_rim",
+                "miss_followed_by_rebound",
+                "three_point_line_visible",
+                "shooter_feet_visible",
+                "release_beyond_arc",
+                "live_game_action",
+                "replay_or_highlight",
+                "studio_or_break",
+            )
+        }
+        if self.review_mode != "actor_identity":
+            observables["broadcast_gate_required"] = True
+        if self.review_mode == "event_semantics":
+            present = _gate_semantic_event_presence(event, present, observables)
         result = OfficialVLMResult(
             event_present=present,
             confidence=clamp_float(parsed.get("confidence"), 0.0, 1.0, 0.0),
             reason=str(parsed.get("reason") or ""),
             labels=labels,
+            observables=observables,
         )
         self._cache_result(cache_key, result)
         return result
+
+    def release(self) -> None:
+        """Ask Ollama to unload this reviewer model without running inference."""
+
+        request = urllib.request.Request(
+            f"{self.host}/api/generate",
+            data=json.dumps({"model": self.model, "keep_alive": 0}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout):
+                pass
+        except (urllib.error.URLError, TimeoutError):
+            return
 
     def _cache_result(self, key: str, result: OfficialVLMResult) -> None:
         if self.cache_path is None:
@@ -198,11 +305,52 @@ class OllamaOfficialEventReviewer:
             "reason": result.reason,
             "labels": dict(result.labels),
             "available": result.available,
+            "observables": dict(result.observables or {}),
         }
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.cache_path.with_suffix(self.cache_path.suffix + ".tmp")
         temporary.write_text(json.dumps(self._cache, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.cache_path)
+
+
+class CacheAwareFallbackOfficialEventReviewer:
+    """Use an exact primary cache hit, otherwise dispatch to a safer reviewer."""
+
+    def __init__(
+        self,
+        *,
+        primary_reviewer: OfficialEventReviewer,
+        fallback_reviewer: OfficialEventReviewer,
+    ) -> None:
+        cached_review = getattr(primary_reviewer, "cached_review", None)
+        if not callable(cached_review):
+            raise TypeError("primary reviewer must expose cached_review")
+        self.primary_reviewer = primary_reviewer
+        self.fallback_reviewer = fallback_reviewer
+        self.name = f"{fallback_reviewer.name}_cache_aware_fallback"
+        self.model = primary_reviewer.model
+        self.fallback_model = fallback_reviewer.model
+        self.image_width = getattr(primary_reviewer, "image_width", 0)
+        self.max_frames = getattr(primary_reviewer, "max_frames", 0)
+        self.context_length = getattr(primary_reviewer, "context_length", 0)
+        self.contact_sheet = getattr(primary_reviewer, "contact_sheet", False)
+        self.review_mode = getattr(primary_reviewer, "review_mode", "actor_identity")
+        self.fallback_dispatch_count = 0
+
+    def review(
+        self,
+        event: GameEventResponse,
+        frames: Sequence[np.ndarray],
+    ) -> OfficialVLMResult:
+        cached_result = self.primary_reviewer.cached_review(event, frames)  # type: ignore[attr-defined]
+        if cached_result is not None:
+            return cached_result
+        self.fallback_dispatch_count += 1
+        return self.fallback_reviewer.review(event, frames)
+
+    def release(self) -> None:
+        _release_reviewer(self.primary_reviewer)
+        _release_reviewer(self.fallback_reviewer)
 
 
 class TwoPassOfficialEventReviewer:
@@ -230,6 +378,10 @@ class TwoPassOfficialEventReviewer:
     def review(self, event: GameEventResponse, frames: Sequence[np.ndarray]) -> OfficialVLMResult:
         semantic = self.semantic_reviewer.review(event, frames)
         if semantic.event_present is not True or not semantic.available:
+            _release_reviewer(self.semantic_reviewer)
+            return semantic
+        if _broadcast_non_live(semantic):
+            _release_reviewer(self.semantic_reviewer)
             return semantic
         actor_event = event.model_copy(update=dict(semantic.labels))
         actor_event = _constrain_rebound_actor_candidates(actor_event)
@@ -256,7 +408,14 @@ class TwoPassOfficialEventReviewer:
             reason=f"semantic: {semantic.reason}; actor: {actor.reason}{role_reason}",
             labels=labels,
             available=semantic.available and actor.available,
+            observables=semantic.observables,
         )
+
+
+def _release_reviewer(reviewer: OfficialEventReviewer) -> None:
+    release = getattr(reviewer, "release", None)
+    if callable(release):
+        release()
 
 
 def apply_action_owner_prior(
@@ -304,7 +463,7 @@ def apply_action_owner_prior(
 
 
 def _recover_single_player_alias_from_reason(event: GameEventResponse, parsed: dict[str, Any]) -> None:
-    """Recover a schema field when the VLM names one overlaid alias in its reason."""
+    """Recover a schema field when the VLM clearly names one overlaid actor."""
 
     aliases = candidate_player_aliases(event)
     allowed_aliases = set(aliases.values())
@@ -312,13 +471,18 @@ def _recover_single_player_alias_from_reason(event: GameEventResponse, parsed: d
     primary_alias = str(parsed.get("primary_player_alias") or "").strip().upper()
     if primary_id in aliases or primary_alias in allowed_aliases:
         return
-    mentioned = {
+    mentions = [
         token.upper()
         for token in re.findall(r"(?<![A-Za-z0-9])P\d{2}(?![A-Za-z0-9])", str(parsed.get("reason") or ""), re.I)
         if token.upper() in allowed_aliases
-    }
+    ]
+    mentioned = set(mentions)
     if len(mentioned) == 1:
         parsed["primary_player_alias"] = next(iter(mentioned))
+        return
+    repeated = {alias for alias in mentioned if mentions.count(alias) >= 2}
+    if len(repeated) == 1 and all(mentions.count(alias) == 1 for alias in mentioned - repeated):
+        parsed["primary_player_alias"] = next(iter(repeated))
 
 
 def adjudicate_official_candidates(
@@ -365,7 +529,10 @@ def _event_with_related_context(event: GameEventResponse, ledger: EventLedger) -
         parent = ledger.latest(event.related_event_ids[0])
     except KeyError:
         return event
-    if parent.event_type != "field_goal_attempt" or parent.outcome != "missed":
+    if (
+        parent.event_type not in {"field_goal_attempt", "free_throw_attempt"}
+        or parent.outcome != "missed"
+    ):
         return event
     parent_observations = [
         dict(item)
@@ -524,7 +691,21 @@ def _decision_from_vlm_result(
     validation_event: GameEventResponse | None = None,
     related_events: Mapping[str, GameEventResponse] | None = None,
 ) -> ReviewDecisionResponse:
-    labels = _validated_vlm_labels(validation_event or event, result.labels)
+    validation_payload = {
+        **dict(result.labels),
+        **dict(result.observables or {}),
+    }
+    labels = _validated_vlm_labels(validation_event or event, validation_payload)
+    reclassified_event_type = _semantic_event_reclassification(
+        event,
+        result=result,
+        minimum_confidence=minimum_confidence,
+    )
+    if reclassified_event_type == "free_throw_attempt":
+        labels.update(
+            event_type="free_throw_attempt",
+            shot_value=1,
+        )
     labels.update(_causal_secondary_labels(event, related_events or {}))
     proposed = GameEventResponse.model_validate(event.model_copy(update=labels).model_dump())
     complete = _complete_for_automatic_confirmation(proposed)
@@ -532,16 +713,55 @@ def _decision_from_vlm_result(
     if causal_action == "reject":
         action = "reject"
         labels = {}
+    elif reclassified_event_type is not None:
+        action = "revise" if complete else "needs_review"
+    elif result.event_present is False and result.available and result.confidence >= minimum_confidence:
+        # A grounded semantic absence is independent of whether the causal
+        # parent has finished adjudication.  Keeping a visually disproved
+        # assist/block/steal merely because its parent is unresolved inflates
+        # the pending ledger with a known false candidate.
+        action = "reject"
+        labels = {}
+    elif _broadcast_non_live(result) and result.available and result.confidence >= minimum_confidence:
+        action = "reject"
+        labels = {}
+    elif _broadcast_gate_unresolved(result):
+        action = "needs_review"
     elif causal_action == "needs_review":
         action = "needs_review"
-        labels = {}
-    elif result.event_present is False and result.available and result.confidence >= minimum_confidence:
-        action = "reject"
+        if not (
+            result.event_present is True
+            and result.available
+            and result.confidence >= minimum_confidence
+        ):
+            labels = {}
     elif result.event_present is True and result.confidence >= minimum_confidence and complete:
         action = "revise" if labels else "confirm"
     else:
         action = "needs_review"
-        labels = {}
+        if not (
+            result.event_present is True
+            and result.available
+            and result.confidence >= minimum_confidence
+        ):
+            labels = {}
+    broadcast_reason = "AGU broadcast gate: candidate is replay, highlight, studio, or game break"
+    unresolved_broadcast_reason = "AGU broadcast gate: live game action is not proven"
+    reclassification_reason = (
+        "AGU semantic category gate: live field-goal candidate reclassified as free_throw_attempt"
+    )
+    decision_reason = (
+        broadcast_reason
+        if action == "reject" and _broadcast_non_live(result)
+        else unresolved_broadcast_reason
+        if action == "needs_review" and _broadcast_gate_unresolved(result)
+        else reclassification_reason
+        if reclassified_event_type is not None
+        else
+        causal_reason
+        if causal_action == "reject" or (causal_action == "needs_review" and action == "needs_review")
+        else result.reason
+    )
     return ReviewDecisionResponse(
         decision_id=f"agu-vlm-{event.event_id}-{event.revision + 1}",
         event_id=event.event_id,
@@ -552,8 +772,51 @@ def _decision_from_vlm_result(
         input_sha256=_event_sha256(event),
         labels=labels,
         confidence=result.confidence,
-        reason=causal_reason or result.reason or "AGU official-event VLM decision",
+        reason=decision_reason or "AGU official-event VLM decision",
     )
+
+
+def _semantic_event_reclassification(
+    event: GameEventResponse,
+    *,
+    result: OfficialVLMResult,
+    minimum_confidence: float,
+) -> str | None:
+    """Preserve an explicit live-event subtype instead of discarding it."""
+
+    observables = result.observables or {}
+    normalized_reason = result.reason.casefold().replace("-", " ")
+    free_throw_explanation = any(
+        phrase in normalized_reason
+        for phrase in ("free throw", "foul line", "lane slot")
+    )
+    if (
+        event.event_type == "field_goal_attempt"
+        and result.available
+        and result.confidence >= minimum_confidence
+        and observables.get("free_throw_attempt") is True
+        and free_throw_explanation
+        and observables.get("tipoff_or_jump_ball") is not True
+        and observables.get("dead_ball_or_inbound") is not True
+        and observables.get("live_game_action") is True
+        and not _broadcast_non_live(result)
+    ):
+        return "free_throw_attempt"
+    return None
+
+
+def _broadcast_non_live(result: OfficialVLMResult) -> bool:
+    observables = result.observables or {}
+    return (
+        observables.get("live_game_action") is False
+        or observables.get("replay_or_highlight") is True
+        or observables.get("studio_or_break") is True
+    )
+
+
+def _broadcast_gate_unresolved(result: OfficialVLMResult) -> bool:
+    observables = result.observables or {}
+    return observables.get("broadcast_gate_required") is True and observables.get("live_game_action") is not True
 
 
 def _causal_event_action(
@@ -663,7 +926,12 @@ def _causal_secondary_labels(
     return {"secondary_player_id": next(iter(player_ids))}
 
 
-def _validated_vlm_labels(event: GameEventResponse, parsed: Mapping[str, Any]) -> dict[str, Any]:
+def _validated_vlm_labels(
+    event: GameEventResponse,
+    parsed: Mapping[str, Any],
+    *,
+    require_visual_outcome_evidence: bool = False,
+) -> dict[str, Any]:
     labels: dict[str, Any] = {}
     allowed_candidates = _candidate_ids(event)
     aliases = candidate_player_aliases(event)
@@ -691,7 +959,11 @@ def _validated_vlm_labels(event: GameEventResponse, parsed: Mapping[str, Any]) -
         else:
             outcome = str(parsed.get("outcome") or "").lower()
             if outcome in {"made", "missed", "unknown"}:
-                labels["outcome"] = outcome
+                labels["outcome"] = (
+                    _quality_gated_visual_outcome(outcome, parsed)
+                    if require_visual_outcome_evidence
+                    else outcome
+                )
         try:
             shot_value = int(parsed.get("shot_value"))
         except (TypeError, ValueError):
@@ -724,6 +996,32 @@ def _validated_vlm_labels(event: GameEventResponse, parsed: Mapping[str, Any]) -
     if isinstance(related, str) and related in set(event.related_event_ids):
         labels["related_event_ids"] = [related]
     return labels
+
+
+def _quality_gated_visual_outcome(outcome: str, parsed: Mapping[str, Any]) -> str:
+    """Fail closed when a VLM asserts an outcome without observable trajectory evidence."""
+
+    made_evidence = all(
+        parse_optional_bool(parsed.get(field)) is True
+        for field in (
+            "ball_above_rim_before",
+            "ball_inside_rim_cylinder",
+            "ball_below_rim_after",
+        )
+    )
+    missed_evidence = any(
+        parse_optional_bool(parsed.get(field)) is True
+        for field in (
+            "ball_contacts_rim_and_exits",
+            "ball_misses_rim",
+            "miss_followed_by_rebound",
+        )
+    )
+    if made_evidence and not missed_evidence:
+        return "made"
+    if missed_evidence and not made_evidence:
+        return "missed"
+    return "unknown"
 
 
 def _validated_actor_role(parsed: Mapping[str, Any]) -> dict[str, str]:
@@ -777,7 +1075,12 @@ def candidate_player_aliases(event: GameEventResponse) -> dict[str, str]:
     }
 
 
-def _official_event_prompt(event: GameEventResponse, *, review_mode: str = "combined") -> str:
+def _official_event_prompt(
+    event: GameEventResponse,
+    *,
+    review_mode: str = "combined",
+    rim_detail_inset: bool = False,
+) -> str:
     candidates = _candidate_ids(event)
     aliases = candidate_player_aliases(event)
     player_teams = _candidate_player_teams(event)
@@ -814,16 +1117,55 @@ def _official_event_prompt(event: GameEventResponse, *, review_mode: str = "comb
                 + "A rebound is present only when a player is first to gain stable control of the loose ball "
                 "after the miss; a tip without control is not enough. Return one flat JSON object only with "
                 "event_present, confidence, reason, rebound_type (offensive/defensive/team/unknown), and "
-                "related_event_id. Do not return player or team identifiers."
+                "related_event_id, live_game_action, replay_or_highlight, and studio_or_break. "
+                "Set live_game_action=true only for the current continuous live possession; reject replays, "
+                "highlight packages, halftime footage, studio segments, commercials, and game breaks. "
+                "Do not return player or team identifiers."
             )
+        rim_guidance = (
+            " Each frame includes a yellow-bordered magnified rim detail from that same raw frame; "
+            "use it to inspect the ball/rim relationship while preserving chronological order."
+            if rim_detail_inset
+            else ""
+        )
         return (
             "You are AGU's basketball event verification model. Review the chronological clean raw-video "
-            f"frames for candidate event={event.event_type}. Return one flat JSON object only with "
+            f"frames for candidate event={event.event_type}.{rim_guidance} Return one flat JSON object only with "
             "event_present, confidence, reason, outcome (made/missed/unknown), shot_value (1/2/3/null), "
             "rebound_type (offensive/defensive/team/unknown), related_event_id, three_point_line_visible, "
             "shooter_feet_visible, release_beyond_arc, release_frame_index and outcome_frame_index. "
-            "Do not return player or team identifiers. For a field goal, made requires visible "
-            "ball-through-rim/net evidence. A three requires visible feet, line and beyond-arc geometry; "
+            "Also return live_game_action, replay_or_highlight, and studio_or_break. Set live_game_action=true "
+            "only for the current continuous live possession; replay packages, halftime footage, studio "
+            "segments, commercials, and game breaks are not official game events. "
+            "Do not return player or team identifiers. Also return shot_release_visible, free_throw_attempt, "
+            "tipoff_or_jump_ball, and dead_ball_or_inbound as independent booleans/null. For a field-goal "
+            "candidate, recognize a free throw from observable broadcast geometry: a stationary shooter at "
+            "the foul line, players occupying fixed lane slots, a stopped game clock, or a 24-second shot "
+            "clock. Set free_throw_attempt=true even when the release and rim result are visible. Recognize "
+            "a replay when a dead-ball/bench view cuts into an apparent play, the game clock remains frozen "
+            "through the action, or slow-motion and an unusual rim camera repeat an earlier play; then set "
+            "replay_or_highlight=true and live_game_action=false. Shot motion alone never proves live play. "
+            "For a field-goal "
+            "candidate, event_present=true requires a visible live-play release toward the basket. Prove the "
+            "release as three independent chronological observations and return controlled_ball_before_release, "
+            "ball_separated_from_hands, and ball_progresses_toward_rim_after_release as booleans/null: (1) the "
+            "same player visibly controls the ball, (2) the ball visibly separates from that player's hands, "
+            "and (3) after separation the ball visibly moves closer to the basket/rim. All three must be true; "
+            "a ball merely held overhead, a pass, an inbound, or a later ball position without visible separation "
+            "is not release evidence. A free throw, "
+            "opening/period jump ball, inbound, loose-ball tip with no controlled release, dead-ball practice "
+            "shot, or replay is not a field-goal attempt and must return event_present=false. For a field goal, "
+            "made requires visible "
+            "ball-through-rim/net evidence. Also return independent booleans ball_above_rim_before, "
+            "ball_inside_rim_cylinder, ball_below_rim_after, ball_contacts_rim_and_exits, "
+            "ball_misses_rim, and miss_followed_by_rebound. Set a boolean true only when that exact "
+            "state is visible in the displayed frames; broadcast cuts, player reactions, or an assumed "
+            "trajectory are not evidence. ball_contacts_rim_and_exits means the ball visibly deflects away "
+            "without entering and passing downward through the rim cylinder; it must be false when both "
+            "ball_inside_rim_cylinder and ball_below_rim_after are true. The made-sequence booleans and miss "
+            "booleans must not contradict each other; use null for an uncertain state. If the required "
+            "outcome sequence is incomplete, outcome must "
+            "be unknown. A three requires visible feet, line and beyond-arc geometry; "
             "otherwise return 2 only when release is visibly inside the arc, or null. Use null for any "
             "unproven field. Frame indexes are 1-based positions in the displayed chronological frames."
         )
@@ -844,8 +1186,43 @@ def _official_event_prompt(event: GameEventResponse, *, review_mode: str = "comb
         "must be visible at release; otherwise use 2 only when release is visibly inside the arc, or null. Also return "
         "three_point_line_visible, shooter_feet_visible, and release_beyond_arc as booleans/null. "
         "Also return release_frame_index and outcome_frame_index as 1-based displayed frame indexes for shots. "
-        "Use empty strings/null when any label is unproven."
+        "Also return live_game_action, replay_or_highlight, and studio_or_break; only the current continuous "
+        "live possession may set live_game_action=true. Use empty strings/null when any label is unproven."
     )
+
+
+def _gate_semantic_event_presence(
+    event: GameEventResponse,
+    present: bool | None,
+    observables: Mapping[str, bool | None],
+) -> bool | None:
+    """Fail closed on explicit non-field-goal scenes before adjudication."""
+
+    if event.event_type != "field_goal_attempt" or present is not True:
+        return present
+    if any(
+        observables.get(field) is True
+        for field in (
+            "free_throw_attempt",
+            "tipoff_or_jump_ball",
+            "dead_ball_or_inbound",
+        )
+    ):
+        return False
+    if observables.get("shot_release_visible") is False:
+        return False
+    if observables.get("shot_release_visible") is not True:
+        return None
+    release_chain = (
+        "controlled_ball_before_release",
+        "ball_separated_from_hands",
+        "ball_progresses_toward_rim_after_release",
+    )
+    if any(observables.get(field) is False for field in release_chain):
+        return False
+    if not all(observables.get(field) is True for field in release_chain):
+        return None
+    return True
 
 
 def _evenly_select_frames(frames: Sequence[np.ndarray], maximum: int) -> list[np.ndarray]:
@@ -862,6 +1239,10 @@ def _event_sha256(event: GameEventResponse) -> str:
         event.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _encoded_images_sha256(images: Sequence[str]) -> str:

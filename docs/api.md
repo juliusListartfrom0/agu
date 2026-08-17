@@ -240,7 +240,7 @@ Important request fields:
 | `yolo_reid_enabled` | boolean or null | Enables generated BoT-SORT ReID config when supported |
 | `yolo_reid_model` | string or null | ReID model value for BoT-SORT, for example `auto` or a classifier model path |
 | `identity_embedding_backend` | string or null | Optional identity embedding backend: `torchvision_mobilenet_v3_small`, `torchreid_osnet_x0_25`, or `sidecar_hsv_hist` |
-| `identity_embedding_weights` | string or null | Optional identity embedding weights: `default`, `imagenet1k_v1`, or `none` |
+| `identity_embedding_weights` | string or null | Optional identity embedding weights: `default`, `imagenet1k_v1`, `none`, or a hash-bound AGU MobileNetV3 ReID checkpoint path |
 | `identity_embedding_device` | string or null | Optional identity embedding device: `auto`, `cpu`, `cuda`, `mps`, or `mps_if_available` |
 | `jersey_number_vlm_enabled` | boolean or null | Enables optional VLM jersey-number reading from sampled player crops |
 | `jersey_number_vlm_frames` | integer or null | Number of player crops sent to VLM for jersey-number reading |
@@ -265,6 +265,13 @@ gallery person anchors a canonical ID, different gallery people form a hard
 no-merge constraint, and unmatched tracks retain traditional ReID plus an
 anonymous ID. Gallery enrollment must be benchmark-disjoint and cannot come
 from the same acceptance game's reference highlights or statistics.
+
+The offline official-event VLM also applies a live-broadcast gate. Automatic
+confirmation requires the current continuous live possession. A semantic result
+marked as replay/highlight, halftime/studio, commercial, or game break is rejected
+even when the action and enrolled face are visible; conflicting `live_game_action`
+and replay flags fail closed as non-live. This gate affects the experimental
+raw-only scripts and does not change the compatibility API response schema.
 
 SFace output is quality-gated per local track: at least two face samples must form a majority cluster with internal cosine similarity of at least `0.50`. Unstable detections from track-ID switches, back-facing heads, or background people are omitted instead of being averaged into identity evidence. The resulting quality is exposed as `player_identity_features[].face_embedding_quality`.
 
@@ -431,6 +438,30 @@ includes the training-manifest hash, annotation producer, and benchmark-overlap
 gate so Codex training annotation cannot be confused with runtime review.
 The default is empty; leave-one-video-out training performance alone is not an
 integration gate, and an independently sealed raw-video evaluation is required.
+
+Optional raw-commentary evidence uses `BASKETBALL_OFFICIAL_AUDIO_ASR_ENABLED`,
+`BASKETBALL_OFFICIAL_AUDIO_ASR_MODEL`, and `BASKETBALL_OFFICIAL_AUDIO_ASR_LANGUAGE`.
+The CLI adapter accepts a hash-sealed `agu.audio-roster.v1` registration asset and
+a raw-video/model/roster-bound transcript cache. Speech action and player-name
+mentions remain `needs_review` evidence: they never populate `primary_player_id`
+or enter official aggregation without independent face-roster, visual, and causal
+confirmation. `mlx-whisper` is an optional local dependency rather than a base
+service requirement. `scripts.build_audio_roster` deterministically converts a
+registration manifest only when `benchmark_answers_included` is false.
+`scripts.run_official_audio_evidence --candidate-action ACTION` is repeatable and
+limits speech-only candidates that do not overlap a same-action visual candidate;
+it does not suppress speech evidence attached to an existing candidate. Each
+speech mention is assigned to only the best same-action overlap, ranked by
+temporal overlap, midpoint distance, window length, confidence, and stable event
+ID; this prevents one commentary phrase from attaching to every duplicate
+candidate in a broad time window. Common live shot-result inflections are retained
+as `speech_shot_outcome_candidate` evidence, but never change event `outcome`,
+`status`, or `primary_player_id`. Supported actions include assist, block,
+field-goal attempt, foul, free-throw attempt, rebound, steal, and turnover.
+`scripts.seal_audio_action_review` can hash-bind a complete offline review for
+development evaluation, but requires
+`runtime_consumable=false` and `codex_runtime_answer_used=false`; such a review is
+not accepted as an AGU runtime answer.
 
 Autonomous fusion is fail-closed: a traditional made/missed trajectory cannot
 be overwritten by the semantic reviewer, a confirmed make rejects a dependent

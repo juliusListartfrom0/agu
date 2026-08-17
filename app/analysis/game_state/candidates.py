@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
+from app.analysis.perception.ball_tracking import GlobalBallPathSelector
 from app.analysis.schemas import (
     BallTrackPointResponse,
     BoundingBoxResponse,
@@ -24,6 +25,7 @@ class ShotCandidateConfig:
     min_rim_confidence: float = 0.15
     max_rim_frame_gap: int = 12
     max_normalized_distance: float = 4.0
+    max_ball_rim_iou: float = 0.80
     cluster_gap_frames: int = 90
     maximum_cluster_span_frames: int | None = None
     pre_roll_frames: int = 45
@@ -73,6 +75,8 @@ def propose_shot_and_rebound_candidates(
     source_video_id: str,
     config: ShotCandidateConfig | None = None,
     event_id_prefix: str = "vision",
+    ball_path_selector: GlobalBallPathSelector | None = None,
+    ball_path_reset_frames: Iterable[int] = (),
 ) -> list[GameEventResponse]:
     """Propose review candidates from temporally aligned ball/rim evidence.
 
@@ -87,6 +91,15 @@ def propose_shot_and_rebound_candidates(
         for item in items
         if item.object_type == "basketball" and item.confidence >= settings.min_ball_confidence
     ]
+    if ball_path_selector is not None:
+        balls = [
+            detection
+            for path in ball_path_selector.select_detection_paths(
+                balls,
+                reset_frames=ball_path_reset_frames,
+            )
+            for detection in path
+        ]
     rims = [
         item for item in items if item.object_type == "rim" and item.confidence >= settings.min_rim_confidence
     ]
@@ -105,7 +118,10 @@ def propose_shot_and_rebound_candidates(
         candidate_rims = rims_by_frame[nearest_frame]
         scored = [(_normalized_ball_rim_distance(ball, rim), rim) for rim in candidate_rims]
         distance, rim = min(scored, key=lambda pair: pair[0])
-        if distance > settings.max_normalized_distance:
+        if (
+            distance > settings.max_normalized_distance
+            or _bbox_iou(ball, rim) > settings.max_ball_rim_iou
+        ):
             continue
         approach = _backward_ball_approach(ball, balls, settings=settings)
         approach_rise_px = max(
@@ -140,8 +156,18 @@ def propose_shot_and_rebound_candidates(
     for index, cluster in enumerate(clusters, start=1):
         first_frame = min(hit.frame for hit in cluster)
         last_frame = max(hit.frame for hit in cluster)
+        cluster_frames = sorted(hit.frame for hit in cluster)
+        review_anchor_frame = cluster_frames[len(cluster_frames) // 2]
         shot_id = f"{event_id_prefix}-shot-{index:05d}"
-        trajectory = _assess_cluster_trajectory(cluster, detections_by_id)
+        trajectory = _assess_cluster_trajectory(
+            cluster,
+            detections_by_id,
+            ball_detections=balls,
+            maximum_frame_gap=settings.max_rim_frame_gap,
+            maximum_speed_px_per_frame=settings.maximum_ball_speed_px_per_frame,
+            lookback_frames=settings.approach_lookback_frames,
+            lookahead_frames=settings.rebound_window_frames,
+        )
         # Actor evidence must precede the shot result. When trajectory outcome
         # is unresolved, stop at the first rim-proximity hit instead of
         # admitting post-shot rebounders as shooter candidates.
@@ -179,8 +205,19 @@ def propose_shot_and_rebound_candidates(
                 "hit_count": len(cluster),
                 "frames": [hit.frame for hit in cluster],
                 "candidate_event_frame": first_frame,
+                "review_anchor_frame": review_anchor_frame,
                 "ball_detection_ids": [hit.ball_detection_id for hit in cluster],
                 "rim_detection_ids": [hit.rim_detection_id for hit in cluster],
+                "review_rim_observations": [
+                    {
+                        "frame": hit.frame,
+                        "ball_bbox": detections_by_id[hit.ball_detection_id].bbox.model_dump(),
+                        "rim_bbox": detections_by_id[hit.rim_detection_id].bbox.model_dump(),
+                    }
+                    for hit in cluster
+                    if hit.ball_detection_id in detections_by_id
+                    and hit.rim_detection_id in detections_by_id
+                ],
                 "minimum_normalized_distance": min(hit.normalized_distance for hit in cluster),
                 "maximum_approach_point_count": max(hit.approach_point_count for hit in cluster),
                 "maximum_approach_rise_px": max(hit.approach_rise_px for hit in cluster),
@@ -190,6 +227,11 @@ def propose_shot_and_rebound_candidates(
                 "trajectory_outcome": trajectory.outcome,
                 "trajectory_confidence": trajectory.confidence,
                 "trajectory_evidence": list(trajectory.evidence),
+                **(
+                    {"ball_path_backend": "agu_ball_global_path_v1"}
+                    if ball_path_selector is not None
+                    else {}
+                ),
             },
         )
         confidence = min(0.85, 0.25 + max(hit.confidence for hit in cluster) + min(0.2, len(cluster) * 0.03))
@@ -309,6 +351,12 @@ def _backward_ball_approach(
 def _assess_cluster_trajectory(
     cluster: Sequence[RimProximityHit],
     detections_by_id: Mapping[str, PerceptionDetectionResponse],
+    *,
+    ball_detections: Sequence[PerceptionDetectionResponse] = (),
+    maximum_frame_gap: int = 12,
+    maximum_speed_px_per_frame: float = 80.0,
+    lookback_frames: int = 90,
+    lookahead_frames: int = 90,
 ) -> ShotAssessment:
     best_by_frame: dict[int, RimProximityHit] = {}
     for hit in cluster:
@@ -318,15 +366,14 @@ def _assess_cluster_trajectory(
             -current.confidence,
         ):
             best_by_frame[hit.frame] = hit
-    points: list[BallTrackPointResponse] = []
+    points_by_frame: dict[int, BallTrackPointResponse] = {}
     rim_boxes: list[BoundingBoxResponse] = []
     for hit in sorted(best_by_frame.values(), key=lambda item: item.frame):
         ball = detections_by_id.get(hit.ball_detection_id)
         rim = detections_by_id.get(hit.rim_detection_id)
         if ball is None or rim is None:
             continue
-        points.append(
-            BallTrackPointResponse(
+        points_by_frame[hit.frame] = BallTrackPointResponse(
                 frame=hit.frame,
                 center=Point2DResponse(
                     x=(ball.bbox.x1 + ball.bbox.x2) / 2.0,
@@ -334,7 +381,6 @@ def _assess_cluster_trajectory(
                 ),
                 confidence=ball.confidence,
             )
-        )
         rim_boxes.append(rim.bbox)
     if not rim_boxes:
         return ShotAssessment("unknown", 0.0, None, ("missing_rim_geometry",))
@@ -344,7 +390,79 @@ def _assess_cluster_trajectory(
         x2=float(sorted(box.x2 for box in rim_boxes)[len(rim_boxes) // 2]),
         y2=float(sorted(box.y2 for box in rim_boxes)[len(rim_boxes) // 2]),
     )
-    return assess_shot_trajectory(points, rim_box, rim_margin_px=max(4.0, (rim_box.y2 - rim_box.y1) * 0.15))
+    anchor_hit = min(cluster, key=lambda item: (item.normalized_distance, -item.confidence, item.frame))
+    anchor_ball = detections_by_id.get(anchor_hit.ball_detection_id)
+    if anchor_ball is not None:
+        linked = _linked_ball_trajectory(
+            anchor_ball,
+            ball_detections,
+            start_frame=max(0, min(item.frame for item in cluster) - lookback_frames),
+            end_frame=max(item.frame for item in cluster) + lookahead_frames,
+            maximum_frame_gap=maximum_frame_gap,
+            maximum_speed_px_per_frame=maximum_speed_px_per_frame,
+        )
+        for ball in linked:
+            points_by_frame[ball.frame] = BallTrackPointResponse(
+                frame=ball.frame,
+                center=Point2DResponse(**_bbox_center(ball)),
+                confidence=ball.confidence,
+            )
+    return assess_shot_trajectory(
+        list(points_by_frame.values()),
+        rim_box,
+        rim_margin_px=max(4.0, (rim_box.y2 - rim_box.y1) * 0.15),
+    )
+
+
+def _linked_ball_trajectory(
+    anchor: PerceptionDetectionResponse,
+    balls: Sequence[PerceptionDetectionResponse],
+    *,
+    start_frame: int,
+    end_frame: int,
+    maximum_frame_gap: int,
+    maximum_speed_px_per_frame: float,
+) -> list[PerceptionDetectionResponse]:
+    """Link a short raw-detection trajectory on both sides of a rim hit."""
+
+    eligible = [item for item in balls if start_frame <= item.frame <= end_frame]
+
+    def extend(current: PerceptionDetectionResponse, *, forward: bool) -> list[PerceptionDetectionResponse]:
+        output: list[PerceptionDetectionResponse] = []
+        frames = sorted(
+            {item.frame for item in eligible if (item.frame > current.frame if forward else item.frame < current.frame)},
+            reverse=not forward,
+        )
+        for frame in frames:
+            gap = abs(frame - current.frame)
+            if gap > maximum_frame_gap:
+                break
+            current_center = _bbox_center(current)
+            candidates = [item for item in eligible if item.frame == frame]
+            candidate = min(
+                candidates,
+                key=lambda item: (
+                    math.hypot(
+                        _bbox_center(item)["x"] - current_center["x"],
+                        _bbox_center(item)["y"] - current_center["y"],
+                    ),
+                    -item.confidence,
+                    item.detection_id,
+                ),
+            )
+            distance = math.hypot(
+                _bbox_center(candidate)["x"] - current_center["x"],
+                _bbox_center(candidate)["y"] - current_center["y"],
+            )
+            if distance > maximum_speed_px_per_frame * gap:
+                continue
+            output.append(candidate)
+            current = candidate
+        return output
+
+    before = extend(anchor, forward=False)
+    after = extend(anchor, forward=True)
+    return [*reversed(before), anchor, *after]
 
 
 def _nearby_player_candidates(

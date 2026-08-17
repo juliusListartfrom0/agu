@@ -558,7 +558,7 @@ class AnalysisRequest(BaseModel):
     yolo_reid_enabled: Optional[bool] = Field(default=None, description="If True, generate a BoT-SORT tracker config with ReID enabled.")
     yolo_reid_model: Optional[str] = Field(default=None, description="ReID model for BoT-SORT, for example auto or a classifier model path.")
     identity_embedding_backend: Optional[str] = Field(default=None, description="Optional identity embedding backend: torchvision_mobilenet_v3_small or sidecar_hsv_hist.")
-    identity_embedding_weights: Optional[str] = Field(default=None, description="Optional identity embedding weights: default, imagenet1k_v1, or none.")
+    identity_embedding_weights: Optional[str] = Field(default=None, description="Optional identity embedding weights: default, imagenet1k_v1, none, or an AGU ReID checkpoint path.")
     identity_embedding_device: Optional[str] = Field(default=None, description="Optional identity embedding device: auto, cpu, cuda, mps, or mps_if_available.")
     jersey_number_vlm_enabled: Optional[bool] = Field(default=None, description="If True, ask the configured VLM to read jersey numbers from sampled player crops.")
     jersey_number_vlm_frames: Optional[int] = Field(default=None, description="Number of sampled player crops to send for jersey number VLM recognition.")

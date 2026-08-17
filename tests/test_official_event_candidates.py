@@ -11,6 +11,7 @@ from app.analysis.game_state import (
     propose_legacy_analysis_candidates,
     propose_shot_and_rebound_candidates,
 )
+from app.analysis.perception import GlobalBallPathSelector
 from app.analysis.schemas import (
     BoundingBoxResponse,
     GameEventResponse,
@@ -20,6 +21,7 @@ from app.analysis.schemas import (
     PerceptionDetectionResponse,
     Point2DResponse,
 )
+from app.analysis.shot_validity import seal_shot_validity_model
 from scripts.build_official_event_candidates import (
     _face_gallery_anchored_player_ids,
     _load_detection,
@@ -63,6 +65,8 @@ def test_ball_rim_hits_cluster_into_linked_review_candidates() -> None:
     assert events[1].related_event_ids == [events[0].event_id]
     assert events[0].status == "needs_review"
     assert events[0].evidence[0].details["candidate_event_frame"] == 100
+    assert events[0].evidence[0].details["review_anchor_frame"] == 110
+    assert len(events[0].evidence[0].details["review_rim_observations"]) == 2
     assert events[1].evidence[0].details["candidate_event_frame"] == 155
 
 
@@ -125,6 +129,28 @@ def test_ball_approach_gate_rejects_stationary_near_rim_false_positive() -> None
     )
 
 
+def test_ball_rim_gate_rejects_nearly_identical_class_confusion_boxes() -> None:
+    detections = [
+        _detection("rim", 100, "rim", (90, 90, 130, 110)),
+        _detection("ball-1", 90, "basketball", (100, 140, 110, 150)),
+        _detection("ball-2", 95, "basketball", (95, 115, 120, 130)),
+        _detection("ball-3", 100, "basketball", (90, 90, 130, 110)),
+    ]
+
+    assert (
+        propose_shot_and_rebound_candidates(
+            detections,
+            source_video_id="video_001",
+            config=ShotCandidateConfig(
+                max_rim_frame_gap=6,
+                minimum_approach_points=3,
+                minimum_approach_rise_px=10,
+            ),
+        )
+        == []
+    )
+
+
 def test_ball_approach_gate_keeps_continuous_rising_trajectory() -> None:
     detections = [
         _detection("rim", 100, "rim", (90, 90, 130, 105)),
@@ -146,6 +172,69 @@ def test_ball_approach_gate_keeps_continuous_rising_trajectory() -> None:
     assert [event.event_type for event in events] == ["field_goal_attempt", "rebound"]
     assert events[0].evidence[0].details["maximum_approach_point_count"] == 3
     assert events[0].evidence[0].details["maximum_approach_rise_px"] == 62.0
+
+
+def test_shot_candidates_can_opt_into_global_ball_path_selector() -> None:
+    detections = [_detection("rim", 100, "rim", (90, 90, 130, 105))]
+    for frame, true_y, false_x in (
+        (90, 150, 1000),
+        (95, 115, 3000),
+        (100, 88, 900),
+    ):
+        detections.extend(
+            [
+                _detection(
+                    f"true-{frame}",
+                    frame,
+                    "basketball",
+                    (108, true_y, 118, true_y + 10),
+                ).model_copy(update={"confidence": 0.4}),
+                _detection(
+                    f"false-{frame}",
+                    frame,
+                    "basketball",
+                    (false_x, 90, false_x + 10, 100),
+                ),
+            ]
+        )
+
+    events = propose_shot_and_rebound_candidates(
+        detections,
+        source_video_id="video_001",
+        config=ShotCandidateConfig(
+            max_rim_frame_gap=6,
+            minimum_approach_points=3,
+            minimum_approach_rise_px=50,
+        ),
+        ball_path_selector=GlobalBallPathSelector(),
+    )
+
+    assert [event.event_type for event in events] == ["field_goal_attempt", "rebound"]
+    evidence = events[0].evidence[0].details
+    assert evidence["ball_path_backend"] == "agu_ball_global_path_v1"
+    assert evidence["ball_detection_ids"] == ["true-100"]
+
+
+def test_shot_outcome_uses_linked_post_rim_ball_trajectory() -> None:
+    detections = [
+        _detection("rim", 100, "rim", (90, 90, 130, 105)),
+        _detection("ball-before", 95, "basketball", (106, 70, 116, 80)),
+        _detection("ball-hit", 100, "basketball", (106, 84, 116, 94)),
+        _detection("ball-after", 105, "basketball", (106, 103, 116, 113)),
+    ]
+
+    events = propose_shot_and_rebound_candidates(
+        detections,
+        source_video_id="video_001",
+        config=ShotCandidateConfig(
+            max_rim_frame_gap=6,
+            suppress_rebound_after_vision_make=True,
+        ),
+    )
+
+    assert len(events) == 1
+    assert events[0].outcome == "made"
+    assert events[0].outcome_frame == 105
 
 
 def test_additional_tracker_ids_are_namespaced_by_perception_artifact() -> None:
@@ -479,6 +568,9 @@ def test_player_perception_role_excludes_its_ball_and_rim_detections(tmp_path: P
                 "detections": [
                     _detection("ball-100", 100, "basketball", (100, 60, 110, 70)).model_dump(mode="json"),
                     _detection("rim-100", 100, "rim", (90, 90, 130, 105)).model_dump(mode="json"),
+                    _detection("duplicate-player", 100, "player", (90, 45, 120, 175))
+                    .model_copy(update={"player_id": "colliding-player", "team_id": "raw-light"})
+                    .model_dump(mode="json"),
                 ],
             }
         ),
@@ -515,6 +607,73 @@ def test_player_perception_role_excludes_its_ball_and_rim_detections(tmp_path: P
 
     assert [event.event_type for event in bundle.events] == ["field_goal_attempt", "rebound"]
     assert bundle.events[0].primary_player_id == "perception-1:canonical-player"
+    candidate_ids = bundle.events[0].evidence[0].details["candidate_player_ids"]
+    assert candidate_ids == ["perception-1:canonical-player"]
+
+
+def test_optional_shot_validity_model_filters_shot_and_rebound(tmp_path: Path) -> None:
+    video = tmp_path / "game.mov"
+    video.write_bytes(b"raw-video")
+    perception = tmp_path / "perception.json"
+    perception.write_text(
+        json.dumps(
+            {
+                "schema_version": "agu.official-perception.v1",
+                "raw_video": {
+                    "filename": video.name,
+                    "sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+                    "source_fps": 30.0,
+                    "frame_count": 600,
+                },
+                "sampling": {"stride_frames": 1, "end_frame": 600},
+                "detector": {"model_sha256": "fixture"},
+                "detections": [
+                    _detection("ball", 100, "basketball", (100, 60, 110, 70)).model_dump(
+                        mode="json"
+                    ),
+                    _detection("rim", 100, "rim", (90, 90, 130, 105)).model_dump(
+                        mode="json"
+                    ),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    model_path = tmp_path / "shot-validity.json"
+    model_path.write_text(
+        json.dumps(
+            seal_shot_validity_model(
+                {
+                    "training_manifest_sha256": "fixture-manifest",
+                    "threshold": 0.8,
+                    "trees": [
+                        {
+                            "children_left": [-1],
+                            "children_right": [-1],
+                            "feature": [-2],
+                            "threshold": [-2.0],
+                            "positive_probability": [0.1],
+                        }
+                    ],
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = build_candidates(
+        perception_path=perception,
+        video_path=video,
+        game_id="game",
+        max_normalized_distance=4.0,
+        cluster_gap_sec=3.0,
+        shot_validity_model_path=model_path,
+    )
+
+    assert bundle.events == []
+    assert bundle.model_provenance["vision_shot_count_before_gate"] == "1"
+    assert bundle.model_provenance["vision_shot_count_after_gate"] == "0"
+    assert bundle.model_provenance["shot_validity_model_sha256"]
 
 
 def test_face_gallery_enforcement_accepts_only_enrolled_canonical_identity() -> None:
