@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+from app.analysis.shot_broadcast_fusion import screen_shot_broadcast_fusion
+from app.analysis.shot_broadcast_state import (
+    FEATURE_NAMES,
+    seal_broadcast_state_evidence_artifact,
+)
+from app.analysis.shot_validity_scene_state import (
+    SCENE_BACKBONE,
+    SCENE_EMBEDDING_DIMENSION,
+    seal_scene_embedding_artifact,
+)
+
+
+def test_broadcast_fusion_keeps_outer_game_held_and_variants_fixed() -> None:
+    scene_examples = []
+    evidence_examples = []
+    clock_hashes = []
+    for game_index in range(4):
+        game = f"{game_index + 1:064x}"
+        bundle = f"{game_index + 101:064x}"
+        clock_hashes.append(f"{game_index + 201:064x}")
+        for example_index in range(4):
+            event_id = f"event-{game_index}-{example_index}"
+            positive = example_index % 2 == 1
+            scene_examples.append(
+                {
+                    "source_video_sha256": game,
+                    "candidate_bundle_sha256": bundle,
+                    "event_id": event_id,
+                    "event_present": positive,
+                    "phase_embeddings": [
+                        [float(example_index)] * SCENE_EMBEDDING_DIMENSION,
+                        [float(example_index + game_index)] * SCENE_EMBEDDING_DIMENSION,
+                        [float(example_index + 1)] * SCENE_EMBEDDING_DIMENSION,
+                    ],
+                }
+            )
+            features = [0.0] * len(FEATURE_NAMES)
+            features[FEATURE_NAMES.index("clock_elapsed_seconds")] = (
+                12.0 if positive else 0.0
+            )
+            features[FEATURE_NAMES.index("frozen_clock_flag")] = (
+                0.0 if positive else 1.0
+            )
+            evidence_examples.append(
+                {
+                    "source_video_sha256": game,
+                    "candidate_bundle_sha256": bundle,
+                    "event_id": event_id,
+                    "features": features,
+                }
+            )
+    scene = seal_scene_embedding_artifact(
+        {
+            "purpose": "test",
+            "producer": "test",
+            "training_manifest_sha256": "a" * 64,
+            "training_annotation_sha256": ["b" * 64],
+            "source_video_sha256": [f"{index + 1:064x}" for index in range(4)],
+            "backbone": SCENE_BACKBONE,
+            "backbone_sha256": "c" * 64,
+            "backbone_license": "BSD-3-Clause",
+            "backbone_weights_url": "https://example.invalid/model",
+            "embedding_dimension": SCENE_EMBEDDING_DIMENSION,
+            "phase_fractions": [0.15, 0.5, 0.85],
+            "examples": scene_examples,
+        }
+    )
+    broadcast = seal_broadcast_state_evidence_artifact(
+        {
+            "source_scene_artifact_sha256": scene["artifact_sha256"],
+            "source_clock_artifact_sha256s": clock_hashes,
+            "examples": evidence_examples,
+        }
+    )
+
+    result = screen_shot_broadcast_fusion(
+        scene_artifact=scene,
+        video_artifacts=[],
+        broadcast_state_artifact=broadcast,
+        pca_components=2,
+        regularization_c=0.01,
+    )
+
+    assert result["selection_protocol"] == "outer_game_held_broadcast_state_oof"
+    assert {row["name"] for row in result["variants"]} == {
+        "base",
+        "base+broadcast_raw",
+    }
+    assert len(result["fold_provenance"]) == 4
+    for fold in result["fold_provenance"]:
+        assert fold["held_game_sha256"] not in fold["training_game_sha256s"]
+        assert len(fold["training_game_sha256s"]) == 3
