@@ -6,13 +6,27 @@ AGU is a Python basketball video analysis project. The FastAPI service lives in 
 
 ## Build, Test, and Development Commands
 
-Create or activate a virtual environment before running commands:
+AGU has exactly one canonical local virtual environment: `.venv`, running
+Python 3.11. All AGU service, inference, training, test, maintenance, dependency
+installation, and model-conversion commands must use `.venv/bin/python` (or run
+after `source .venv/bin/activate`). Do not create or use a sibling `venv/`
+directory, a Python 3.12 environment, or the system Python for AGU work.
+
+Create the canonical environment when it does not exist:
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
+
+The repository harness fails when a legacy `venv/` directory or maintained
+documentation command remains. Optional MLX/VLM dependencies must be installed
+into the same `.venv`; a second AGU environment is not permitted. IDE
+interpreters, launch configurations, automation, and all future local execution
+must also point to `.venv`. If a legacy `venv/` reappears, stop using it,
+migrate any still-needed packages into `.venv`, verify `.venv`, and delete the
+legacy directory before continuing AGU work.
 
 Run the API locally:
 

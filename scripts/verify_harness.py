@@ -11,11 +11,11 @@ from __future__ import annotations
 import argparse
 import ast
 import py_compile
+import re
 import shlex
 import subprocess
 import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -77,7 +77,6 @@ def run_command(command: list[str] | str) -> subprocess.CompletedProcess[str]:
 
 def python_with_pytest() -> str | None:
     candidates = [
-        ROOT / "venv/bin/python",
         ROOT / ".venv/bin/python",
         Path(sys.executable),
     ]
@@ -98,7 +97,6 @@ def python_with_pytest() -> str | None:
 
 def python_with_module(module: str) -> str:
     candidates = [
-        ROOT / "venv/bin/python",
         ROOT / ".venv/bin/python",
         Path(sys.executable),
     ]
@@ -130,6 +128,32 @@ def check_required_files(result: CheckResult) -> None:
     for path in REQUIRED_FILES:
         if not path.exists():
             result.fail(f"Missing required file: {path.relative_to(ROOT)}")
+
+
+def check_canonical_virtualenv(result: CheckResult) -> None:
+    canonical_python = ROOT / ".venv/bin/python"
+    if not canonical_python.is_file():
+        result.fail("Canonical AGU virtual environment is missing: .venv/bin/python")
+    if (ROOT / "venv").exists():
+        result.fail("Legacy AGU virtual environment must not exist: venv/")
+    legacy_pattern = re.compile(r"(?<!\.)\bvenv/(?:bin|Scripts)(?:/[\w.-]+)?")
+    maintained_suffixes = {".json", ".md", ".sh", ".toml", ".yaml", ".yml"}
+    excluded_parts = {
+        ".git",
+        ".venv",
+        "analysis_outputs",
+        "dataset",
+        "model_checkpoints",
+        "output_videos",
+    }
+    for path in sorted(ROOT.rglob("*")):
+        if not path.is_file() or path.suffix not in maintained_suffixes:
+            continue
+        relative = path.relative_to(ROOT)
+        if set(relative.parts) & excluded_parts:
+            continue
+        if legacy_pattern.search(path.read_text(encoding="utf-8")):
+            result.fail(f"Legacy virtual-environment command remains in {relative}")
 
 
 def check_markers(result: CheckResult) -> None:
@@ -256,6 +280,7 @@ def main() -> int:
     result = CheckResult()
 
     check_required_files(result)
+    check_canonical_virtualenv(result)
     check_markers(result)
     check_generated_not_staged(result)
     check_python_compiles(result)
