@@ -34,6 +34,20 @@ signature `adhoc`, required entitlement absent,
 `blocked_external_authorization`. This is a platform blocker, not a
 read-isolation attestation.
 
+## Local service curl hook
+
+- Started the canonical service with `.venv/bin/python -m uvicorn app.main:app
+  --host 127.0.0.1 --port 8765`.
+- `GET /health` returned `{"status":"ok"}` and `GET /ready` returned
+  `{"status":"ready"}`.
+- `POST /api/v1/analysis/run` with `examples/lebron_shoots.mp4`,
+  `vlm_mode=off`, `generate_video=false`, `segmented_analysis=false`, and
+  `max_frames=60` returned a `task_id` with `status=pending`; polling the
+  status endpoint reached `status=completed`, `progress=100`, `error=null`.
+- An intentionally missing video path returned HTTP 400 as documented. No
+  v2 extraction or TASK-0258 result artifact was produced by this service
+  smoke.
+
 ## Real artifact verification
 
 The terminal attempt record file SHA-256 is
