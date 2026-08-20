@@ -8,7 +8,7 @@
 // into `agu.task0258-module-a-worker-read-isolation-attestation.v1`.
 //
 // BUILD (unsigned; signing + entitlement are a separate platform step):
-//   clang -O2 -framework EndpointSecurity -framework CoreFoundation \
+//   clang -O2 -framework EndpointSecurity -framework CoreFoundation -lbsm \
 //         -o es_read_isolation_audit es_read_isolation_audit.c
 //
 // LOADING requires a binary signed with the
@@ -40,6 +40,7 @@ static int g_target_pid = -1;
 static FILE *g_out = NULL;
 static uint64_t g_row_count = 0;
 static uint64_t g_row_bytes = 0;
+static int g_overflow = 0;
 
 // Minimal safe event-name for the projection.
 static const char *event_name(es_event_type_t t) {
@@ -116,10 +117,14 @@ static void handler(es_client_t *client, const es_message_t *msg) {
                            name, pid);
     }
     if (written <= 0 || written >= (int)sizeof(row)) {
+        g_overflow = 1;
+        g_stop = 1;
         return;
     }
     if (g_row_count >= MAX_ROWS || g_row_bytes + (uint64_t)written > 16777216ULL) {
-        return; // bounded: drop beyond the frozen caps (fail-closed on the Python side)
+        g_overflow = 1;
+        g_stop = 1;
+        return;
     }
     fputs(row, g_out);
     g_row_count++;
@@ -192,7 +197,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "transcript finalize failed\n");
         return 1;
     }
-    fprintf(stderr, "rows=%llu bytes=%llu\n",
-            (unsigned long long)g_row_count, (unsigned long long)g_row_bytes);
-    return 0;
+    fprintf(stderr, "rows=%llu bytes=%llu overflow=%d\n",
+            (unsigned long long)g_row_count, (unsigned long long)g_row_bytes,
+            g_overflow);
+    return g_overflow ? 3 : 0;
 }

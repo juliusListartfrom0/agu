@@ -4,13 +4,13 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `170 passed`.
+- TASK-0258 focused suite: `171 passed`.
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the remediation slice: `2,038 passed, 5
+- Full repository pytest after the remediation slice: `2,039 passed, 5
   skipped, 15 warnings`.
 - The review-only capability/loader tests prove temporary-ancestor identity
   re-open, canonical artifact/file hashes, context separation, and wrong-context
@@ -27,6 +27,12 @@
 
 No model/video extraction or v2 rerun was performed, and no v2 terminal/result
 artifact is claimed.
+
+Endpoint Security capability probe: `compile_ok=true`, SDK header/stub present,
+signature `adhoc`, required entitlement absent,
+`external_user_approval_observed=false`, status
+`blocked_external_authorization`. This is a platform blocker, not a
+read-isolation attestation.
 
 ## Real artifact verification
 
