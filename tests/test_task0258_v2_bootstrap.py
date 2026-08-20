@@ -189,3 +189,12 @@ def test_runtime_snapshot_receipt_reopens_the_bound_canonical_contract(tmp_path)
     bad["file_sha256"] = "0" * 64
     with pytest.raises(ValueError):
         load_runtime_snapshot_contract(bad)
+
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    linked_receipt = dict(receipt)
+    linked_receipt["contract_absolute_path"] = str(linked_parent / contract_path.name)
+    with pytest.raises(ValueError):
+        load_runtime_snapshot_contract(linked_receipt)

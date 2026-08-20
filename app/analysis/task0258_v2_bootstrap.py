@@ -154,25 +154,35 @@ def expected_review_target_argv(check_name: object) -> list[str]:
     raise ValueError(f"review check name is not fixed: {check_name!r}")
 
 
-def _validate_no_follow_absolute_path(path: str) -> None:
-    """Reject non-canonical or symlinked path components before opening."""
+def _validate_absolute_path_syntax(path: str) -> None:
+    """Reject non-canonical absolute paths before descriptor-relative opening."""
     if not isinstance(path, str) or not path.startswith("/") or "\x00" in path:
         raise ValueError("runtime contract path is not absolute")
     if os.path.normpath(path) != path:
         raise ValueError("runtime contract path is not canonical")
-    current = "/"
-    for component in path.split("/")[1:]:
-        if not component:
-            raise ValueError("runtime contract path contains an empty component")
-        current = os.path.join(current, component)
-        try:
-            entry = os.lstat(current)
-        except OSError as exc:
-            raise ValueError("runtime contract path cannot be reopened") from exc
-        if stat.S_ISLNK(entry.st_mode):
-            raise ValueError("runtime contract path contains a symlink")
-        if current != path and not stat.S_ISDIR(entry.st_mode):
-            raise ValueError("runtime contract path ancestor is not a directory")
+
+
+def _open_no_follow_absolute_file(path: str) -> int:
+    """Open an absolute regular-file path through a descriptor-relative chain."""
+    _validate_absolute_path_syntax(path)
+    components = path.split("/")[1:]
+    if not components or any(not component for component in components):
+        raise ValueError("runtime contract path contains an empty component")
+    common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    directory_flags = common_flags | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    no_follow_flags = common_flags | getattr(os, "O_NOFOLLOW", 0)
+    parent_fd = os.open("/", directory_flags)
+    try:
+        for component in components[:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        result_fd = os.open(components[-1], no_follow_flags, dir_fd=parent_fd)
+    except OSError as exc:
+        raise ValueError("runtime contract path cannot be opened without following links") from exc
+    finally:
+        os.close(parent_fd)
+    return result_fd
 
 
 def load_runtime_snapshot_contract(receipt: Mapping[str, object]) -> Mapping[str, object]:
@@ -190,10 +200,11 @@ def load_runtime_snapshot_contract(receipt: Mapping[str, object]) -> Mapping[str
     contract_path = receipt["contract_absolute_path"]
     if not isinstance(contract_path, str):
         raise ValueError("runtime contract path is invalid")
-    _validate_no_follow_absolute_path(contract_path)
     try:
-        fd = os.open(contract_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError as exc:
+        fd = _open_no_follow_absolute_file(contract_path)
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, ValueError):
+            raise
         raise ValueError("runtime contract cannot be opened without following links") from exc
     try:
         file_stat = os.fstat(fd)
