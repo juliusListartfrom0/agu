@@ -14,6 +14,7 @@ from app.analysis.task0258_v2_bootstrap import (
     expected_review_target_argv,
     load_runtime_snapshot_contract,
     parse_bootstrap_flags,
+    validate_bootstrap_fd_bindings,
     validate_review_driver_request,
     validate_target_module,
 )
@@ -31,6 +32,34 @@ def test_parse_bootstrap_flags():
         parse_bootstrap_flags(["--task0258-review-request-fd", "202", "--task0258-source-fd", "202"])
     with pytest.raises(ValueError):
         parse_bootstrap_flags(["--task0258-review-request-fd", "201", "--task0258-source-fd", "203"])
+
+
+def test_validate_bootstrap_fd_bindings_rejects_aliases_and_non_regular_source(tmp_path):
+    request_path = tmp_path / "request"
+    source_path = tmp_path / "source"
+    request_path.write_bytes(b"{}")
+    source_path.write_bytes(b"source")
+    request_fd = os.open(request_path, os.O_RDONLY)
+    source_fd = os.open(source_path, os.O_RDONLY)
+    try:
+        validate_bootstrap_fd_bindings(request_fd, source_fd)
+        alias_fd = os.dup(source_fd)
+        try:
+            with pytest.raises(ValueError):
+                validate_bootstrap_fd_bindings(source_fd, alias_fd)
+        finally:
+            os.close(alias_fd)
+    finally:
+        os.close(request_fd)
+        os.close(source_fd)
+    directory_fd = os.open(tmp_path, os.O_RDONLY)
+    request_fd = os.open(request_path, os.O_RDONLY)
+    try:
+        with pytest.raises(ValueError):
+            validate_bootstrap_fd_bindings(request_fd, directory_fd)
+    finally:
+        os.close(request_fd)
+        os.close(directory_fd)
 
 
 def test_build_sys_path_from_entries():

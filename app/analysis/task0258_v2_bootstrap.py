@@ -154,6 +154,31 @@ def expected_review_target_argv(check_name: object) -> list[str]:
     raise ValueError(f"review check name is not fixed: {check_name!r}")
 
 
+def validate_bootstrap_fd_bindings(request_fd: int, source_fd: int) -> None:
+    """Validate the inherited request/source descriptors before any read."""
+    if (
+        not isinstance(request_fd, int)
+        or isinstance(request_fd, bool)
+        or not isinstance(source_fd, int)
+        or isinstance(source_fd, bool)
+        or request_fd <= 0
+        or source_fd <= 0
+        or request_fd == source_fd
+    ):
+        raise ValueError("bootstrap descriptor numbers are invalid")
+    try:
+        request_stat = os.fstat(request_fd)
+        source_stat = os.fstat(source_fd)
+    except OSError as exc:
+        raise ValueError("bootstrap descriptors are not open") from exc
+    if (request_stat.st_dev, request_stat.st_ino) == (source_stat.st_dev, source_stat.st_ino):
+        raise ValueError("bootstrap request/source descriptors alias the same inode")
+    if stat.S_ISDIR(request_stat.st_mode) or stat.S_ISCHR(request_stat.st_mode):
+        raise ValueError("bootstrap request descriptor has an invalid file kind")
+    if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_nlink != 1:
+        raise ValueError("bootstrap source descriptor is not a single-link regular file")
+
+
 def _validate_absolute_path_syntax(path: str) -> None:
     """Reject non-canonical absolute paths before descriptor-relative opening."""
     if not isinstance(path, str) or not path.startswith("/") or "\x00" in path:
@@ -411,6 +436,7 @@ def dispatch_module(
 __all__ = [
     "parse_bootstrap_flags",
     "expected_review_target_argv",
+    "validate_bootstrap_fd_bindings",
     "load_runtime_snapshot_contract",
     "build_sys_path_from_entries",
     "validate_target_module",

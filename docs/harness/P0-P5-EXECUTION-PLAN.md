@@ -36,8 +36,9 @@ model execution or readiness transition.
 - [ ] Complete the OS-enforced FD review sandbox and verify worker/process
       cleanup. The pure bootstrap now rejects arbitrary target argv, fixes the
       request/source map to FD `202/203`, and reopens the standalone runtime
-      contract through its receipt with no-follow/canonical checks; this is not
-      yet an OS/kernel attestation.
+      contract through its receipt with no-follow/canonical checks, and checks
+      inherited descriptor identity/type; this is not yet an OS/kernel
+      attestation.
 - [ ] Prove model-visible reads are logged and receipt-bound.
       The Python `fs_usage` parser and caller-supplied verified-row builder
       now fail closed; only an externally authenticated kernel provider may

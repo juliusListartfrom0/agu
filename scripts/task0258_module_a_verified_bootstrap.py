@@ -27,10 +27,15 @@ def main() -> int:
         dispatch_module,
         load_runtime_snapshot_contract,
         parse_bootstrap_flags,
+        validate_bootstrap_fd_bindings,
         validate_review_driver_request,
     )
 
-    request_fd, source_fd = parse_bootstrap_flags(sys.argv[1:])
+    try:
+        request_fd, source_fd = parse_bootstrap_flags(sys.argv[1:])
+        validate_bootstrap_fd_bindings(request_fd, source_fd)
+    except ValueError:
+        return 2
     if source_fd < 0:
         return 2
     request_stat = os.fstat(request_fd)
