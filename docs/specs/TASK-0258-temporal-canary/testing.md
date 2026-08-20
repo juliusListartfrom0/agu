@@ -14,7 +14,8 @@
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
-  canonical reopening of the standalone runtime contract.
+  canonical reopening of the standalone runtime contract through a
+  descriptor-relative directory-FD chain, including a symlink-ancestor case.
 - The review-only capability/loader tests prove temporary-ancestor identity
   re-open, canonical artifact/file hashes, context separation, and wrong-context
   rejection; they do not provide kernel-audit or production admission evidence.
