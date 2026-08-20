@@ -9,7 +9,7 @@ review Critical/Required 0/0, exact-SHA approval sealed 2026-08-17; see
 The schema/validation/grammar/persistence layer is partially implemented and
 being hardened after the independent fresh-context review failed with
 `Critical=7 / Required=5 / Optional=3` (see
-`fresh-context-review-2026-08-20.md`). The remediation slice now has 165
+`fresh-context-review-2026-08-20.md`). The remediation slice now has 170
 focused tests passing and keeps unauthorized v2 publication fail-closed; it is
 not a passing implementation-review seal.
 Implemented modules:
@@ -27,10 +27,14 @@ Implemented modules:
 - `app/analysis/task0258_v2_pipeline.py` — candidate/bundle/post-publication builders + sealers.
 - `app/analysis/task0258_v2_pipeline_cli.py` — full pipeline orchestration (registry→candidate→bundle→result).
 - `app/analysis/task0258_v2_worker_runner.py` — worker subprocess isolation runner.
+- `app/analysis/task0258_v2_capabilities.py` — review-only synthetic contexts,
+  no-follow canonical-byte loaders, and durable run-history loader; these
+  contexts cannot authorize production publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 165 TASK-0258 tests pass and the AGU Harness
-structural gate passes. Scoped Ruff/format checks are clean after the P0 and
+Current working-tree verification: 170 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The full repository suite reports 2,038 passed, 5
+skipped, and 15 warnings. Scoped Ruff/format checks are clean after the P0 and
 P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45
 rows (4x768) with computational projection
@@ -41,7 +45,9 @@ result and does not authorize execution.
 Remaining gates: close the fresh-context findings and repeat the independent
 review, then complete the kernel-audit read-isolation production path (macOS
 Endpoint Security / syscall audit), OS-enforced FD review sandbox driver,
-verified loaders, and exact authorization-bound production admission. The
+externally authenticated verified loaders, and exact authorization-bound
+production admission. The current review-only contexts/loaders are deliberately
+not an admission substitute. The
 worker subprocess layer now sanitizes its environment, starts a process group,
 and kills the group on timeout, but the full production proof boundary is not
 sealed. Module B and the v2 rerun remain unauthorized.

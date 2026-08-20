@@ -67,7 +67,12 @@ def test_review_driver_request_is_closed_and_target_bound():
         "check_name": "focused_pytest",
         "target_module": "pytest",
         "target_argv": ["-q", "tests/test_task0258_module_a_v2.py"],
-        "runtime_snapshot_receipt": {},
+        "runtime_snapshot_receipt": {
+            "contract_absolute_path": "/runtime/contract.json",
+            "artifact_sha256": "0" * 64,
+            "file_sha256": "0" * 64,
+            "postpublication_free_bytes": 1,
+        },
         "namespace_provider_manifest_receipt": None,
         "expected_runtime_read_receipts": None,
         "review_bootstrap_source_size_bytes": 1,

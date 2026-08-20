@@ -30,6 +30,7 @@ from app.analysis.task0258_module_a_v2 import (
     is_sha256,
     verify_artifact_file_receipt,
     verify_internal_artifact_hash,
+    verify_static_input_contract,
 )
 
 MARKER_SCHEMA = "agu.task0258-module-a-v2-run-history-marker.v1"
@@ -331,6 +332,13 @@ def replay_run_history_registry(registry_dir: Path, auth_sha256: str) -> list[Ma
     auth_receipt = claim["authorization_receipt"]
     if not isinstance(auth_receipt, Mapping) or auth_receipt["artifact_sha256"] != auth_sha256:
         raise ValueError("registry claim authorization is not bound to the registry name")
+    for payload in (completion,):
+        if payload["authorization_receipt"] != auth_receipt:
+            raise ValueError("registry completion authorization binding drifted")
+        for field in ("run_id", "nonce", "output_root_absolute_path"):
+            claim_field = "output_root_absolute_path" if field == "output_root_absolute_path" else field
+            if payload[field] != claim[claim_field]:
+                raise ValueError(f"registry completion {field} binding drifted")
     completion_receipt = _file_receipt(completion)
     previous_receipt = completion_receipt
     previous_event = None
@@ -339,6 +347,10 @@ def replay_run_history_registry(registry_dir: Path, auth_sha256: str) -> list[Ma
             raise ValueError("registry marker authorization binding drifted")
         if marker["run_identity_receipt"] != completion_receipt:
             raise ValueError("registry marker run identity binding drifted")
+        for field in ("run_id", "nonce", "output_root"):
+            claim_field = "output_root_absolute_path" if field == "output_root" else field
+            if marker[field] != claim[claim_field]:
+                raise ValueError(f"registry marker {field} binding drifted")
         if marker["prior_marker_receipt"] != previous_receipt:
             raise ValueError("registry marker prior-head receipt does not replay")
         event = marker["event"]
@@ -482,19 +494,27 @@ def verify_run_consumption_claim(payload: Mapping[str, object]) -> None:
     """Validate a `agu.task0258-module-a-v2-run-consumption-claim.v1` payload."""
     if not isinstance(payload, Mapping) or set(payload) != CLAIM_FIELDS:
         raise ValueError("claim field set is invalid")
+    verify_internal_artifact_hash(payload)
     if payload["schema_version"] != CLAIM_SCHEMA or payload["module_id"] != MODULE_ID:
         raise ValueError("claim identity is invalid")
     verify_artifact_file_receipt(payload["authorization_receipt"])
     if payload["state"] != "claimed":
         raise ValueError("claim state must be claimed")
-    if not is_sha256(payload["nonce"]) or not isinstance(payload["run_id"], str) or not payload["run_id"]:
+    if not is_sha256(payload["nonce"]) or not is_safe_slug(payload["run_id"]):
         raise ValueError("claim nonce/run_id is invalid")
+    if not isinstance(payload["output_root_absolute_path"], str) or not payload["output_root_absolute_path"].startswith(
+        "/"
+    ):
+        raise ValueError("claim output_root_absolute_path is invalid")
+    if not is_rfc3339(payload["created_at_utc"]):
+        raise ValueError("claim created_at_utc is invalid")
 
 
 def verify_run_admission(payload: Mapping[str, object]) -> None:
     """Validate a `agu.task0258-module-a-v2-run-admission.v1` payload."""
     if not isinstance(payload, Mapping) or set(payload) != ADMISSION_FIELDS:
         raise ValueError("admission field set is invalid")
+    verify_internal_artifact_hash(payload)
     if payload["schema_version"] != ADMISSION_SCHEMA or payload["module_id"] != MODULE_ID:
         raise ValueError("admission identity is invalid")
     verify_artifact_file_receipt(payload["authorization_receipt"])
@@ -503,14 +523,22 @@ def verify_run_admission(payload: Mapping[str, object]) -> None:
         raise ValueError("admission state/count is invalid")
     if payload["module_b_authorized"] is not False:
         raise ValueError("admission module_b_authorized must be False")
-    if not is_sha256(payload["nonce"]):
-        raise ValueError("admission nonce is invalid")
+    if not is_sha256(payload["nonce"]) or not is_safe_slug(payload["run_id"]):
+        raise ValueError("admission nonce/run_id is invalid")
+    if not isinstance(payload["output_root_absolute_path"], str) or not payload["output_root_absolute_path"].startswith(
+        "/"
+    ):
+        raise ValueError("admission output_root_absolute_path is invalid")
+    if not is_rfc3339(payload["created_at_utc"]):
+        raise ValueError("admission created_at_utc is invalid")
+    verify_static_input_contract(payload["static_input_contract"])
 
 
 def verify_run_consumption_completed(payload: Mapping[str, object]) -> None:
     """Validate a `agu.task0258-module-a-v2-run-consumption-completed.v1` payload."""
     if not isinstance(payload, Mapping) or set(payload) != COMPLETION_FIELDS:
         raise ValueError("completion field set is invalid")
+    verify_internal_artifact_hash(payload)
     if payload["schema_version"] != COMPLETION_SCHEMA or payload["module_id"] != MODULE_ID:
         raise ValueError("completion identity is invalid")
     verify_artifact_file_receipt(payload["authorization_receipt"])
@@ -518,8 +546,14 @@ def verify_run_consumption_completed(payload: Mapping[str, object]) -> None:
     verify_artifact_file_receipt(payload["admission_receipt"])
     if payload["consumption_count"] != 1 or payload["state"] != "completed":
         raise ValueError("completion count/state is invalid")
-    if not is_sha256(payload["nonce"]):
-        raise ValueError("completion nonce is invalid")
+    if not is_sha256(payload["nonce"]) or not is_safe_slug(payload["run_id"]):
+        raise ValueError("completion nonce/run_id is invalid")
+    if not isinstance(payload["output_root_absolute_path"], str) or not payload["output_root_absolute_path"].startswith(
+        "/"
+    ):
+        raise ValueError("completion output_root_absolute_path is invalid")
+    if not is_rfc3339(payload["created_at_utc"]):
+        raise ValueError("completion created_at_utc is invalid")
     root_identity = payload["root_identity"]
     if not isinstance(root_identity, Mapping) or set(root_identity) != {"device", "inode"}:
         raise ValueError("completion root_identity is invalid")

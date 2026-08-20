@@ -17,12 +17,16 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
-from app.analysis.task0258_module_a_v2 import compact_canonical_json
+from app.analysis.task0258_module_a_v2 import compact_canonical_json, is_safe_slug
 
 
 def fsync_dir(path: Path) -> None:
     """fsync a directory by its no-follow opened descriptor."""
-    fd = os.open(os.fspath(path), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    _verify_no_symlink_ancestors(path)
+    fd = os.open(
+        os.fspath(path),
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
     try:
         os.fsync(fd)
     finally:
@@ -32,6 +36,7 @@ def fsync_dir(path: Path) -> None:
 @contextmanager
 def exclusive_flock(path: Path):
     """Hold a no-follow exclusive flock on a file for the context duration."""
+    _verify_no_symlink_ancestors(path.parent)
     fd = os.open(os.fspath(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -183,6 +188,10 @@ def publish_generation_directory(staged: Path, final: Path, *, flock_path: Path)
     publishers so the absence check is not TOCTOU-raced within this process
     family. Fsyncs the parent afterwards.
     """
+    if not staged.is_dir() or staged.is_symlink():
+        raise ValueError("staged generation must be a real directory")
+    if not final.name or not is_safe_slug(final.name):
+        raise ValueError("final generation name must be a safe slug")
     _verify_no_symlink_ancestors(staged)
     _verify_no_symlink_ancestors(final.parent)
     final.parent.mkdir(parents=True, exist_ok=True)
@@ -242,6 +251,8 @@ def seal_generation_directory(
     generation directory under ``parent`` as ``final_name``. Returns the final
     path.
     """
+    if not is_safe_slug(final_name):
+        raise ValueError("generation final name must be a safe slug")
     if set(members) != set(expected_paths):
         raise ValueError(
             f"generation member coverage mismatch: "

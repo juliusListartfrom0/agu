@@ -4,14 +4,17 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `165 passed`.
+- TASK-0258 focused suite: `170 passed`.
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest remains deferred until the remediation slice is
-  implemented and reviewed; no v2 terminal/result artifact is claimed.
+- Full repository pytest after the remediation slice: `2,038 passed, 5
+  skipped, 15 warnings`.
+- The review-only capability/loader tests prove temporary-ancestor identity
+  re-open, canonical artifact/file hashes, context separation, and wrong-context
+  rejection; they do not provide kernel-audit or production admission evidence.
 
 - Module-A focused tests: `67 passed`.
 - Adjacent TASK-0257 export/probe/backbone/causal regression: `523 passed, 3 skipped`.
@@ -22,8 +25,8 @@
 - The three Module-A CLIs return successful `--help` output under canonical
   `.venv` Python 3.11.
 
-A repository-wide pytest claim is intentionally not made because the shared
-dirty worktree contains unrelated in-progress VLM RED tests.
+No model/video extraction or v2 rerun was performed, and no v2 terminal/result
+artifact is claimed.
 
 ## Real artifact verification
 

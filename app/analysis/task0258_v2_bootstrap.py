@@ -41,6 +41,9 @@ REVIEW_DRIVER_REQUEST_FIELDS = frozenset(
         "artifact_sha256",
     }
 )
+RUNTIME_SNAPSHOT_RECEIPT_FIELDS = frozenset(
+    {"contract_absolute_path", "artifact_sha256", "file_sha256", "postpublication_free_bytes"}
+)
 
 
 def parse_bootstrap_flags(argv: Sequence[str]) -> tuple[int, int]:
@@ -149,12 +152,33 @@ def validate_review_driver_request(request: Mapping[str, object]) -> None:
     if any(value in {"-c", "-m", "--exec", "--pdb"} for value in target_argv):
         raise ValueError("review driver target argv contains an executable escape")
     runtime = request["runtime_snapshot_receipt"]
-    if not isinstance(runtime, Mapping):
+    if not isinstance(runtime, Mapping) or set(runtime) != RUNTIME_SNAPSHOT_RECEIPT_FIELDS:
         raise ValueError("review driver runtime snapshot is invalid")
-    for field in ("namespace_provider_manifest_receipt", "expected_runtime_read_receipts"):
-        value = request[field]
-        if value is not None and not isinstance(value, (Mapping, list, tuple)):
-            raise ValueError(f"review driver {field} is invalid")
+    if (
+        not isinstance(runtime["contract_absolute_path"], str)
+        or not runtime["contract_absolute_path"].startswith("/")
+        or not is_sha256(runtime["artifact_sha256"])
+        or not is_sha256(runtime["file_sha256"])
+        or not isinstance(runtime["postpublication_free_bytes"], int)
+        or isinstance(runtime["postpublication_free_bytes"], bool)
+        or runtime["postpublication_free_bytes"] < 0
+    ):
+        raise ValueError("review driver runtime snapshot receipt is invalid")
+    namespace_receipt = request["namespace_provider_manifest_receipt"]
+    expected_reads = request["expected_runtime_read_receipts"]
+    if namespace_receipt is None:
+        if expected_reads is not None:
+            raise ValueError("runtime read receipts require a namespace manifest receipt")
+    else:
+        if not isinstance(namespace_receipt, Mapping) or set(namespace_receipt) != {
+            "artifact_sha256",
+            "file_sha256",
+        }:
+            raise ValueError("namespace provider manifest receipt is invalid")
+        if not is_sha256(namespace_receipt["artifact_sha256"]) or not is_sha256(namespace_receipt["file_sha256"]):
+            raise ValueError("namespace provider manifest receipt hashes are invalid")
+        if not isinstance(expected_reads, (list, tuple)):
+            raise ValueError("expected runtime read receipts must be an array")
     size = request["review_bootstrap_source_size_bytes"]
     if not isinstance(size, int) or isinstance(size, bool) or size < 1:
         raise ValueError("review bootstrap source size is invalid")

@@ -377,6 +377,7 @@ def test_verify_run_consumption_claim():
         "created_at_utc": "2026-08-17T00:00:00Z",
         "artifact_sha256": "0" * 64,
     }
+    _seal(p)
     verify_run_consumption_claim(p)
     p["state"] = "completed"
     with pytest.raises(ValueError):
@@ -403,6 +404,7 @@ def test_verify_run_admission():
         "created_at_utc": "2026-08-17T00:00:00Z",
         "artifact_sha256": "0" * 64,
     }
+    _seal(p)
     verify_run_admission(p)
     p["module_b_authorized"] = True
     with pytest.raises(ValueError):
@@ -432,6 +434,7 @@ def test_verify_run_consumption_completed():
         "created_at_utc": "2026-08-17T00:00:00Z",
         "artifact_sha256": "0" * 64,
     }
+    _seal(p)
     verify_run_consumption_completed(p)
     p["root_identity"] = {"device": 1}
     with pytest.raises(ValueError):
@@ -486,8 +489,33 @@ def test_completion_rejects_bad_nonce():
         "created_at_utc": "2026-08-17T00:00:00Z",
         "artifact_sha256": "0" * 64,
     }
+    _seal(p)
     with pytest.raises(ValueError):
         verify_run_consumption_completed(p)
+
+
+def test_run_history_ledgers_reject_self_hash_and_identity_drift():
+    claim = {
+        "schema_version": CLAIM_SCHEMA,
+        "module_id": MODULE_ID,
+        "authorization_receipt": _receipt(),
+        "run_id": "run-1",
+        "output_root_absolute_path": "/x",
+        "nonce": "0" * 64,
+        "state": "claimed",
+        "created_at_utc": "2026-08-17T00:00:00Z",
+        "artifact_sha256": "0" * 64,
+    }
+    _seal(claim)
+    verify_run_consumption_claim(claim)
+    forged = dict(claim)
+    forged["run_id"] = "other"
+    with pytest.raises(ValueError):
+        verify_run_consumption_claim(forged)
+    forged = dict(claim)
+    forged["artifact_sha256"] = "f" * 64
+    with pytest.raises(ValueError):
+        verify_run_consumption_claim(forged)
 
 
 def test_verify_worker_launch_claim():

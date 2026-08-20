@@ -324,6 +324,60 @@ _TRUST_SPINE_RECEIPT_KINDS = {
     "static_inputs": "static_inputs",
 }
 
+_STORED_ARTIFACT_RECEIPT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "internal_sha256_field",
+        "internal_sha256",
+        "file_sha256",
+        "filename",
+        "size_bytes",
+    }
+)
+_PRIOR_ATTEMPT_RECEIPT_FIELDS = frozenset(
+    {"attempt_ordinal", "attempt_record_receipt", "resource_log_receipt", "resume_receipt"}
+)
+
+
+def _verify_file_receipt(value: object) -> None:
+    if not isinstance(value, Mapping) or set(value) != {"file_sha256", "filename", "size_bytes"}:
+        raise ValueError("FileReceipt shape is invalid")
+    if not is_sha256(value["file_sha256"]):
+        raise ValueError("FileReceipt file_sha256 is invalid")
+    if not isinstance(value["filename"], str) or not value["filename"] or "/" in value["filename"]:
+        raise ValueError("FileReceipt filename is invalid")
+    if not isinstance(value["size_bytes"], int) or isinstance(value["size_bytes"], bool) or value["size_bytes"] < 0:
+        raise ValueError("FileReceipt size_bytes is invalid")
+
+
+def _verify_stored_artifact_receipt(value: object) -> None:
+    if not isinstance(value, Mapping) or set(value) != _STORED_ARTIFACT_RECEIPT_FIELDS:
+        raise ValueError("StoredArtifactReceipt shape is invalid")
+    if not isinstance(value["schema_version"], str) or not value["schema_version"]:
+        raise ValueError("StoredArtifactReceipt schema_version is invalid")
+    if not isinstance(value["internal_sha256_field"], str) or not value["internal_sha256_field"]:
+        raise ValueError("StoredArtifactReceipt internal_sha256_field is invalid")
+    if not is_sha256(value["internal_sha256"]) or not is_sha256(value["file_sha256"]):
+        raise ValueError("StoredArtifactReceipt hashes are invalid")
+    if not isinstance(value["filename"], str) or not value["filename"] or "/" in value["filename"]:
+        raise ValueError("StoredArtifactReceipt filename is invalid")
+    if not isinstance(value["size_bytes"], int) or isinstance(value["size_bytes"], bool) or value["size_bytes"] < 0:
+        raise ValueError("StoredArtifactReceipt size_bytes is invalid")
+
+
+def _verify_prior_attempt_receipts(value: object) -> None:
+    if not isinstance(value, (list, tuple)) or len(value) > 2:
+        raise ValueError("prior_attempt_receipts must contain zero to two rows")
+    for ordinal, row in enumerate(value, start=1):
+        if not isinstance(row, Mapping) or set(row) != _PRIOR_ATTEMPT_RECEIPT_FIELDS:
+            raise ValueError("prior attempt receipt row shape is invalid")
+        if row["attempt_ordinal"] != ordinal or isinstance(row["attempt_ordinal"], bool):
+            raise ValueError("prior attempt receipt ordinal is invalid")
+        _verify_stored_artifact_receipt(row["attempt_record_receipt"])
+        _verify_file_receipt(row["resource_log_receipt"])
+        if row["resume_receipt"] is not None:
+            _verify_stored_artifact_receipt(row["resume_receipt"])
+
 
 def verify_common_false_fields(payload: Mapping[str, object], *, schema_version: str) -> None:
     """Validate schema_version/module_id/purpose and the five hard-false flags."""
@@ -361,6 +415,11 @@ def verify_candidate_gate(payload: Mapping[str, object]) -> None:
         CANDIDATE_INPUT_RECEIPT_PROVIDERS,
         receipt_kinds=_TRUST_SPINE_RECEIPT_KINDS,
     )
+    producer_chain = payload["producer_attempt_chain"]
+    if not isinstance(producer_chain, (list, tuple)):
+        raise ValueError("candidate producer_attempt_chain must be a list")
+    _verify_prior_attempt_receipts(producer_chain)
+    verify_artifact_file_receipt(payload["verification_attempt_receipt"])
     downstream = payload["conditional_downstream"]
     if not isinstance(downstream, Mapping) or any(value is not False for value in downstream.values()):
         raise ValueError("candidate gate conditional_downstream must set every authority false")
@@ -430,13 +489,35 @@ def verify_postpublication_verification(payload: Mapping[str, object]) -> None:
     verify_artifact_file_receipt(payload["run_admission_receipt"])
     verify_static_input_contract(payload["static_input_contract"])
     verify_artifact_file_receipt(payload["candidate_receipt_bundle_receipt"])
-    for field in ("producer_embedding_receipt", "verification_embedding_receipt", "verification_attempt_receipt"):
-        verify_artifact_file_receipt(payload[field])
-    for field in ("candidate_member_receipts", "prior_attempt_receipts"):
-        if not isinstance(payload[field], (list, tuple)):
-            raise ValueError(f"result {field} must be a list")
+    candidate_members = payload["candidate_member_receipts"]
+    if not isinstance(candidate_members, (list, tuple)) or len(candidate_members) != len(CANDIDATE_MEMBER_PATHS):
+        raise ValueError("result candidate_member_receipts must contain all ten members")
+    for expected_path, row in zip(CANDIDATE_MEMBER_PATHS, candidate_members):
+        verify_generation_member_receipt(row)
+        if row["relative_path"] != expected_path:
+            raise ValueError("result candidate member receipt order mismatch")
+    _verify_prior_attempt_receipts(payload["prior_attempt_receipts"])
     if payload["candidate_generation_name"] != "candidate_v2":
         raise ValueError("result candidate_generation_name must be candidate_v2")
+    expected_member_rows = {row["relative_path"]: row for row in candidate_members}
+    for field, expected_path in (
+        ("producer_embedding_receipt", "producer_tiled_swin_embeddings.json"),
+        ("verification_embedding_receipt", "verification_tiled_swin_embeddings.json"),
+        ("verification_attempt_receipt", "verification_attempt/attempt_record.json"),
+    ):
+        verify_generation_member_receipt(payload[field])
+        if payload[field] != expected_member_rows[expected_path]:
+            raise ValueError(f"result {field} is not bound to its candidate member")
+    evaluator_receipts = payload["evaluator_receipts"]
+    if not isinstance(evaluator_receipts, Mapping) or set(evaluator_receipts) != {"baseline", "candidate"}:
+        raise ValueError("result evaluator_receipts shape is invalid")
+    for name, expected_path in (
+        ("baseline", "baseline_final_evaluator.json"),
+        ("candidate", "candidate_final_evaluator.json"),
+    ):
+        verify_generation_member_receipt(evaluator_receipts[name])
+        if evaluator_receipts[name] != expected_member_rows[expected_path]:
+            raise ValueError(f"result evaluator receipt {name} is not bound to its candidate member")
     checks = payload["ordered_check_results"]
     # all rows except the final error-bound row must pass
     verify_ordered_checks(checks[:-1], RESULT_ORDERED_CHECKS[:-1])

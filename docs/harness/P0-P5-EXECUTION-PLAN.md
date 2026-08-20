@@ -21,8 +21,11 @@ model execution or readiness transition.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
-- [ ] Remediate the 7 Critical and 5 Required findings recorded in
-      `fresh-context-review-2026-08-20.md`, then repeat the independent review.
+- [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
+      and review-only loader findings; current focused suite is 170 passed and
+      full suite is 2,038 passed, 5 skipped, 15 warnings.
+- [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
+      repeat the independent review to obtain `Critical=0 / Required=0`.
 
 ### P2 — Platform isolation gate
 

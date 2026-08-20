@@ -19,6 +19,18 @@ def _receipt():
     return {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64}
 
 
+def _member_row(path):
+    is_jsonl = path.endswith(".jsonl")
+    return {
+        "relative_path": path,
+        "receipt_kind": "file_only" if is_jsonl else "json",
+        "size_bytes": 0,
+        "internal_sha256_field": None if is_jsonl else "artifact_sha256",
+        "artifact_sha256": None if is_jsonl else "0" * 64,
+        "file_sha256": "0" * 64,
+    }
+
+
 def _trust_slots(providers):
     out = []
     for p in providers:
@@ -144,6 +156,9 @@ def test_candidate_receipt_bundle(tmp_path):
 def _result(error_bounds_pass=True):
     from app.analysis.task0258_v2_pipeline import build_postpublication_verification_payload
 
+    member_rows = [_member_row(path) for path in CANDIDATE_MEMBER_PATHS]
+    member_by_path = {row["relative_path"]: row for row in member_rows}
+
     return build_postpublication_verification_payload(
         error_bounds_pass=error_bounds_pass,
         authorization_receipts={
@@ -164,13 +179,16 @@ def _result(error_bounds_pass=True):
             "task0257_receipts_projection_sha256": "0" * 64,
         },
         candidate_receipt_bundle_receipt=_receipt(),
-        candidate_member_receipts=[],
+        candidate_member_receipts=member_rows,
         prior_attempt_receipts=[],
-        producer_embedding_receipt=_receipt(),
-        verification_embedding_receipt=_receipt(),
-        verification_attempt_receipt=_receipt(),
+        producer_embedding_receipt=member_by_path["producer_tiled_swin_embeddings.json"],
+        verification_embedding_receipt=member_by_path["verification_tiled_swin_embeddings.json"],
+        verification_attempt_receipt=member_by_path["verification_attempt/attempt_record.json"],
         error_bound_result={},
-        evaluator_receipts={},
+        evaluator_receipts={
+            "baseline": member_by_path["baseline_final_evaluator.json"],
+            "candidate": member_by_path["candidate_final_evaluator.json"],
+        },
     )
 
 
