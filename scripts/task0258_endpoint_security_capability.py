@@ -32,7 +32,27 @@ def derive_status(*, sdk_available: bool, compile_ok: bool, entitlement_present:
     return "requires_external_user_approval"
 
 
-def build_capability_report() -> dict[str, object]:
+def inspect_signed_artifact(path: Path) -> tuple[str, bool]:
+    """Inspect a caller-selected signed executable or system-extension bundle."""
+    if not path.exists():
+        raise FileNotFoundError(path)
+    codesign = _run("codesign", "-dv", "--verbose=4", str(path))
+    if codesign.returncode != 0:
+        raise ValueError(f"codesign verification failed for {path}: {codesign.stderr[-1000:]}")
+    details = f"{codesign.stdout}\n{codesign.stderr}"
+    if "adhoc" in details or "linker-signed" in details:
+        signature_kind = "adhoc"
+    elif "Authority=" in details:
+        signature_kind = "signed"
+    else:
+        signature_kind = "unknown"
+    entitlements = _run("codesign", "-d", "--entitlements", ":-", str(path))
+    entitlement_text = f"{entitlements.stdout}\n{entitlements.stderr}"
+    entitlement_present = bool(re.search(r"com\.apple\.developer\.endpoint-security\.client", entitlement_text))
+    return signature_kind, entitlement_present
+
+
+def build_capability_report(*, signed_artifact: Path | None = None) -> dict[str, object]:
     report: dict[str, object] = {
         "schema_version": "agu.task0258-endpoint-security-capability-report.v1",
         "platform": platform.platform(),
@@ -85,23 +105,20 @@ def build_capability_report() -> dict[str, object]:
             report["status"] = derive_status(sdk_available=True, compile_ok=False, entitlement_present=False)
             report["compile_stderr"] = compile_result.stderr[-2000:]
             return report
-        codesign = _run("codesign", "-dv", "--verbose=4", str(executable))
-        details = f"{codesign.stdout}\n{codesign.stderr}"
-        if "adhoc" in details or "linker-signed" in details:
-            report["signature_kind"] = "adhoc"
-        elif "Authority=" in details:
-            report["signature_kind"] = "signed"
-        else:
-            report["signature_kind"] = "unknown"
-        entitlements = _run("codesign", "-d", "--entitlements", ":-", str(executable))
-        entitlement_text = f"{entitlements.stdout}\n{entitlements.stderr}"
-        report["endpoint_security_entitlement_present"] = bool(
-            re.search(r"com\.apple\.developer\.endpoint-security\.client", entitlement_text)
-        )
+        inspected_artifact = signed_artifact or executable
+        try:
+            signature_kind, entitlement_present = inspect_signed_artifact(inspected_artifact)
+        except (FileNotFoundError, ValueError) as exc:
+            report["signature_kind"] = "invalid"
+            report["inspection_error"] = str(exc)
+            report["status"] = "invalid_signed_artifact"
+            return report
+        report["signature_kind"] = signature_kind
+        report["endpoint_security_entitlement_present"] = entitlement_present
         report["status"] = derive_status(
             sdk_available=True,
             compile_ok=True,
-            entitlement_present=bool(report["endpoint_security_entitlement_present"]),
+            entitlement_present=entitlement_present,
         )
     return report
 
@@ -109,9 +126,14 @@ def build_capability_report() -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", action="store_true", help="emit JSON instead of a concise status line")
+    parser.add_argument(
+        "--signed-artifact",
+        type=Path,
+        help="inspect this signed executable or .systemextension instead of the temporary compile",
+    )
     parser.add_argument("--require-ready", action="store_true", help="return nonzero unless entitlement is present")
     args = parser.parse_args()
-    report = build_capability_report()
+    report = build_capability_report(signed_artifact=args.signed_artifact)
     if args.json:
         print(json.dumps(report, sort_keys=True, separators=(",", ":")))
     else:

@@ -22,8 +22,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 173 passed and
-      full suite is 2,041 passed, 5 skipped, 15 warnings.
+      and review-only loader findings; current focused suite is 176 passed and
+      full suite is 2,044 passed, 5 skipped, 15 warnings.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
 
@@ -31,7 +31,11 @@ model execution or readiness transition.
 
 - [x] Run the no-sudo Endpoint Security capability probe: SDK/build available,
       but the temporary client is only ad-hoc signed and lacks the required
-      entitlement; the probe correctly remains fail-closed.
+      entitlement; the probe correctly remains fail-closed. Once a signed
+      executable or `.systemextension` exists, pass it explicitly with
+      `scripts/task0258_endpoint_security_capability.py --signed-artifact
+      <path> --json`; the default probe intentionally continues to inspect its
+      temporary compile.
 - [ ] Complete macOS Endpoint Security/syscall read-isolation observation.
 - [ ] Complete the OS-enforced FD review sandbox and verify worker/process
       cleanup. The pure bootstrap now rejects arbitrary target argv, fixes the

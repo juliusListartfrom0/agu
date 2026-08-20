@@ -4,13 +4,13 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `173 passed`.
+- TASK-0258 focused suite: `176 passed`.
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the remediation slice: `2,041 passed, 5
+- Full repository pytest after the remediation slice: `2,044 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -40,7 +40,10 @@ Endpoint Security capability probe: `compile_ok=true`, SDK header/stub present,
 signature `adhoc`, required entitlement absent,
 `external_user_approval_observed=false`, status
 `blocked_external_authorization`. This is a platform blocker, not a
-read-isolation attestation.
+read-isolation attestation. The probe now accepts
+`--signed-artifact <path> --json` to inspect the actual signed executable or
+`.systemextension`; without that option it intentionally reports the
+temporary ad-hoc compile and cannot observe an installed system extension.
 
 ## Local service curl hook
 
