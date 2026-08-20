@@ -39,6 +39,9 @@ model execution or readiness transition.
       contract through its receipt with no-follow/canonical checks; this is not
       yet an OS/kernel attestation.
 - [ ] Prove model-visible reads are logged and receipt-bound.
+      The Python `fs_usage` parser and caller-supplied verified-row builder
+      now fail closed; only an externally authenticated kernel provider may
+      mint the attestation.
 
 ### P3 — Explicit v2 run authorization
 

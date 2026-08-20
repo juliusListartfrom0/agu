@@ -49,7 +49,9 @@ externally authenticated verified loaders, and exact authorization-bound
 production admission. The bootstrap now rejects non-fixed target commands and
 FD assignments and reopens the standalone runtime contract through the
 four-field receipt with descriptor-relative no-follow/canonical checks; the
-runtime contract and kernel/provider evidence are still external gates. The current review-only
+runtime contract and kernel/provider evidence are still external gates. The
+Python audit parser also refuses to mint an attestation from raw or caller-
+supplied "verified" rows. The current review-only
 contexts/loaders are deliberately not an admission substitute. The
 worker subprocess layer now sanitizes its environment, starts a process group,
 and kills the group on timeout, but the full production proof boundary is not

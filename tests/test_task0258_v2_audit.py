@@ -7,13 +7,13 @@ import io
 import pytest
 
 from app.analysis.task0258_v2_audit import (
+    ExternalKernelAuditUnavailable,
     ReadEvent,
     build_read_isolation_attestation,
     build_verified_read_isolation_attestation,
     parse_fsusage_line,
     parse_fsusage_transcript,
 )
-from app.analysis.task0258_v2_read_isolation import verify_read_isolation_attestation
 
 
 def _inputs(denied_paths=()):
@@ -65,17 +65,14 @@ def test_attestation_allowed_only():
     events = [ReadEvent("open", "/allowed/data.json", None), ReadEvent("stat", "/allowed/data.json", None)]
     with pytest.raises(ValueError):
         build_read_isolation_attestation(**{**_inputs(), "events": events})
-    att = build_verified_read_isolation_attestation(**{**_inputs(), "verified_event_rows": []})
-    verify_read_isolation_attestation(att)
-    assert att["denied_read_attempt_count"] == 0
-    assert att["unknown_read_attempt_count"] == 0
-    assert att["audit_overflow"] is False
-    assert len(att["read_event_projection_sha256"]) == 64
+    with pytest.raises(ExternalKernelAuditUnavailable):
+        build_read_isolation_attestation(**{**_inputs(), "events": []})
+    with pytest.raises(ExternalKernelAuditUnavailable):
+        build_verified_read_isolation_attestation(**{**_inputs(), "verified_event_rows": []})
 
 
-def test_attestation_detects_denied_read_fail_closed():
-    # a denied-path read makes the attestation schema-invalid (denied must be 0),
-    # so the builder must fail closed instead of producing an invalid artifact
+def test_attestation_rejects_raw_denied_read_fail_closed():
+    # Raw rows cannot be upgraded into provider evidence, regardless of policy.
     events = [ReadEvent("open", "/allowed/data.json", None), ReadEvent("open", "/producer/embeddings.json", None)]
     with pytest.raises(ValueError):
         build_read_isolation_attestation(
@@ -83,14 +80,8 @@ def test_attestation_detects_denied_read_fail_closed():
         )
 
 
-def test_attestation_deterministic_projection():
-    a = build_verified_read_isolation_attestation(**{**_inputs(), "verified_event_rows": []})
-    b = build_verified_read_isolation_attestation(**{**_inputs(), "verified_event_rows": []})
-    assert a["read_event_projection_sha256"] == b["read_event_projection_sha256"]
-
-
-def test_denied_path_alias_matching():
-    # fs_usage reports /private/tmp/... while the policy may name /tmp/...
+def test_attestation_rejects_raw_path_alias_rows():
+    # fs_usage path aliases remain diagnostic-only and cannot mint evidence.
     events = [ReadEvent("open", "/private/tmp/agu_audit_producer_embeddings.json", None)]
     with pytest.raises(ValueError):
         build_read_isolation_attestation(

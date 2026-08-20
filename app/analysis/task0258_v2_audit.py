@@ -1,29 +1,21 @@
-"""TASK-0258 Amendment-001 v2 read-isolation audit — fs_usage transcript -> attestation.
+"""TASK-0258 Amendment-001 v2 read-isolation diagnostic parser.
 
-Bridges the root-level ``fs_usage -f filesys`` syscall transcript into the exact
-``agu.task0258-module-a-worker-read-isolation-attestation.v1`` payload:
-parses the ordered read events (operation/path/errno), detects denied-path
-attempts against the worker policy, computes the read-event projection, and
-self-validates the resulting attestation.
+Parses a root-level ``fs_usage -f filesys`` transcript for diagnostics. Raw
+text rows and caller-supplied "verified" rows cannot mint the
+``agu.task0258-module-a-worker-read-isolation-attestation.v1`` payload; that
+requires a future externally authenticated kernel-audit provider.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 import re
 from dataclasses import dataclass
 from typing import IO
 
-from app.analysis.task0258_module_a_v2 import (
-    MODULE_ID,
-    canonical_artifact_sha256,
-)
-from app.analysis.task0258_v2_read_isolation import (
-    READ_ISOLATION_ATTESTATION_SCHEMA,
-    verify_read_isolation_attestation,
-)
+
+class ExternalKernelAuditUnavailable(PermissionError):
+    """Raised until an externally authenticated kernel-audit provider is bound."""
+
 
 # Filesystem operations the policy audits.
 _AUDITED_OPS = frozenset(
@@ -96,24 +88,6 @@ def parse_fsusage_transcript(stream: IO[str]) -> list[ReadEvent]:
     return events
 
 
-def _denied_paths_match(path: str, denied_rows: object) -> bool:
-    if not isinstance(denied_rows, (list, tuple)):
-        return False
-    try:
-        real = os.path.realpath(path)
-    except OSError:
-        real = path
-    for row in denied_rows:
-        if isinstance(row, dict) and isinstance(row.get("path"), str):
-            try:
-                row_real = os.path.realpath(row["path"])
-            except OSError:
-                row_real = row["path"]
-            if row_real == real or row["path"] == path:
-                return True
-    return False
-
-
 def build_read_isolation_attestation(
     *,
     policy_artifact_sha256: str,
@@ -138,29 +112,13 @@ def build_read_isolation_attestation(
 
     ``fs_usage`` is retained as a diagnostic parser, but its lossy text rows do
     not contain the authenticated metadata required by the production schema.
-    Use :func:`build_verified_read_isolation_attestation` with rows emitted by a
-    trusted kernel-audit provider for an actual attestation.
+    The future externally authenticated provider adapter is the only permitted
+    source of an actual attestation.
     """
     if events:
         raise ValueError("raw fs_usage rows cannot mint a read-isolation attestation")
-    return build_verified_read_isolation_attestation(
-        policy_artifact_sha256=policy_artifact_sha256,
-        provider_receipt=provider_receipt,
-        run_identity_receipt=run_identity_receipt,
-        worker_role=worker_role,
-        child_pid=child_pid,
-        ordered_observed_process_ids=ordered_observed_process_ids,
-        provider_process_instance_id=provider_process_instance_id,
-        child_nonce=child_nonce,
-        prepare_artifact_sha256=prepare_artifact_sha256,
-        prepared_artifact_sha256=prepared_artifact_sha256,
-        child_started_artifact_sha256=child_started_artifact_sha256,
-        permit_artifact_sha256=permit_artifact_sha256,
-        finalize_artifact_sha256=finalize_artifact_sha256,
-        verified_event_rows=[],
-        denied_paths=denied_paths,
-        audit_started_before_spawn=audit_started_before_spawn,
-        audit_ended_after_child_exit=audit_ended_after_child_exit,
+    raise ExternalKernelAuditUnavailable(
+        "read-isolation attestation requires an externally authenticated kernel-audit provider"
     )
 
 
@@ -184,49 +142,40 @@ def build_verified_read_isolation_attestation(
     audit_started_before_spawn: bool = True,
     audit_ended_after_child_exit: bool = True,
 ) -> dict[str, object]:
-    """Build an attestation only from complete provider-authenticated rows."""
-    if not isinstance(verified_event_rows, list):
-        raise ValueError("verified_event_rows must be a list")
-    ordered = [dict(row) for row in verified_event_rows]
-    denied = sum(
-        1
-        for row in ordered
-        if isinstance(row.get("normalized_path"), str) and _denied_paths_match(row["normalized_path"], denied_paths)
+    """Reject direct Python row injection until a trusted provider adapter exists.
+
+    The parameters remain part of the planned adapter contract, but no caller
+    supplied mapping or list is allowed to mint a production attestation. The
+    future Endpoint Security adapter must provide an opaque, externally bound
+    capability before this function can be implemented.
+    """
+    del (
+        policy_artifact_sha256,
+        provider_receipt,
+        run_identity_receipt,
+        worker_role,
+        child_pid,
+        ordered_observed_process_ids,
+        provider_process_instance_id,
+        child_nonce,
+        prepare_artifact_sha256,
+        prepared_artifact_sha256,
+        child_started_artifact_sha256,
+        permit_artifact_sha256,
+        finalize_artifact_sha256,
+        verified_event_rows,
+        denied_paths,
+        audit_started_before_spawn,
+        audit_ended_after_child_exit,
     )
-    if denied:
-        raise ValueError("kernel-audit provider observed a denied read")
-    projection = hashlib.sha256(json.dumps(ordered, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-    payload: dict[str, object] = {
-        "schema_version": READ_ISOLATION_ATTESTATION_SCHEMA,
-        "module_id": MODULE_ID,
-        "policy_artifact_sha256": policy_artifact_sha256,
-        "provider_receipt": dict(provider_receipt),
-        "run_identity_receipt": dict(run_identity_receipt),
-        "worker_role": worker_role,
-        "child_pid": child_pid,
-        "ordered_observed_process_ids": list(ordered_observed_process_ids),
-        "provider_process_instance_id": provider_process_instance_id,
-        "child_nonce": child_nonce,
-        "prepare_artifact_sha256": prepare_artifact_sha256,
-        "prepared_artifact_sha256": prepared_artifact_sha256,
-        "child_started_artifact_sha256": child_started_artifact_sha256,
-        "permit_artifact_sha256": permit_artifact_sha256,
-        "finalize_artifact_sha256": finalize_artifact_sha256,
-        "audit_started_before_spawn": audit_started_before_spawn,
-        "audit_ended_after_child_exit": audit_ended_after_child_exit,
-        "audit_overflow": False,
-        "ordered_observed_read_events": ordered,
-        "read_event_projection_sha256": projection,
-        "denied_read_attempt_count": denied,
-        "unknown_read_attempt_count": 0,
-    }
-    payload["artifact_sha256"] = canonical_artifact_sha256(payload)
-    verify_read_isolation_attestation(payload)
-    return payload
+    raise ExternalKernelAuditUnavailable(
+        "verified read-isolation rows require an externally authenticated kernel-audit capability"
+    )
 
 
 __all__ = [
     "ReadEvent",
+    "ExternalKernelAuditUnavailable",
     "parse_fsusage_line",
     "parse_fsusage_transcript",
     "build_read_isolation_attestation",

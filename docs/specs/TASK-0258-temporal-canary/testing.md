@@ -19,6 +19,9 @@
 - The review-only capability/loader tests prove temporary-ancestor identity
   re-open, canonical artifact/file hashes, context separation, and wrong-context
   rejection; they do not provide kernel-audit or production admission evidence.
+- The read-isolation audit tests prove that both raw `fs_usage` rows and direct
+  Python `verified_event_rows` injection fail closed with no attestation; the
+  external kernel-provider capability is still absent.
 
 - Module-A focused tests: `67 passed`.
 - Adjacent TASK-0257 export/probe/backbone/causal regression: `523 passed, 3 skipped`.
