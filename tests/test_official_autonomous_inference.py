@@ -15,6 +15,7 @@ from app.analysis.official_evaluation import (
     verify_agu_autonomous_bundle,
 )
 from app.analysis.official_inference import (
+    CacheAwareFallbackOfficialEventReviewer,
     OfficialVLMResult,
     OllamaOfficialEventReviewer,
     TwoPassOfficialEventReviewer,
@@ -22,6 +23,8 @@ from app.analysis.official_inference import (
     _decision_from_vlm_result,
     _event_with_related_context,
     _frame_index_to_sampled_frame,
+    _gate_semantic_event_presence,
+    _quality_gated_visual_outcome,
     _recover_single_player_alias_from_reason,
     adjudicate_official_candidates,
     apply_action_owner_prior,
@@ -41,12 +44,93 @@ class FakeReviewer:
         return self.result
 
 
+class ReleasableFakeReviewer(FakeReviewer):
+    def __init__(self, result: OfficialVLMResult) -> None:
+        super().__init__(result)
+        self.release_calls = 0
+
+    def release(self) -> None:
+        self.release_calls += 1
+
+
+class CacheProbeFakeReviewer(FakeReviewer):
+    def __init__(
+        self,
+        result: OfficialVLMResult,
+        *,
+        cached_result: OfficialVLMResult | None,
+    ) -> None:
+        super().__init__(result)
+        self.cached_result = cached_result
+        self.cached_review_calls = 0
+        self.review_calls = 0
+
+    def cached_review(
+        self,
+        event: GameEventResponse,
+        frames: object,
+    ) -> OfficialVLMResult | None:
+        self.cached_review_calls += 1
+        return self.cached_result
+
+    def review(self, event: GameEventResponse, frames: object) -> OfficialVLMResult:
+        self.review_calls += 1
+        return super().review(event, frames)
+
+
 def test_displayed_frame_index_maps_to_exact_sampled_raw_frame() -> None:
     sampled = [468, 484, 500, 516, 532, 548, 564, 580, 596, 612, 628, 644]
 
     assert _frame_index_to_sampled_frame(6, sampled) == 548
     assert _frame_index_to_sampled_frame(12, sampled) == 644
     assert _frame_index_to_sampled_frame(0, sampled) is None
+
+
+def test_visual_outcome_gate_requires_complete_made_sequence() -> None:
+    incomplete = {
+        "ball_above_rim_before": True,
+        "ball_inside_rim_cylinder": True,
+        "ball_below_rim_after": False,
+    }
+    complete = {**incomplete, "ball_below_rim_after": True}
+
+    assert _quality_gated_visual_outcome("made", incomplete) == "unknown"
+    assert _quality_gated_visual_outcome("made", complete) == "made"
+
+
+def test_visual_outcome_gate_requires_explicit_miss_evidence() -> None:
+    assert _quality_gated_visual_outcome("missed", {}) == "unknown"
+    assert _quality_gated_visual_outcome("missed", {"ball_contacts_rim_and_exits": True}) == "missed"
+
+
+def test_visual_outcome_gate_derives_result_from_nonconflicting_observables() -> None:
+    assert _quality_gated_visual_outcome("unknown", {"ball_misses_rim": True}) == "missed"
+    assert (
+        _quality_gated_visual_outcome(
+            "unknown",
+            {
+                "ball_above_rim_before": True,
+                "ball_inside_rim_cylinder": True,
+                "ball_below_rim_after": True,
+            },
+        )
+        == "made"
+    )
+
+
+def test_visual_outcome_gate_rejects_conflicting_made_and_miss_evidence() -> None:
+    assert (
+        _quality_gated_visual_outcome(
+            "made",
+            {
+                "ball_above_rim_before": True,
+                "ball_inside_rim_cylinder": True,
+                "ball_below_rim_after": True,
+                "ball_contacts_rim_and_exits": True,
+            },
+        )
+        == "unknown"
+    )
 
 
 def test_official_vlm_cache_is_bound_to_rendered_images(tmp_path: Path) -> None:
@@ -78,9 +162,249 @@ def test_official_vlm_cache_is_bound_to_rendered_images(tmp_path: Path) -> None:
     assert urlopen.call_count == 2
 
 
-def test_rebound_review_inherits_only_post_release_parent_candidates() -> None:
+def test_official_vlm_can_request_immediate_ollama_unload() -> None:
+    reviewer = OllamaOfficialEventReviewer(
+        model="fixture-model",
+        host="http://127.0.0.1:11434",
+        timeout=1.0,
+        image_width=64,
+        max_frames=1,
+        keep_alive=0,
+    )
+    response = MagicMock()
+    response.read.return_value = json.dumps(
+        {"response": '{"event_present":false,"confidence":0.95,"reason":"not present"}'}
+    ).encode("utf-8")
+
+    with patch("urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value = response
+        reviewer.review(_candidate(), [np.zeros((4, 4, 3), dtype=np.uint8)])
+
+    request = urlopen.call_args.args[0]
+    assert json.loads(request.data.decode("utf-8"))["keep_alive"] == 0
+
+
+def test_semantic_cache_survives_identity_only_candidate_changes(tmp_path: Path) -> None:
+    reviewer = OllamaOfficialEventReviewer(
+        model="fixture-model",
+        host="http://127.0.0.1:11434",
+        timeout=1.0,
+        image_width=64,
+        max_frames=1,
+        cache_path=tmp_path / "review-cache.json",
+        review_mode="event_semantics",
+    )
+    response = MagicMock()
+    response.read.return_value = json.dumps(
+        {"response": '{"event_present":false,"confidence":0.95,"reason":"not present"}'}
+    ).encode("utf-8")
+    first = _candidate(primary_player_id="raw-track-1")
+    second = _candidate(primary_player_id="registered-player-1")
+
+    with patch("urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value = response
+        reviewer.review(first, [np.zeros((4, 4, 3), dtype=np.uint8)])
+        reviewer.review(second, [np.zeros((4, 4, 3), dtype=np.uint8)])
+
+    assert urlopen.call_count == 1
+
+
+def test_official_vlm_cache_reuses_three_point_grounding_observables(tmp_path: Path) -> None:
+    cache_path = tmp_path / "review-cache.json"
+    reviewer = OllamaOfficialEventReviewer(
+        model="fixture-model",
+        host="http://127.0.0.1:11434",
+        timeout=1.0,
+        image_width=64,
+        max_frames=1,
+        cache_path=cache_path,
+        review_mode="event_semantics",
+    )
+    response = MagicMock()
+    response.read.return_value = json.dumps(
+        {
+            "response": json.dumps(
+                {
+                    "event_present": True,
+                    "confidence": 0.95,
+                    "outcome": "unknown",
+                    "shot_value": 3,
+                    "three_point_line_visible": True,
+                    "shooter_feet_visible": True,
+                    "release_beyond_arc": True,
+                }
+            )
+        }
+    ).encode("utf-8")
+
+    with patch("urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value = response
+        fresh = reviewer.review(_candidate(), [np.zeros((4, 4, 3), dtype=np.uint8)])
+        cached = reviewer.review(_candidate(), [np.zeros((4, 4, 3), dtype=np.uint8)])
+
+    assert fresh.labels["shot_value"] == 3
+    assert cached.labels["shot_value"] == 3
+    assert urlopen.call_count == 1
+
+
+def test_official_vlm_falls_back_when_optional_frame_bounds_are_unavailable() -> None:
+    reviewer = OllamaOfficialEventReviewer(
+        model="fixture-model",
+        host="http://127.0.0.1:11434",
+        timeout=1.0,
+        image_width=64,
+        max_frames=1,
+        frame_bounds_resolver=lambda event: None,  # type: ignore[return-value]
+    )
+    response = MagicMock()
+    response.read.return_value = json.dumps(
+        {"response": '{"event_present":false,"confidence":0.95,"reason":"not present"}'}
+    ).encode("utf-8")
+
+    with patch("urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value = response
+        result = reviewer.review(_candidate(), [np.zeros((4, 4, 3), dtype=np.uint8)])
+
+    assert result.event_present is False
+
+
+def test_semantic_prompt_defines_miss_exit_as_mutually_exclusive_with_make() -> None:
+    from app.analysis.official_inference import _official_event_prompt
+
+    prompt = _official_event_prompt(_candidate(), review_mode="event_semantics", rim_detail_inset=True)
+
+    assert "must be false" in prompt
+    assert "must not contradict" in prompt
+    assert "yellow-bordered magnified rim detail" in prompt
+    assert "free_throw_attempt" in prompt
+    assert "tipoff_or_jump_ball" in prompt
+    assert "visible live-play release" in prompt
+    assert "controlled_ball_before_release" in prompt
+    assert "ball_separated_from_hands" in prompt
+    assert "ball_progresses_toward_rim_after_release" in prompt
+    assert "players occupying fixed lane slots" in prompt
+    assert "game clock remains frozen" in prompt
+    assert "Shot motion alone never proves live play" in prompt
+
+
+@pytest.mark.parametrize(
+    "observables",
+    [
+        {"shot_release_visible": True, "free_throw_attempt": True},
+        {"shot_release_visible": True, "tipoff_or_jump_ball": True},
+        {"shot_release_visible": True, "dead_ball_or_inbound": True},
+        {"shot_release_visible": False},
+    ],
+)
+def test_field_goal_presence_gate_rejects_explicit_non_shot_scene(
+    observables: dict[str, bool],
+) -> None:
+    assert _gate_semantic_event_presence(_candidate(), True, observables) is False
+
+
+def test_field_goal_presence_gate_requires_visible_release() -> None:
+    assert _gate_semantic_event_presence(_candidate(), True, {}) is None
+    assert (
+        _gate_semantic_event_presence(
+            _candidate(),
+            True,
+            {
+                "shot_release_visible": True,
+                "controlled_ball_before_release": True,
+                "ball_separated_from_hands": True,
+                "ball_progresses_toward_rim_after_release": True,
+            },
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "observables",
+    [
+        {
+            "shot_release_visible": True,
+            "controlled_ball_before_release": True,
+            "ball_separated_from_hands": False,
+            "ball_progresses_toward_rim_after_release": True,
+        },
+        {
+            "shot_release_visible": True,
+            "controlled_ball_before_release": True,
+            "ball_separated_from_hands": True,
+            "ball_progresses_toward_rim_after_release": False,
+        },
+    ],
+)
+def test_field_goal_presence_gate_rejects_broken_release_chain(
+    observables: dict[str, bool],
+) -> None:
+    assert _gate_semantic_event_presence(_candidate(), True, observables) is False
+
+
+def test_field_goal_presence_gate_leaves_incomplete_release_chain_unresolved() -> None:
+    assert (
+        _gate_semantic_event_presence(
+            _candidate(),
+            True,
+            {
+                "shot_release_visible": True,
+                "controlled_ball_before_release": True,
+                "ball_separated_from_hands": True,
+            },
+        )
+        is None
+    )
+
+
+def test_actor_identity_review_does_not_require_semantic_release_observable() -> None:
+    reviewer = OllamaOfficialEventReviewer(
+        model="fixture-model",
+        host="http://127.0.0.1:11434",
+        timeout=1.0,
+        image_width=64,
+        max_frames=1,
+        review_mode="actor_identity",
+    )
+    response = MagicMock()
+    response.read.return_value = json.dumps(
+        {
+            "response": json.dumps(
+                {
+                    "event_present": True,
+                    "confidence": 0.95,
+                    "primary_player_alias": "P01",
+                    "reason": "P01 performs the candidate action",
+                }
+            )
+        }
+    ).encode("utf-8")
+
+    with patch("urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value = response
+        result = reviewer.review(
+            _candidate(), [np.zeros((4, 4, 3), dtype=np.uint8)]
+        )
+
+    assert result.event_present is True
+    assert result.labels["primary_player_id"] == "track-7"
+
+
+@pytest.mark.parametrize(
+    ("parent_event_type", "shot_value"),
+    [
+        ("field_goal_attempt", 2),
+        ("free_throw_attempt", 1),
+    ],
+)
+def test_rebound_review_inherits_only_post_release_parent_candidates(
+    parent_event_type: str,
+    shot_value: int,
+) -> None:
     parent = _candidate(
         event_id="shot-parent",
+        event_type=parent_event_type,
+        shot_value=shot_value,
         release_frame=110,
         outcome_frame=124,
         outcome="missed",
@@ -266,6 +590,103 @@ def test_two_pass_reviewer_merges_clean_semantics_with_overlaid_actor() -> None:
     }
 
 
+def test_cache_aware_fallback_returns_primary_exact_cache_without_fallback() -> None:
+    cached = OfficialVLMResult(
+        True,
+        0.9,
+        "cached primary",
+        {"primary_player_id": "track-7"},
+    )
+    primary = CacheProbeFakeReviewer(cached, cached_result=cached)
+    fallback = CacheProbeFakeReviewer(
+        OfficialVLMResult(True, 0.8, "fallback", {"primary_player_id": "track-8"}),
+        cached_result=None,
+    )
+    reviewer = CacheAwareFallbackOfficialEventReviewer(
+        primary_reviewer=primary,
+        fallback_reviewer=fallback,
+    )
+
+    result = reviewer.review(_candidate(), [np.zeros((8, 8, 3), dtype=np.uint8)])
+
+    assert result is cached
+    assert primary.cached_review_calls == 1
+    assert primary.review_calls == 0
+    assert fallback.review_calls == 0
+    assert reviewer.fallback_dispatch_count == 0
+
+
+def test_cache_aware_fallback_routes_only_primary_cache_miss() -> None:
+    primary = CacheProbeFakeReviewer(
+        OfficialVLMResult(True, 0.9, "primary live call", {}),
+        cached_result=None,
+    )
+    fallback_result = OfficialVLMResult(
+        True,
+        0.8,
+        "resource-safe fallback",
+        {"primary_player_id": "track-8"},
+    )
+    fallback = CacheProbeFakeReviewer(fallback_result, cached_result=None)
+    reviewer = CacheAwareFallbackOfficialEventReviewer(
+        primary_reviewer=primary,
+        fallback_reviewer=fallback,
+    )
+
+    result = reviewer.review(_candidate(), [np.zeros((8, 8, 3), dtype=np.uint8)])
+
+    assert result is fallback_result
+    assert primary.cached_review_calls == 1
+    assert primary.review_calls == 0
+    assert fallback.review_calls == 1
+    assert reviewer.fallback_dispatch_count == 1
+
+
+def test_cache_aware_fallback_records_distinct_resource_safe_model() -> None:
+    primary = CacheProbeFakeReviewer(
+        OfficialVLMResult(True, 0.9, "primary", {}),
+        cached_result=None,
+    )
+    fallback = CacheProbeFakeReviewer(
+        OfficialVLMResult(True, 0.8, "fallback", {}),
+        cached_result=None,
+    )
+    fallback.model = "fixture-small-model"
+    primary.image_width = 768
+    primary.context_length = 8192
+    fallback.image_width = 512
+    fallback.context_length = 4096
+
+    reviewer = CacheAwareFallbackOfficialEventReviewer(
+        primary_reviewer=primary,
+        fallback_reviewer=fallback,
+    )
+
+    assert reviewer.model == "fixture-model"
+    assert reviewer.fallback_model == "fixture-small-model"
+    assert reviewer.image_width == 768
+    assert reviewer.context_length == 8192
+
+
+def test_two_pass_reviewer_releases_semantic_model_when_event_is_rejected() -> None:
+    semantic = ReleasableFakeReviewer(
+        OfficialVLMResult(False, 0.95, "not an event", {})
+    )
+    actor = FakeReviewer(
+        OfficialVLMResult(True, 0.95, "actor", {"primary_player_id": "track-7"})
+    )
+    reviewer = TwoPassOfficialEventReviewer(
+        semantic_reviewer=semantic,
+        actor_reviewer=actor,
+        actor_frame_provider=lambda event: [np.ones((8, 8, 3), dtype=np.uint8)],
+    )
+
+    result = reviewer.review(_candidate(), [np.zeros((8, 8, 3), dtype=np.uint8)])
+
+    assert result.event_present is False
+    assert semantic.release_calls == 1
+
+
 def test_two_pass_reviewer_rejects_referee_as_action_owner() -> None:
     semantic = FakeReviewer(OfficialVLMResult(True, 0.95, "missed two", {"outcome": "missed", "shot_value": 2}))
     actor = FakeReviewer(
@@ -392,7 +813,7 @@ def test_agu_vlm_confirms_only_complete_schema_bounded_labels() -> None:
     assert (events[0].outcome, events[0].shot_value) == ("made", 3)
 
 
-def test_agu_vlm_leaves_incomplete_event_unresolved() -> None:
+def test_agu_vlm_retains_grounded_semantics_while_actor_remains_unresolved() -> None:
     reviewer = FakeReviewer(OfficialVLMResult(True, 0.99, "actor unavailable", {"outcome": "made", "shot_value": 2}))
     event = _candidate(team_id=None, primary_player_id=None, evidence=[])
 
@@ -401,7 +822,47 @@ def test_agu_vlm_leaves_incomplete_event_unresolved() -> None:
     )[0]
 
     assert result.status == "needs_review"
+    assert result.outcome == "made"
+    assert result.shot_value == 2
+    assert result.primary_player_id is None
+    assert result.team_id is None
+
+
+def test_low_confidence_partial_semantics_are_not_retained() -> None:
+    reviewer = FakeReviewer(OfficialVLMResult(True, 0.6, "uncertain result", {"outcome": "made", "shot_value": 2}))
+    event = _candidate(team_id=None, primary_player_id=None, evidence=[])
+
+    result = adjudicate_official_candidates(
+        [event], reviewer=reviewer, frame_provider=lambda current: [], minimum_confidence=0.8
+    )[0]
+
+    assert result.status == "needs_review"
     assert result.outcome == "unknown"
+    assert result.shot_value is None
+
+
+def test_partial_three_point_semantics_keep_their_grounding_observables() -> None:
+    reviewer = FakeReviewer(
+        OfficialVLMResult(
+            True,
+            0.95,
+            "visible release beyond the arc",
+            {"outcome": "unknown", "shot_value": 3},
+            observables={
+                "three_point_line_visible": True,
+                "shooter_feet_visible": True,
+                "release_beyond_arc": True,
+            },
+        )
+    )
+    event = _candidate(team_id=None, primary_player_id=None, evidence=[])
+
+    result = adjudicate_official_candidates(
+        [event], reviewer=reviewer, frame_provider=lambda current: [], minimum_confidence=0.8
+    )[0]
+
+    assert result.status == "needs_review"
+    assert result.shot_value == 3
 
 
 def test_single_overlaid_alias_in_vlm_reason_recovers_missing_schema_field() -> None:
@@ -416,6 +877,27 @@ def test_single_overlaid_alias_in_vlm_reason_recovers_missing_schema_field() -> 
 def test_multiple_aliases_in_vlm_reason_remain_unresolved() -> None:
     event = _candidate(primary_player_id=None)
     parsed = {"event_present": True, "reason": "P01 passes near P02"}
+
+    _recover_single_player_alias_from_reason(event, parsed)
+
+    assert "primary_player_alias" not in parsed
+
+
+def test_one_repeated_actor_alias_can_be_recovered_among_context_aliases() -> None:
+    event = _candidate(primary_player_id=None)
+    parsed = {
+        "event_present": True,
+        "reason": "P02 moves toward the basket while P01 releases; field-goal attempt by P01",
+    }
+
+    _recover_single_player_alias_from_reason(event, parsed)
+
+    assert parsed["primary_player_alias"] == "P01"
+
+
+def test_multiple_repeated_aliases_remain_unresolved() -> None:
+    event = _candidate(primary_player_id=None)
+    parsed = {"event_present": True, "reason": "P01 passes P02; P02 contests P01"}
 
     _recover_single_player_alias_from_reason(event, parsed)
 
@@ -654,6 +1136,174 @@ def test_assist_requires_automatically_confirmed_made_shot() -> None:
     rejected_assist = next(item for item in rejected if item.event_id == assist.event_id)
     assert rejected_assist.status == "rejected"
     assert "same team" in rejected_assist.reason
+
+
+def test_visual_absence_rejects_dependent_event_with_unresolved_parent() -> None:
+    unresolved_shot = _candidate(outcome="unknown", status="needs_review")
+    block = _candidate(
+        event_id="block-1",
+        event_type="block",
+        start_frame=80,
+        end_frame=110,
+        outcome=None,
+        shot_value=None,
+        primary_player_id=None,
+        team_id=None,
+        related_event_ids=[unresolved_shot.event_id],
+    )
+
+    decision = _decision_from_vlm_result(
+        block,
+        result=OfficialVLMResult(False, 0.95, "no block is visible", {}),
+        reviewer_name="fake_official_vlm/fixture-model",
+        minimum_confidence=0.8,
+        related_events={unresolved_shot.event_id: unresolved_shot},
+    )
+
+    assert decision.decision == "reject"
+    assert decision.labels == {}
+    assert decision.reason == "no block is visible"
+
+
+def test_broadcast_replay_is_rejected_even_when_action_and_actor_are_complete() -> None:
+    event = _candidate(outcome="made", shot_value=2)
+
+    decision = _decision_from_vlm_result(
+        event,
+        result=OfficialVLMResult(
+            True,
+            0.95,
+            "made basket shown during halftime",
+            {},
+            observables={
+                "broadcast_gate_required": True,
+                "live_game_action": False,
+                "replay_or_highlight": True,
+                "studio_or_break": True,
+            },
+        ),
+        reviewer_name="fake_official_vlm/fixture-model",
+        minimum_confidence=0.8,
+    )
+
+    assert decision.decision == "reject"
+    assert decision.labels == {}
+    assert decision.reason.startswith("AGU broadcast gate")
+
+
+def test_broadcast_gate_keeps_unproven_live_action_in_review() -> None:
+    event = _candidate(outcome="made", shot_value=2)
+
+    decision = _decision_from_vlm_result(
+        event,
+        result=OfficialVLMResult(
+            True,
+            0.95,
+            "shot visible but broadcast state unknown",
+            {},
+            observables={"broadcast_gate_required": True, "live_game_action": None},
+        ),
+        reviewer_name="fake_official_vlm/fixture-model",
+        minimum_confidence=0.8,
+    )
+
+    assert decision.decision == "needs_review"
+    assert "live game action is not proven" in decision.reason
+
+
+def test_live_free_throw_evidence_reclassifies_field_goal_candidate() -> None:
+    event = _candidate()
+
+    decision = _decision_from_vlm_result(
+        event,
+        result=OfficialVLMResult(
+            False,
+            0.95,
+            "stationary foul-line attempt with occupied lane slots",
+            {"outcome": "unknown"},
+            observables={
+                "broadcast_gate_required": True,
+                "live_game_action": True,
+                "free_throw_attempt": True,
+            },
+        ),
+        reviewer_name="fake_official_vlm/fixture-model",
+        minimum_confidence=0.8,
+    )
+
+    assert decision.decision == "needs_review"
+    assert decision.labels == {
+        "event_type": "free_throw_attempt",
+        "outcome": "unknown",
+        "shot_value": 1,
+    }
+    assert "reclassified" in decision.reason
+    ledger = EventLedger([event])
+    revised = ledger.apply_decision(decision)
+    assert revised.event_type == "free_throw_attempt"
+    assert revised.shot_value == 1
+    assert revised.status == "needs_review"
+
+
+def test_replayed_free_throw_does_not_reclassify_field_goal_candidate() -> None:
+    event = _candidate()
+
+    decision = _decision_from_vlm_result(
+        event,
+        result=OfficialVLMResult(
+            False,
+            0.95,
+            "free throw shown in replay",
+            {},
+            observables={
+                "broadcast_gate_required": True,
+                "live_game_action": False,
+                "replay_or_highlight": True,
+                "free_throw_attempt": True,
+            },
+        ),
+        reviewer_name="fake_official_vlm/fixture-model",
+        minimum_confidence=0.8,
+    )
+
+    assert decision.decision == "reject"
+    assert decision.labels == {}
+
+
+@pytest.mark.parametrize(
+    ("reason", "extra_observables"),
+    [
+        ("a generic release toward the basket", {}),
+        (
+            "stationary free throw at the foul line",
+            {"dead_ball_or_inbound": True},
+        ),
+    ],
+)
+def test_free_throw_reclassification_requires_consistent_explanation_and_scene(
+    reason: str,
+    extra_observables: dict[str, bool],
+) -> None:
+    decision = _decision_from_vlm_result(
+        _candidate(),
+        result=OfficialVLMResult(
+            False,
+            0.95,
+            reason,
+            {},
+            observables={
+                "broadcast_gate_required": True,
+                "live_game_action": True,
+                "free_throw_attempt": True,
+                **extra_observables,
+            },
+        ),
+        reviewer_name="fake_official_vlm/fixture-model",
+        minimum_confidence=0.8,
+    )
+
+    assert decision.decision == "reject"
+    assert decision.labels == {}
 
 
 def test_rebound_type_must_match_confirmed_miss_team() -> None:

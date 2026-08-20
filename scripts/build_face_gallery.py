@@ -71,14 +71,23 @@ def main() -> int:
         result = adapter.embed_player_crops(crops)
         if result is None:
             raise ValueError(f"insufficient consistent face samples for {person_id}")
+        prototype_qualities = result.prototype_qualities or (result.quality,)
+        prototype_sample_counts = result.prototype_sample_counts or (result.sample_count,)
+        prototype_embeddings = result.prototype_embeddings or (result.embedding,)
         entries.append(
             {
                 "person_id": person_id,
                 "team_id": person.get("team_id"),
                 "embedding": [float(value) for value in result.embedding.tolist()],
                 "sample_count": result.sample_count,
-                "quality": result.quality,
+                "quality": max(prototype_qualities),
                 "sample_sha256": sample_hashes,
+                "prototypes": [
+                    [float(value) for value in prototype.tolist()]
+                    for prototype in prototype_embeddings
+                ],
+                "prototype_qualities": list(prototype_qualities),
+                "prototype_sample_counts": list(prototype_sample_counts),
             }
         )
     payload = seal_face_gallery_payload(

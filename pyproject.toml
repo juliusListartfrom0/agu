@@ -30,7 +30,7 @@ api = ["fastapi", "uvicorn[standard]"]
 inference = [
   "torch",
   "torchvision",
-  "opencv-contrib-python-headless",
+  "opencv-contrib-python-headless<5",
   "scikit-learn",
   "numpy",
   "Pillow",
@@ -38,17 +38,26 @@ inference = [
   "tqdm",
   "easydict",
 ]
-tracking-ultralytics = ["ultralytics"]
-ocr = ["rapidocr-onnxruntime==1.4.4"]
+tracking-ultralytics = ["ultralytics", "opencv-python<5"]
+detection-rfdetr = ["rfdetr==1.8.3"]
+vlm-mlx = [
+  "mlx-vlm==0.6.7; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+audio-mlx = [
+  "mlx-whisper==0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+research-download = ["yt-dlp==2026.7.4"]
+ocr = ["rapidocr-onnxruntime==1.4.4", "opencv-python<5"]
 profiles = ["PyYAML>=6"]
-training = ["pandas", "matplotlib", "scipy", "scikit-image", "vidaug", "joblib"]
+training = ["pandas", "matplotlib", "scipy", "scikit-image", "vidaug", "joblib", "psutil>=5.9,<8"]
 service = [
   "fastapi",
   "uvicorn[standard]",
   "torch",
   "torchvision",
-  "opencv-contrib-python-headless",
+  "opencv-contrib-python-headless<5",
   "ultralytics",
+  "opencv-python<5",
   "scikit-learn",
   "numpy",
   "Pillow",

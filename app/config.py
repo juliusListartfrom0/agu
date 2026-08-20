@@ -60,12 +60,12 @@ class Settings(BaseSettings):
     face_enrolled_minimum_quality: float = 0.65
     face_identity_match_threshold: float = 0.45
     face_identity_conflict_threshold: float = 0.30
-    yolo_model_name: str = "yolov8n.pt"
+    yolo_model_name: str = "model_checkpoints/yolov8n.pt"
     default_video: str = "examples/lebron_shoots.mp4"
 
     # --- Official event perception (experimental, opt-in) ---
     official_stats_enabled: bool = False
-    official_detector_backend: str = "off"  # off | ultralytics_yolo
+    official_detector_backend: str = "off"  # off | ultralytics_yolo | transformers_rfdetr
     official_detector_model_path: str = ""
     official_detector_device: str = "cpu"
     official_detector_imgsz: int = 704
@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     official_vlm_context_length: int = 16384
     official_vlm_timeout: float = 180.0
     official_action_owner_model_path: str = ""
+    official_audio_asr_enabled: bool = False
+    official_audio_asr_model: str = ""
+    official_audio_asr_language: str = "en"
 
     # --- VLM (Ollama) ---
     vlm_mode: str = "low-confidence"  # off | low-confidence | always

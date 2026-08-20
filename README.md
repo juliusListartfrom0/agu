@@ -31,10 +31,11 @@ AGU 只提供分析引擎和稳定返回。统一鉴权、限流、跨服务聚�
 | v3 动作分类链路 | 可用，兼容用途 | R(2+1)D 输出动作代理标签；`action_proxy` 不能作为官方技术统计。 |
 | 跟踪、姿态、身份与 VLM 审核 | 可用/可配置 | 可按后端和本地模型路径启用；模型权重不随仓库分发。 |
 | 原片官方统计离线链路 | 已实现，实验阶段 | 感知、姿态、身份图、事件候选、AGU 自主推理、对账均有独立脚本；尚未接入默认 API 返回。 |
-| 人脸名单识别与身份去重 | 已实现，数据待补齐 | 支持 YuNet + SFace 人脸库、审核清单、身份图和严格名单约束；当前比赛名单覆盖不足。 |
+| 人脸名单识别与身份去重 | 已实现，跨比赛验证中 | 支持 YuNet + SFace 多模板人脸库、审核清单、身份图和严格名单约束；LAL–BOS 已冻结为 19/19，ATL–CHI 有 21/23 个条目，其中 19/23 通过严格质量门槛。 |
 | Codex 标注防泄漏 | 已实现 | 训练标注清单必须记录源视频、任务类型和验收包，并进行 benchmark-disjoint 校验。 |
+| 真实投篮时序门禁 | 已实现，未晋级 | 四场 118 窗口的端到端留一微调已运行；Kinetics 与 SpaceJam 初始化均未达到逐场 P≥0.95/R≥0.85，权重保持非运行时。 |
 | 单场比赛独立完成技术统计 | 尚未达到 | 当前不能宣称可无人干预、稳定完成整场比赛官方技术统计。 |
-| 最终正确率 ≥ 95% | 尚未证明 | 当前一场定位 F1 为 `0.8889`，严格身份正确率为 `0`，跨比赛 owner 覆盖为 `1/11`；还缺第二场完整六项独立真值。 |
+| 最终正确率 ≥ 95% | 尚未证明 | 两场球队命中分值组件 F1 为 `0.8600`/`0.9703`，但这不是逐球员六项结果；身份映射后的得分事件中，LAL 仅 1 个含唯一具名候选，ATL 为 0。 |
 
 这里的最终正确率指冻结后的独立比赛验收结果，而不是训练集精度、单一动作分类准确率或人工/Codex 修正后的结果。内部较低门槛只能用于集成调试，不能替代 95% 产品验收。
 
@@ -60,6 +61,7 @@ AGU 只提供分析引擎和稳定返回。统一鉴权、限流、跨服务聚�
   -> 姿态包
   -> 人脸名单 + 身份图
   -> 原片事件候选
+  -> 可选稳定广播比分增量 / 原片解说 ASR 候选
   -> AGU 两阶段自主推理（传统模型 + 可选本地 VLM）
   -> 官方统计包
   -> 冻结后独立真值对账
@@ -78,25 +80,34 @@ AGU 只提供分析引擎和稳定返回。统一鉴权、限流、跨服务聚�
 AGU 优先以 adapter、配置和 feature flag 封装开源组件：
 
 - 视频 IO：OpenCV、FFmpeg；
-- 检测与跟踪：Ultralytics YOLO、ByteTrack、BoT-SORT；
+- 检测与跟踪：Ultralytics YOLO、可选的离线 Transformers RF-DETR、ByteTrack、BoT-SORT；
 - 姿态：可配置本地姿态模型；
 - 人脸识别：OpenCV YuNet + SFace；
 - 动作识别：PyTorch R(2+1)D；
 - VLM：Ollama 兼容的本地模型；
+- 原片音频：可选 MLX Whisper adapter（仅产生候选，不确认事件或球员）；
 - API：FastAPI + Pydantic。
 
 Ultralytics 的 AGPL/商业许可需要部署方自行确认。仓库不绑定线上服务、密钥、固定模型路径或单一 GPU 环境；CPU、MPS、CUDA 和离线模型路径均通过配置层选择。RTMDet、RTMPose 等是可评估的替换方向，并不代表当前已内置对应 adapter。
 
+实验性 RF-DETR adapter 默认关闭。仅当
+`BASKETBALL_OFFICIAL_DETECTOR_BACKEND=transformers_rfdetr` 且
+`BASKETBALL_OFFICIAL_DETECTOR_MODEL_PATH` 指向已下载的本地 Transformers
+模型目录时启用；加载强制离线，不隐式联网。当前该路线只用于候选提议，尚未通过
+0.85 精度门禁。
+
+[MLX Examples/`mlx-whisper`](https://github.com/ml-explore/mlx-examples) 代码为 MIT 许可。AGU 不默认指定或再分发 ASR 权重；启用时必须显式配置本地路径或模型仓库并复核该权重页面的许可证。该后端仅为 Apple Silicon 的可选本地 adapter，不进入基础依赖；其他平台可用保持相同 artifact/schema 的 ASR adapter 替换。
+
 ### 5. 快速开始
 
-要求 Python 3.10+。模型权重、数据集和比赛视频不包含在仓库中。
+AGU 本地开发与服务固定使用 Python 3.11 的 `.venv`。模型权重、数据集和比赛视频不包含在仓库中。
 
 ```bash
 git clone <repository-url>
 cd agu
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
@@ -211,14 +222,82 @@ python -m scripts.build_official_event_candidates \
   --require-face-gallery-identity \
   --output analysis_outputs/game/candidates.json
 
-# 5. AGU 自主统计；可选本地 VLM 两阶段审核
-python -m scripts.run_official_autonomous_inference \
+# 4b. 可选：只在候选窗口运行 YOLO11 姿态，避免整场重复计算
+python -m scripts.run_official_pose_windows \
   --candidate-bundle analysis_outputs/game/candidates.json \
+  --video /absolute/path/to/game.mp4 \
+  --model model_checkpoints/yolo11n-pose.pt \
+  --output analysis_outputs/game/pose_windows.json
+
+# 4c. 可选：用冻结的传统真实投篮模型过滤误报，再重建候选
+python -m scripts.build_official_event_candidates \
+  --perception analysis_outputs/game/perception.json \
+  --pose analysis_outputs/game/pose_windows.json \
+  --shot-validity-model model_checkpoints/shot_validity.json \
+  --video /absolute/path/to/game.mp4 --game-id game_a \
+  --output analysis_outputs/game/candidates_gated.json
+
+# 4d. 可选：用冻结的全事件窗口 R(2+1)D 时序头做第二级高精度过滤
+python -m scripts.apply_shot_validity_temporal_model \
+  --candidate-bundle analysis_outputs/game/candidates_gated.json \
+  --video /absolute/path/to/game.mp4 \
+  --model model_checkpoints/shot_validity_temporal.json \
+  --backbone-checkpoint model_checkpoints/r2plus1d_18-kinetics400.pth \
+  --output analysis_outputs/game/candidates_temporal_gated.json
+
+# 5. 可选：从原片广播记分牌提取稳定增量并绑定唯一候选
+python -m scripts.run_official_scoreboard_evidence \
+  --candidate-bundle analysis_outputs/game/candidates.json \
+  --video /absolute/path/to/game.mp4 \
+  --team-id HOME --team-id AWAY \
+  --sample-interval-sec 2 \
+  --cache analysis_outputs/game/scoreboard.cache.json \
+  --evidence-output analysis_outputs/game/scoreboard.json \
+  --output analysis_outputs/game/candidates_with_scoreboard.json
+
+# 5b. 可选：从同一原片音轨提取动作/名单姓名候选
+# audio_roster.json 必须是预先封存的 agu.audio-roster.v1 注册资产；
+# 可先用 scripts.build_audio_roster 从 benchmark_answers_included=false 的注册清单确定性生成。
+# 重复传入 --candidate-action 可限制“未匹配到视觉候选”的语音补充类型。
+# 每条语音提及只绑定到时间上最匹配的一个同类视觉候选，避免重复放大事件。
+# 投篮命中/未中措辞仅保存为 speech_shot_outcome_candidate 证据；
+# ASR 不会改写 outcome/status/primary_player_id，仍需视觉、因果和身份确认。
+# Apple Silicon adapter: .venv/bin/python -m pip install -e '.[audio-mlx]'
+python -m scripts.run_official_audio_evidence \
+  --enable \
+  --model /absolute/path/or/reviewed-model-repository \
+  --candidate-bundle analysis_outputs/game/candidates_with_scoreboard.json \
+  --video /absolute/path/to/game.mp4 \
+  --roster analysis_outputs/game/audio_roster.json \
+  --transcript-cache analysis_outputs/game/audio_transcript.json \
+  --candidate-action assist --candidate-action block \
+  --candidate-action foul --candidate-action steal \
+  --candidate-action turnover \
+  --evidence-output analysis_outputs/game/audio_evidence.json \
+  --output analysis_outputs/game/candidates_with_audio.json
+
+# Codex 离线复核只能封存为 runtime_consumable=false 的开发评估资产；
+# scripts.seal_audio_action_review 会校验 bundle 哈希及逐候选完整覆盖，不能作为运行时答案。
+
+# 6. AGU 自主统计；可选本地 VLM 两阶段审核
+python -m scripts.run_official_autonomous_inference \
+  --candidate-bundle analysis_outputs/game/candidates_with_audio.json \
   --video /absolute/path/to/game.mp4 \
   --two-pass-vlm \
   --output analysis_outputs/game/official_bundle.json
 
-# 6. 冻结后独立验收
+# 语义审核同时要求当前连续直播回合。回放、集锦、中场/演播室、广告或比赛暂停画面
+# 即使包含清晰投篮和已注册人脸，也会被拒绝，不能进入正式技术统计。
+
+# 只校准干净原片的事件语义，不执行第二次球员身份 VLM 调用
+# 可选 --rim-detail-inset 使用传统篮筐检测生成同帧放大窗；结果仍需冻结后验收
+python -m scripts.run_official_autonomous_inference \
+  --candidate-bundle analysis_outputs/game/candidates.json \
+  --video /absolute/path/to/game.mp4 \
+  --semantic-only-vlm \
+  --output analysis_outputs/game/semantic_bundle.json
+
+# 7. 冻结后独立验收
 python -m scripts.evaluate_official_bundle \
   --bundle analysis_outputs/game/official_bundle.json \
   --truth /absolute/path/to/sealed_truth.csv \
@@ -228,6 +307,9 @@ python -m scripts.evaluate_official_bundle \
 ```
 
 `BASKETBALL_OFFICIAL_STATS_ENABLED` 等官方统计配置目前用于实验能力和脚本默认值，不会自动把官方统计包接入 `/analysis/run`。在 API 正式切换前，兼容链路和官方链路必须保持明确区分。
+
+RF-DETR 离线候选筛查也不会自动接入 API；显式选择
+`transformers_rfdetr` backend 时，模型路径必须是本地目录。
 
 ### 8. 人脸名单、识别与去重
 
@@ -243,21 +325,42 @@ python -m scripts.build_face_enrollment_candidates \
   --recognizer-model /absolute/path/to/face_recognition_sface.onnx \
   --benchmark-disjoint
 
+# 可选：从大清单生成哈希绑定的审核子集，避免把未查看的聚类声明为已审核
+python -m scripts.select_face_enrollment_candidates \
+  --candidates analysis_outputs/faces/candidates.json \
+  --cluster-id face-cluster-0001 \
+  --cluster-id face-cluster-0002 \
+  --output analysis_outputs/faces/review_subset.json
+
 # 2. 应用人工或 Codex 审核决定
 python -m scripts.approve_face_enrollment_candidates \
-  --candidates analysis_outputs/faces/candidates.json \
+  --candidates analysis_outputs/faces/review_subset.json \
   --decisions /absolute/path/to/decisions.json \
   --output analysis_outputs/faces/approved.json
 
-# 3. 构建可复用人脸库
+# 3. 构建可复用多模板人脸库
 python -m scripts.build_face_gallery \
   --manifest analysis_outputs/faces/approved.json \
   --detector-model /absolute/path/to/face_detection_yunet.onnx \
   --recognizer-model /absolute/path/to/face_recognition_sface.onnx \
   --output analysis_outputs/game/face_gallery.json
+
+# 4. 可选：把独立注册期的“人-队-号码”标注附加到人脸库
+# 标注必须使用 agu.face-jersey-annotation.v1、哈希封存且不含本场事件/统计答案
+python -m scripts.attach_face_jersey_annotations \
+  --face-gallery analysis_outputs/game/face_gallery.json \
+  --jersey-annotations /absolute/path/to/face_jersey_annotations.json \
+  --output analysis_outputs/game/face_gallery_with_jersey.json
+
+# 5. 必须通过名单覆盖门禁后才能读取验收原片
+python -m scripts.check_face_gallery_coverage \
+  --gallery analysis_outputs/game/face_gallery_with_jersey.json \
+  --roster /absolute/path/to/active_roster.json \
+  --minimum-coverage 0.95 \
+  --output analysis_outputs/game/face_gallery_coverage.json
 ```
 
-验收比赛本身不得用于补录该比赛缺失的球员人脸；否则会破坏独立验收。无法严格匹配时应保留 `unknown`，不能用球衣颜色、轨迹顺序或 Codex 猜测代替身份真值。
+验收比赛本身不得用于补录该比赛缺失的球员人脸；否则会破坏独立验收。球衣号码只能作为人脸名单内的注册属性：运行时仍由 AGU OCR/VLM 从原片读取，并要求同队、分区一致和置信度门禁后才能传播该人脸身份。无法严格匹配时应保留 `unknown`，不能用球衣颜色、轨迹顺序或 Codex 猜测代替身份真值。
 
 ### 9. Codex 辅助标注防泄漏
 
@@ -275,12 +378,77 @@ python -m scripts.seal_training_annotation_manifest \
 
 训练示例：
 
+所有本地训练都应通过资源守卫启动。默认每 5 秒记录整机 CPU、内存、可用内存和
+训练进程树 RSS；CPU 高于 95%、内存高于 90% 或可用内存低于 2 GiB 连续 3 次时，
+守卫只终止自己启动的训练进程组并返回退出码 75。日志为可追溯 JSONL：
+
+```bash
+python scripts/run_guarded_training.py \
+  --log analysis_outputs/training/resource-monitor.jsonl \
+  -- python -m scripts.train_action_owner_model \
+    --manifest analysis_outputs/training/manifest.json \
+    --annotations /absolute/path/to/action_owner_annotations.json \
+    --model-type extra_trees \
+    --output model_checkpoints/action_owner.json
+```
+
+阈值可按机器能力下调，但不得以直接运行训练脚本的方式绕过监控。一次瞬时峰值会自动
+复位，不会触发误杀；关键采样失败则 fail-closed，中止训练而不是无保护继续。
+
+其他训练入口参数如下（实际执行时同样放在守卫的 `--` 之后）：
+
 ```bash
 python -m scripts.train_action_owner_model \
   --manifest analysis_outputs/training/manifest.json \
   --annotations /absolute/path/to/action_owner_annotations.json \
   --model-type extra_trees \
   --output model_checkpoints/action_owner.json
+
+# 真实投篮标签模板先导出 event_present=null，由 Codex/人工只看训练原片填写
+python -m scripts.export_shot_validity_annotations \
+  --candidate-bundle analysis_outputs/training/game_a_candidates.json \
+  --output analysis_outputs/training/game_a_shot_labels.json
+
+# manifest 的 task-type 必须为 shot_validity；至少两场训练比赛并逐比赛留一校准
+python -m scripts.train_shot_validity_model \
+  --manifest analysis_outputs/training/shot_manifest.json \
+  --candidate-bundle analysis_outputs/training/game_a_candidates.json \
+                     analysis_outputs/training/game_b_candidates.json \
+  --annotations analysis_outputs/training/game_a_shot_labels.json \
+                analysis_outputs/training/game_b_shot_labels.json \
+  --minimum-precision 0.95 \
+  --output model_checkpoints/shot_validity.json
+
+# 全事件窗口时序方案：先从训练原片提取冻结骨干特征，再训练轻量传统分类头
+python -m scripts.extract_shot_validity_temporal_embeddings \
+  --manifest analysis_outputs/training/shot_manifest.json \
+  --candidate-bundle analysis_outputs/training/game_a_candidates.json \
+  --candidate-bundle analysis_outputs/training/game_b_candidates.json \
+  --annotation analysis_outputs/training/game_a_shot_labels.json \
+  --annotation analysis_outputs/training/game_b_shot_labels.json \
+  --video /absolute/path/to/training_game_a.mp4 \
+  --video /absolute/path/to/training_game_b.mp4 \
+  --backbone-checkpoint model_checkpoints/r2plus1d_18-kinetics400.pth \
+  --output analysis_outputs/training/shot_temporal_embeddings.json
+
+python -m scripts.train_shot_validity_temporal_model \
+  --embeddings analysis_outputs/training/shot_temporal_embeddings.json \
+  --minimum-precision 0.95 \
+  --minimum-per-video-recall 0.85 \
+  --output model_checkpoints/shot_validity_temporal.json
+
+# 冻结特征不足时，可端到端微调末层；每个 bundle/annotation/video 参数需成对重复
+python -m scripts.train_shot_validity_r2plus1d \
+  --manifest analysis_outputs/training/shot_manifest.json \
+  --candidate-bundle analysis_outputs/training/game_a_candidates.json \
+  --candidate-bundle analysis_outputs/training/game_b_candidates.json \
+  --annotation analysis_outputs/training/game_a_shot_labels.json \
+  --annotation analysis_outputs/training/game_b_shot_labels.json \
+  --video /absolute/path/to/training_game_a.mp4 \
+  --video /absolute/path/to/training_game_b.mp4 \
+  --backbone-checkpoint /absolute/path/to/r2plus1d_checkpoint.pt \
+  --checkpoint-output model_checkpoints/shot_validity_r2plus1d.pt \
+  --metadata-output analysis_outputs/training/shot_validity_r2plus1d.json
 ```
 
 禁止把高光、投丢、失误剪辑、CSV 技术统计、Codex 判断或验收真值作为运行时特征、提示词答案或回填规则。
@@ -295,6 +463,7 @@ python -m scripts.train_action_owner_model \
 - 检测器、跟踪器、ReID、姿态和球员身份模型；
 - YuNet/SFace 模型路径、人脸库和身份阈值；
 - Ollama 地址、VLM 模型、超时、审核和缓存；
+- 可选原片 ASR 开关、模型和语言；
 - 官方感知、候选、所有权模型、融合和质量阈值；
 - 输入允许根目录、上传目录、JSON/视频输出目录；
 - 服务主机、端口、日志级别和并发数。
@@ -395,10 +564,11 @@ AGU provides only the analysis engine and stable responses. Unified authenticati
 | v3 action-classification path | Available for compatibility | R(2+1)D emits proxy actions; `action_proxy` is not an official box score. |
 | Tracking, pose, identity, and VLM review | Available/configurable | Backends and local model paths are configurable; weights are not distributed. |
 | Raw-only official-statistics pipeline | Implemented, experimental | Perception, pose, identity graph, candidates, autonomous inference, and evaluation are separate scripts; not in the default API response. |
-| Face-list recognition and deduplication | Implemented, data incomplete | Supports YuNet + SFace galleries, reviewed manifests, identity graphs, and strict roster constraints; current roster coverage is insufficient. |
+| Face-list recognition and deduplication | Implemented, cross-game validation in progress | Supports YuNet + SFace multi-prototype galleries, reviewed manifests, identity graphs, and strict roster constraints; LAL–BOS is frozen at 19/19, while ATL–CHI has 21/23 entries and 19/23 pass the strict quality gate. |
 | Codex annotation firewall | Implemented | Training manifests record sources, task types, benchmark bundles, and benchmark-disjoint checks. |
+| Temporal real-shot gate | Implemented, not promoted | End-to-end game-held-out fine-tuning ran on 118 windows from four games; neither Kinetics nor SpaceJam initialization met per-game P≥0.95/R≥0.85, so the weights remain non-runtime. |
 | Independent full-game statistics | Not achieved | The project cannot yet claim reliable unattended official statistics for a complete game. |
-| Final accuracy ≥ 95% | Not demonstrated | Current localization F1 is `0.8889`, strict identity accuracy is `0`, and cross-game owner coverage is `1/11`; a second complete six-stat independent truth set is also missing. |
+| Final accuracy ≥ 95% | Not demonstrated | Team made-value component F1 is `0.8600`/`0.9703` on two games, but this is not a player six-stat result; only one LAL scoring event and no ATL scoring event contains a unique named candidate after identity mapping. |
 
 Final accuracy means evaluation on independent games after freeze. It is not training accuracy, isolated action-classification accuracy, or a result corrected by humans or Codex. Lower internal gates are integration aids only and do not replace the 95% product acceptance gate.
 
@@ -424,6 +594,7 @@ independent raw game
   -> pose bundle
   -> reviewed face roster + identity graph
   -> raw-only event candidates
+  -> optional stable broadcast-score deltas / raw-commentary ASR candidates
   -> AGU two-stage autonomous inference (conventional models + optional local VLM)
   -> official-statistics bundle
   -> post-freeze comparison with independent truth
@@ -442,25 +613,35 @@ Highlight, miss, and turnover clips plus existing CSV statistics may be used onl
 AGU prefers adapters, configuration, and feature flags around open-source components:
 
 - video IO: OpenCV and FFmpeg;
-- detection and tracking: Ultralytics YOLO, ByteTrack, and BoT-SORT;
+- detection and tracking: Ultralytics YOLO, optional offline Transformers
+  RF-DETR, ByteTrack, and BoT-SORT;
 - pose: configurable local pose models;
 - face recognition: OpenCV YuNet + SFace;
 - action recognition: PyTorch R(2+1)D;
 - VLM: local Ollama-compatible models;
+- raw audio: optional MLX Whisper adapter (candidate evidence only);
 - API: FastAPI and Pydantic.
 
 Deployers must review Ultralytics AGPL/commercial licensing for their use. The repository does not bind the workflow to hosted services, secrets, fixed model paths, or one GPU environment; CPU, MPS, CUDA, and offline paths are configuration choices. RTMDet and RTMPose are candidate alternatives, not currently bundled adapters.
 
+The experimental RF-DETR adapter is disabled by default. Enable it only with
+`BASKETBALL_OFFICIAL_DETECTOR_BACKEND=transformers_rfdetr` and a previously
+downloaded local Transformers directory in
+`BASKETBALL_OFFICIAL_DETECTOR_MODEL_PATH`; loading is forced offline. It is
+currently a candidate proposer only and has not passed the 0.85 precision gate.
+
+[MLX Examples/`mlx-whisper`](https://github.com/ml-explore/mlx-examples) code uses the MIT license. AGU neither selects default ASR weights nor redistributes them; enabling the adapter requires an explicit local path or model repository plus a license review for those weights. This Apple-Silicon backend remains optional and outside base dependencies. Other platforms can provide a replaceable ASR adapter with the same artifact/schema contract.
+
 ### 5. Quick start
 
-Python 3.10+ is required. Model weights, datasets, and game footage are not included.
+AGU local development and services use the Python 3.11 `.venv` exclusively. Model weights, datasets, and game footage are not included.
 
 ```bash
 git clone <repository-url>
 cd agu
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
@@ -575,14 +756,86 @@ python -m scripts.build_official_event_candidates \
   --require-face-gallery-identity \
   --output analysis_outputs/game/candidates.json
 
-# 5. AGU autonomous statistics with optional two-pass local VLM review
-python -m scripts.run_official_autonomous_inference \
+# 4b. Optional: run YOLO11 pose only inside candidate windows
+python -m scripts.run_official_pose_windows \
   --candidate-bundle analysis_outputs/game/candidates.json \
+  --video /absolute/path/to/game.mp4 \
+  --model model_checkpoints/yolo11n-pose.pt \
+  --output analysis_outputs/game/pose_windows.json
+
+# 4c. Optional: rebuild candidates through a frozen traditional real-shot gate
+python -m scripts.build_official_event_candidates \
+  --perception analysis_outputs/game/perception.json \
+  --pose analysis_outputs/game/pose_windows.json \
+  --shot-validity-model model_checkpoints/shot_validity.json \
+  --video /absolute/path/to/game.mp4 --game-id game_a \
+  --output analysis_outputs/game/candidates_gated.json
+
+# 4d. Optional: apply the frozen full-window R(2+1)D temporal head
+python -m scripts.apply_shot_validity_temporal_model \
+  --candidate-bundle analysis_outputs/game/candidates_gated.json \
+  --video /absolute/path/to/game.mp4 \
+  --model model_checkpoints/shot_validity_temporal.json \
+  --backbone-checkpoint model_checkpoints/r2plus1d_18-kinetics400.pth \
+  --output analysis_outputs/game/candidates_temporal_gated.json
+
+# 5. Optional: extract stable raw-broadcast score deltas and bind unique candidates
+python -m scripts.run_official_scoreboard_evidence \
+  --candidate-bundle analysis_outputs/game/candidates.json \
+  --video /absolute/path/to/game.mp4 \
+  --team-id HOME --team-id AWAY \
+  --sample-interval-sec 2 \
+  --cache analysis_outputs/game/scoreboard.cache.json \
+  --evidence-output analysis_outputs/game/scoreboard.json \
+  --output analysis_outputs/game/candidates_with_scoreboard.json
+
+# 5b. Optional: extract action/name candidates from the same raw audio track
+# audio_roster.json must be a pre-sealed agu.audio-roster.v1 registration asset.
+# It can be deterministically built with scripts.build_audio_roster from a
+# registration manifest whose benchmark_answers_included field is false.
+# Repeat --candidate-action to limit speech-only additions that have no matching
+# visual candidate. Each speech mention attaches only to the best temporal
+# overlap of the same action, preventing one mention from amplifying duplicates.
+# Shot-result wording is stored only as speech_shot_outcome_candidate evidence;
+# ASR never changes outcome, status, or primary_player_id.
+# Apple Silicon adapter: .venv/bin/python -m pip install -e '.[audio-mlx]'
+python -m scripts.run_official_audio_evidence \
+  --enable \
+  --model /absolute/path/or/reviewed-model-repository \
+  --candidate-bundle analysis_outputs/game/candidates_with_scoreboard.json \
+  --video /absolute/path/to/game.mp4 \
+  --roster analysis_outputs/game/audio_roster.json \
+  --transcript-cache analysis_outputs/game/audio_transcript.json \
+  --candidate-action assist --candidate-action block \
+  --candidate-action foul --candidate-action steal \
+  --candidate-action turnover \
+  --evidence-output analysis_outputs/game/audio_evidence.json \
+  --output analysis_outputs/game/candidates_with_audio.json
+
+# Offline Codex review may only be sealed as a runtime_consumable=false
+# development-evaluation artifact. scripts.seal_audio_action_review verifies
+# the bundle hash and exact candidate coverage; it is never a runtime answer.
+
+# 6. AGU autonomous statistics with optional two-pass local VLM review
+python -m scripts.run_official_autonomous_inference \
+  --candidate-bundle analysis_outputs/game/candidates_with_audio.json \
   --video /absolute/path/to/game.mp4 \
   --two-pass-vlm \
   --output analysis_outputs/game/official_bundle.json
 
-# 6. Independent post-freeze acceptance
+# Semantic review also requires the current continuous live possession. Replays,
+# highlight packages, halftime/studio footage, commercials, and game breaks are
+# rejected even when a shot and an enrolled face are clearly visible.
+
+# Calibrate clean-frame event semantics without a second actor-identity VLM call
+# Optional --rim-detail-inset adds a same-frame crop from traditional rim detections; post-freeze acceptance remains required
+python -m scripts.run_official_autonomous_inference \
+  --candidate-bundle analysis_outputs/game/candidates.json \
+  --video /absolute/path/to/game.mp4 \
+  --semantic-only-vlm \
+  --output analysis_outputs/game/semantic_bundle.json
+
+# 7. Independent post-freeze acceptance
 python -m scripts.evaluate_official_bundle \
   --bundle analysis_outputs/game/official_bundle.json \
   --truth /absolute/path/to/sealed_truth.csv \
@@ -592,6 +845,10 @@ python -m scripts.evaluate_official_bundle \
 ```
 
 Official-statistics settings such as `BASKETBALL_OFFICIAL_STATS_ENABLED` currently support experimental capabilities and script defaults. They do not automatically attach the official bundle to `/analysis/run`; keep compatibility and official outputs distinct until the API is deliberately integrated.
+
+The offline RF-DETR candidate screen is likewise not attached to the API.
+Selecting the `transformers_rfdetr` backend requires an explicit local model
+directory.
 
 ### 8. Face roster, recognition, and deduplication
 
@@ -607,21 +864,67 @@ python -m scripts.build_face_enrollment_candidates \
   --recognizer-model /absolute/path/to/face_recognition_sface.onnx \
   --benchmark-disjoint
 
+# Optional: create a hash-bound review subset without claiming unseen clusters were reviewed
+python -m scripts.select_face_enrollment_candidates \
+  --candidates analysis_outputs/faces/candidates.json \
+  --cluster-id face-cluster-0001 \
+  --cluster-id face-cluster-0002 \
+  --output analysis_outputs/faces/review_subset.json
+
 # 2. Apply human or Codex review decisions
 python -m scripts.approve_face_enrollment_candidates \
-  --candidates analysis_outputs/faces/candidates.json \
+  --candidates analysis_outputs/faces/review_subset.json \
   --decisions /absolute/path/to/decisions.json \
   --output analysis_outputs/faces/approved.json
 
-# 3. Build a reusable face gallery
+# 3. Build a reusable multi-prototype face gallery
 python -m scripts.build_face_gallery \
   --manifest analysis_outputs/faces/approved.json \
   --detector-model /absolute/path/to/face_detection_yunet.onnx \
   --recognizer-model /absolute/path/to/face_recognition_sface.onnx \
   --output analysis_outputs/game/face_gallery.json
+
+# 4. Optional: attach benchmark-disjoint person/team/number enrollment labels
+# The agu.face-jersey-annotation.v1 input must be hash sealed and contain no event/stat answers
+python -m scripts.attach_face_jersey_annotations \
+  --face-gallery analysis_outputs/game/face_gallery.json \
+  --jersey-annotations /absolute/path/to/face_jersey_annotations.json \
+  --output analysis_outputs/game/face_gallery_with_jersey.json
+
+# 5. Require roster coverage before opening benchmark footage
+python -m scripts.check_face_gallery_coverage \
+  --gallery analysis_outputs/game/face_gallery_with_jersey.json \
+  --roster /absolute/path/to/active_roster.json \
+  --minimum-coverage 0.95 \
+  --output analysis_outputs/game/face_gallery_coverage.json
 ```
 
-Do not enroll missing players from the benchmark game itself; doing so breaks independent acceptance. A failed strict match must remain `unknown`. Jersey color, track order, or a Codex guess cannot replace identity truth.
+Do not enroll missing players from the benchmark game itself; doing so breaks independent acceptance. A jersey number is only a registered attribute of a face-roster entry: at runtime AGU must read it from the raw video and pass same-team, partition-consensus, and confidence gates before propagating that face identity. A failed strict match must remain `unknown`. Jersey color, track order, or a Codex guess cannot replace identity truth.
+
+Benchmark-disjoint MOT data can also train the anonymous body-ReID backbone. Use
+`dataset_track` only when the upstream dataset explicitly keeps track IDs stable
+across the selected sequences; otherwise keep the safer `sequence_track` default.
+
+```bash
+python scripts/prepare_mot_reid_dataset.py \
+  --catalog analysis_outputs/training/teamtrack_catalog.json \
+  --dataset-root dataset/public_sources/teamtrack \
+  --output-root dataset/public_sources/teamtrack/reid_crops \
+  --manifest analysis_outputs/training/teamtrack_reid.json \
+  --identity-scope dataset_track
+
+python scripts/train_reid_model.py \
+  --manifest analysis_outputs/training/teamtrack_reid.json \
+  --crop-root dataset/public_sources/teamtrack/reid_crops \
+  --validation-sequence Q4_side_60-90 \
+  --minimum-validation-top1 0.85 \
+  --output model_checkpoints/reid/teamtrack_mobilenet_v3_small.pt
+```
+
+The trainer rejects a checkpoint that does not beat the ImageNet retrieval
+baseline or the configured held-out Top-1 gate. Pass an accepted checkpoint path
+through `identity_embedding_weights`; the runtime loads only its visual feature
+state and hash-bound provenance, never its anonymous training class labels.
 
 ### 9. Codex-assisted annotation firewall
 
@@ -639,12 +942,84 @@ python -m scripts.seal_training_annotation_manifest \
 
 Training example:
 
+Run every local training command through the resource guard. By default it
+records host CPU, memory, available memory, and supervised process-tree RSS
+every five seconds. Three consecutive samples above 95% CPU, above 90% memory,
+or below 2 GiB available memory terminate only the supervised training process
+group and return exit code 75:
+
+```bash
+python scripts/run_guarded_training.py \
+  --log analysis_outputs/training/resource-monitor.jsonl \
+  -- python -m scripts.train_action_owner_model \
+    --manifest analysis_outputs/training/manifest.json \
+    --annotations /absolute/path/to/action_owner_annotations.json \
+    --model-type extra_trees \
+    --output model_checkpoints/action_owner.json
+```
+
+The JSONL log is part of the training evidence. Limits may be lowered for a
+smaller machine, but training must not bypass the monitor. A recovered transient
+resets the breach counter; an unavailable critical sampler fails closed instead
+of continuing unprotected.
+
+The remaining commands below show trainer-specific arguments; place the actual
+command after the guard's `--` separator.
+
 ```bash
 python -m scripts.train_action_owner_model \
   --manifest analysis_outputs/training/manifest.json \
   --annotations /absolute/path/to/action_owner_annotations.json \
   --model-type extra_trees \
   --output model_checkpoints/action_owner.json
+
+# Export event_present=null first; Codex/humans label only the training footage
+python -m scripts.export_shot_validity_annotations \
+  --candidate-bundle analysis_outputs/training/game_a_candidates.json \
+  --output analysis_outputs/training/game_a_shot_labels.json
+
+# The manifest task type must be shot_validity; calibration leaves out one game
+python -m scripts.train_shot_validity_model \
+  --manifest analysis_outputs/training/shot_manifest.json \
+  --candidate-bundle analysis_outputs/training/game_a_candidates.json \
+                     analysis_outputs/training/game_b_candidates.json \
+  --annotations analysis_outputs/training/game_a_shot_labels.json \
+                analysis_outputs/training/game_b_shot_labels.json \
+  --minimum-precision 0.95 \
+  --output model_checkpoints/shot_validity.json
+
+# Full-window temporal path: extract frozen-backbone features from training raw
+# footage, then fit a lightweight traditional classifier head.
+python -m scripts.extract_shot_validity_temporal_embeddings \
+  --manifest analysis_outputs/training/shot_manifest.json \
+  --candidate-bundle analysis_outputs/training/game_a_candidates.json \
+  --candidate-bundle analysis_outputs/training/game_b_candidates.json \
+  --annotation analysis_outputs/training/game_a_shot_labels.json \
+  --annotation analysis_outputs/training/game_b_shot_labels.json \
+  --video /absolute/path/to/training_game_a.mp4 \
+  --video /absolute/path/to/training_game_b.mp4 \
+  --backbone-checkpoint model_checkpoints/r2plus1d_18-kinetics400.pth \
+  --output analysis_outputs/training/shot_temporal_embeddings.json
+
+python -m scripts.train_shot_validity_temporal_model \
+  --embeddings analysis_outputs/training/shot_temporal_embeddings.json \
+  --minimum-precision 0.95 \
+  --minimum-per-video-recall 0.85 \
+  --output model_checkpoints/shot_validity_temporal.json
+
+# When frozen features are insufficient, fine-tune late layers end to end.
+# Repeat bundle/annotation/video arguments as aligned triples.
+python -m scripts.train_shot_validity_r2plus1d \
+  --manifest analysis_outputs/training/shot_manifest.json \
+  --candidate-bundle analysis_outputs/training/game_a_candidates.json \
+  --candidate-bundle analysis_outputs/training/game_b_candidates.json \
+  --annotation analysis_outputs/training/game_a_shot_labels.json \
+  --annotation analysis_outputs/training/game_b_shot_labels.json \
+  --video /absolute/path/to/training_game_a.mp4 \
+  --video /absolute/path/to/training_game_b.mp4 \
+  --backbone-checkpoint /absolute/path/to/r2plus1d_checkpoint.pt \
+  --checkpoint-output model_checkpoints/shot_validity_r2plus1d.pt \
+  --metadata-output analysis_outputs/training/shot_validity_r2plus1d.json
 ```
 
 Highlight, miss, or turnover clips, CSV box scores, Codex judgments, and benchmark truth must never become runtime features, prompt answers, or correction rules.
@@ -659,6 +1034,7 @@ Main groups include:
 - detector, tracker, ReID, pose, and player-identity models;
 - YuNet/SFace paths, face gallery, and identity thresholds;
 - Ollama URL, VLM model, timeout, audit, and cache;
+- optional raw-audio ASR enablement, model, and language;
 - official perception, candidates, ownership models, fusion, and quality gates;
 - allowed input roots, upload directory, JSON output, and video output;
 - server host, port, logging, and concurrency.

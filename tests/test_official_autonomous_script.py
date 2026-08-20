@@ -4,6 +4,7 @@ import numpy as np
 
 from app.analysis.schemas import EventEvidenceResponse, GameEventResponse
 from scripts.run_official_autonomous_inference import (
+    _add_rim_detail_inset,
     _evenly_select_values,
     _overlay_candidate_identities,
     _review_frame_bounds,
@@ -182,6 +183,32 @@ def test_review_bounds_fall_back_to_evidence_anchor() -> None:
     event.evidence[0].details["candidate_event_frame"] = 110
 
     assert _review_frame_bounds(event, source_fps=30.0, pre_seconds=1.0, post_seconds=1.0) == (80, 140)
+
+
+def test_review_bounds_prefer_cluster_midpoint_over_first_hit() -> None:
+    event = _event()
+    event.evidence[0].details.update(
+        {"candidate_event_frame": 110, "review_anchor_frame": 128}
+    )
+
+    assert _review_frame_bounds(event, source_fps=30.0, pre_seconds=1.0, post_seconds=1.0) == (98, 158)
+
+
+def test_rim_detail_inset_uses_traditional_bbox_without_changing_frame_shape() -> None:
+    event = _event()
+    event.evidence[0].details["review_rim_observations"] = [
+        {
+            "frame": 110,
+            "rim_bbox": {"x1": 40, "y1": 20, "x2": 60, "y2": 30},
+        }
+    ]
+    frame = np.zeros((100, 160, 3), dtype=np.uint8)
+    frame[0:60, 0:100] = 100
+
+    augmented = _add_rim_detail_inset(frame, event, frame_number=110)
+
+    assert augmented.shape == frame.shape
+    assert not np.array_equal(augmented, frame)
 
 
 def test_evenly_selected_frame_numbers_match_displayed_images() -> None:

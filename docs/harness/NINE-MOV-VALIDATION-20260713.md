@@ -69,5 +69,5 @@ AGU wraps OpenCV YuNet/SFace for local face recognition, RapidOCR as an optional
 - Identity regression selection after the adjustment: `7 passed`.
 - Fresh post-fix accurate CLI task `9fc5964fc49f428883cf44db8092c7f0` completed through the local API. Its saved result contains the expected `segment_0:player_17` to `segment_1:player_6` identity stitch with SFace 0.89, jersey darkness gap 0.00, continuity 0.86, and combined confidence 0.86.
 - Final full pytest after candidate, rolling-shutter context, and identity refinements: `139 passed` (15 dependency/test-fixture warnings).
-- Harness gate: `/Users/ppt/projects/agu/venv/bin/python scripts/verify_harness.py` passed.
+- Harness gate: `/Users/ppt/projects/agu/.venv/bin/python scripts/verify_harness.py` passed.
 - Final latest-code local curl: `/health` returned `ok`; `/ready` returned `ready`; smoke task `679dde9f205d4d6381d35ea72d24624a` completed with 7 records.

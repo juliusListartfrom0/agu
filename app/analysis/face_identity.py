@@ -18,6 +18,9 @@ class FaceIdentityResult:
     model_id: str
     sample_count: int
     quality: float
+    prototype_embeddings: tuple[np.ndarray, ...] = ()
+    prototype_qualities: tuple[float, ...] = ()
+    prototype_sample_counts: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -77,11 +80,17 @@ class OpenCvSFaceIdentityAdapter:
         if not reliable_embeddings:
             return None
         aggregate = _l2_normalize(np.stack(reliable_embeddings, axis=0).mean(axis=0))
+        prototypes = _supported_face_prototypes(reliable_embeddings)
+        if not prototypes:
+            prototypes = [(aggregate, quality, len(reliable_embeddings))]
         return FaceIdentityResult(
             embedding=aggregate,
             model_id=self.model_id,
             sample_count=len(reliable_embeddings),
             quality=quality,
+            prototype_embeddings=tuple(item[0] for item in prototypes),
+            prototype_qualities=tuple(item[1] for item in prototypes),
+            prototype_sample_counts=tuple(item[2] for item in prototypes),
         )
 
     def detect_frame_faces(
@@ -120,7 +129,7 @@ class OpenCvSFaceIdentityAdapter:
             for left in range(len(selected))
             for right in range(left + 1, len(selected))
         ]
-        quality = float(np.mean(pair_scores)) if pair_scores else 0.0
+        quality = _bounded_quality(np.mean(pair_scores)) if pair_scores else 0.0
         if quality < 0.50:
             return [], quality
         return selected, quality
@@ -222,3 +231,67 @@ def _l2_normalize(vector: np.ndarray) -> np.ndarray:
     vector = vector.astype(np.float32)
     norm = float(np.linalg.norm(vector))
     return vector / norm if norm > 0.0 else vector
+
+
+def _supported_face_prototypes(
+    embeddings: Sequence[np.ndarray],
+    *,
+    similarity_threshold: float = 0.65,
+    maximum_prototypes: int = 4,
+) -> list[tuple[np.ndarray, float, int]]:
+    """Partition consistent samples into supported view templates.
+
+    A prototype needs at least two mutually compatible observations. This avoids
+    turning a single unusual pose into a permissive gallery template while
+    preserving distinct frontal/profile or lighting modes that should not be
+    averaged into one weak identity vector.
+    """
+
+    if len(embeddings) < 2:
+        return []
+    matrix = np.stack([_l2_normalize(item) for item in embeddings], axis=0)
+    similarities = matrix @ matrix.T
+    remaining = set(range(len(embeddings)))
+    prototypes: list[tuple[np.ndarray, float, int]] = []
+    while len(remaining) >= 2 and len(prototypes) < maximum_prototypes:
+        seed = max(
+            remaining,
+            key=lambda index: (
+                sum(float(similarities[index, other]) >= similarity_threshold for other in remaining),
+                float(np.mean([similarities[index, other] for other in remaining])),
+                -index,
+            ),
+        )
+        ordered = sorted(
+            remaining - {seed},
+            key=lambda index: (float(similarities[seed, index]), -index),
+            reverse=True,
+        )
+        cluster = [seed]
+        for candidate in ordered:
+            if all(float(similarities[candidate, member]) >= similarity_threshold for member in cluster):
+                cluster.append(candidate)
+        if len(cluster) < 2:
+            remaining.remove(seed)
+            continue
+        vectors = matrix[cluster]
+        pair_scores = [
+            float(vectors[left] @ vectors[right])
+            for left in range(len(vectors))
+            for right in range(left + 1, len(vectors))
+        ]
+        prototypes.append(
+            (
+                _l2_normalize(vectors.mean(axis=0)),
+                _bounded_quality(np.mean(pair_scores)),
+                len(cluster),
+            )
+        )
+        remaining.difference_update(cluster)
+    return sorted(prototypes, key=lambda item: (item[2], item[1]), reverse=True)
+
+
+def _bounded_quality(value: float) -> float:
+    """Keep float32 cosine-derived quality inside its public [0, 1] contract."""
+
+    return min(1.0, max(0.0, float(value)))

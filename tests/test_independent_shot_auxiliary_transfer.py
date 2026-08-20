@@ -92,6 +92,5 @@ def test_label_hidden_plan_rejects_target_field() -> None:
     assert verify_label_hidden_plan(plan)["plan_sha256"] == plan["plan_sha256"]
     leaked = dict(plan, examples=[dict(plan["examples"][0], event_present=True)])
     leaked["plan_sha256"] = canonical_sha256(leaked, hash_field="plan_sha256")
-    with pytest.raises(ValueError, match="leaks labels"):
+    with pytest.raises(ValueError, match="forbidden label field"):
         verify_label_hidden_plan(leaked)
-

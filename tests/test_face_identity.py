@@ -45,6 +45,45 @@ def test_sface_adapter_aggregates_normalized_face_embeddings(tmp_path):
     assert result.embedding.shape == (2,)
     assert np.linalg.norm(result.embedding) == pytest.approx(1.0)
     assert "sface" in result.model_id
+    assert len(result.prototype_embeddings) == 1
+    assert result.prototype_sample_counts == (2,)
+    assert result.prototype_qualities[0] > 0.90
+
+
+def test_sface_adapter_clamps_float32_similarity_quality_to_one(tmp_path):
+    detector_model = tmp_path / "yunet.onnx"
+    recognizer_model = tmp_path / "sface.onnx"
+    detector_model.touch()
+    recognizer_model.touch()
+
+    detector = MagicMock()
+    detector.detect.return_value = (
+        None,
+        np.array(
+            [[8.0, 4.0, 16.0, 16.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.90]],
+            dtype=np.float32,
+        ),
+    )
+    recognizer = MagicMock()
+    recognizer.alignCrop.side_effect = lambda crop, face: crop
+    recognizer.feature.side_effect = [
+        np.array([[-0.9978091, 0.06615936]], dtype=np.float32),
+        np.array([[-0.9978091, 0.06615936]], dtype=np.float32),
+    ]
+
+    with (
+        patch("app.analysis.face_identity.cv2.FaceDetectorYN.create", return_value=detector),
+        patch(
+            "app.analysis.face_identity.cv2.FaceRecognizerSF.create",
+            return_value=recognizer,
+        ),
+    ):
+        adapter = OpenCvSFaceIdentityAdapter(str(detector_model), str(recognizer_model))
+        result = adapter.embed_player_crops([np.full((80, 40, 3), 100, dtype=np.uint8) for _ in range(2)])
+
+    assert result is not None
+    assert result.quality == 1.0
+    assert result.prototype_qualities == (1.0,)
 
 
 def test_sface_adapter_rejects_face_below_player_upper_body(tmp_path):

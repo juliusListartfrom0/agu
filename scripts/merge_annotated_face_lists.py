@@ -71,7 +71,12 @@ def merge_annotated_face_lists(
         team_ids = {str(item["team_id"]) for item in source_people if item.get("team_id")}
         if len(team_ids) > 1:
             raise ValueError(f"conflicting team IDs for merged person: {person_id}")
-        samples = [dict(sample) for item in source_people for sample in item.get("samples") or []]
+        samples = []
+        for source_person_id, item in zip(source_person_ids, source_people):
+            for sample in item.get("samples") or []:
+                normalized_sample = {"path": sample} if isinstance(sample, str) else dict(sample)
+                normalized_sample.setdefault("prototype_source_id", source_person_id)
+                samples.append(normalized_sample)
         if len(samples) < 2:
             raise ValueError(f"merged person has fewer than two samples: {person_id}")
         merged_people.append(

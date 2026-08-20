@@ -14,7 +14,7 @@ README/code consistency check below.
 1. Start AGU locally on an available loopback port:
 
 ```bash
-/Users/ppt/projects/agu/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+/Users/ppt/projects/agu/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 ```
 
 If port `8765` is busy, choose another local port and use the same port for all

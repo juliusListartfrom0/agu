@@ -113,3 +113,24 @@ These extension points should not add business database writes, authentication, 
 Detector, tracker, ReID, OCR, pose, VLM, and storage integrations should remain
 optional adapters with a documented fallback. AGU owns stable schemas, task and
 segment orchestration, basketball evidence reconciliation, and evaluation.
+
+Offline candidate-window detector screening supports
+`UltralyticsDetectorAdapter` and `RFDETRDetectorAdapter` behind the same
+`DetectorAdapter` contract. RF-DETR is installed only through the
+`detection-rfdetr` extra and is not part of the service extra or a promoted
+runtime path:
+
+```bash
+python -m pip install -e '.[detection-rfdetr]'
+python scripts/run_official_perception_windows.py \
+  --backend rfdetr \
+  --candidate-bundle <sealed-candidates.json> \
+  --video <raw-video.mp4> \
+  --model <checkpoint.pth> \
+  --output <training-only-perception.json>
+```
+
+The adapter converts OpenCV BGR frames to the RF-DETR RGB contract, maps the
+four E-BARD classes into AGU's stable object types, and drops the legacy
+checkpoint background logit. Candidate/raw hashes remain verified by the
+window runner.

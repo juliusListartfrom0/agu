@@ -41,6 +41,13 @@ def parse_args() -> argparse.Namespace:
         help="Optional repeatable open-vocabulary class prompt passed to a compatible model",
     )
     parser.add_argument(
+        "--object-type",
+        action="append",
+        choices=("player", "basketball", "rim", "backboard", "referee"),
+        default=[],
+        help="Optional repeatable output allowlist for specialist perception passes",
+    )
+    parser.add_argument(
         "--rim-max-center-y-ratio",
         type=float,
         default=1.0,
@@ -73,6 +80,7 @@ def run_perception_scan(
     track_players: bool = True,
     tracker_config: str = "bytetrack.yaml",
     class_prompts: tuple[str, ...] = (),
+    object_types: tuple[str, ...] = (),
     rim_max_center_y_ratio: float = 1.0,
     rim_min_aspect_ratio: float = 0.0,
 ) -> dict[str, Any]:
@@ -128,13 +136,13 @@ def run_perception_scan(
             frame_numbers.append(frame_number)
             sampled += 1
             if len(frames) >= batch_size:
-                batch_detections = _filter_rims_by_image_geometry(
+                batch_detections = _filter_object_types(_filter_rims_by_image_geometry(
                     list(detector.detect(frames, frame_numbers)),
                     frames,
                     frame_numbers,
                     max_center_y_ratio=rim_max_center_y_ratio,
                     min_aspect_ratio=rim_min_aspect_ratio,
-                )
+                ), object_types)
                 player_color_features.update(
                     _extract_player_color_features(batch_detections, frames, frame_numbers)
                 )
@@ -148,13 +156,13 @@ def run_perception_scan(
             if max_samples and sampled >= max_samples:
                 break
         if frames:
-            batch_detections = _filter_rims_by_image_geometry(
+            batch_detections = _filter_object_types(_filter_rims_by_image_geometry(
                 list(detector.detect(frames, frame_numbers)),
                 frames,
                 frame_numbers,
                 max_center_y_ratio=rim_max_center_y_ratio,
                 min_aspect_ratio=rim_min_aspect_ratio,
-            )
+            ), object_types)
             player_color_features.update(
                 _extract_player_color_features(batch_detections, frames, frame_numbers)
             )
@@ -192,6 +200,7 @@ def run_perception_scan(
             "player_tracking": track_players,
             "tracker_config": tracker_config if track_players else "",
             "class_prompts": list(class_prompts),
+            "object_type_allowlist": list(object_types),
             "rim_max_center_y_ratio": rim_max_center_y_ratio,
             "rim_min_aspect_ratio": rim_min_aspect_ratio,
             "team_assignment": "two_cluster_torso_lab_v1",
@@ -227,6 +236,7 @@ def main() -> int:
         track_players=args.track_players,
         tracker_config=args.tracker_config,
         class_prompts=tuple(args.class_prompt),
+        object_types=tuple(args.object_type),
         rim_max_center_y_ratio=args.rim_max_center_y_ratio,
         rim_min_aspect_ratio=args.rim_min_aspect_ratio,
     )
@@ -272,6 +282,18 @@ def _filter_rims_by_image_geometry(
             continue
         output.append(detection)
     return output
+
+
+def _filter_object_types(
+    detections: list[PerceptionDetectionResponse],
+    object_types: tuple[str, ...],
+) -> list[PerceptionDetectionResponse]:
+    """Retain only requested specialist outputs before costly accumulation."""
+
+    if not object_types:
+        return detections
+    allowed = set(object_types)
+    return [item for item in detections if item.object_type in allowed]
 
 
 def _extract_player_color_features(

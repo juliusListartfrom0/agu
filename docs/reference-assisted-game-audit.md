@@ -60,13 +60,13 @@ minimum_hamming_margin=3
 ## 运行
 
 ```bash
-venv/bin/python scripts/audit_reference_game.py \
+.venv/bin/python scripts/audit_reference_game.py \
   --reference-dir /path/to/reference \
   --raw-dir /path/to/raw-periods \
   --output-dir analysis_outputs/game-audit \
   --fingerprint
 
-venv/bin/python scripts/build_reference_codex_review.py \
+.venv/bin/python scripts/build_reference_codex_review.py \
   --matches-json analysis_outputs/game-audit/reference_raw_matches.json \
   --output-dir analysis_outputs/game-audit/codex_review
 ```

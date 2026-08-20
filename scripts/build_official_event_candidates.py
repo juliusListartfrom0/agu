@@ -30,6 +30,10 @@ from app.analysis.schemas import (  # noqa: E402
     OfficialIdentityGraphArtifactResponse,
     PerceptionDetectionResponse,
 )
+from app.analysis.shot_validity import (  # noqa: E402
+    ShotValidityModel,
+    apply_shot_validity_gate,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,6 +109,16 @@ def parse_args() -> argparse.Namespace:
         help="Zero-based perception source index whose raw player IDs the identity graph resolves",
     )
     parser.add_argument("--merge-gap-sec", type=float, default=3.0)
+    parser.add_argument(
+        "--shot-validity-model",
+        type=Path,
+        help="Optional sealed Extra Trees model used to reject false shot candidates",
+    )
+    parser.add_argument(
+        "--shot-validity-threshold",
+        type=float,
+        help="Optional override for the calibrated model threshold",
+    )
     return parser.parse_args()
 
 
@@ -134,6 +148,8 @@ def build_candidates(
     minimum_approach_rise_px: float = 0.0,
     approach_lookback_sec: float = 3.0,
     maximum_ball_speed_px_per_frame: float = 80.0,
+    shot_validity_model_path: Path | None = None,
+    shot_validity_threshold: float | None = None,
 ) -> object:
     if maximum_player_candidates <= 0:
         raise ValueError("maximum_player_candidates must be positive")
@@ -190,11 +206,18 @@ def build_candidates(
         if not face_gallery_player_ids:
             raise ValueError("identity graph contains no face-gallery anchored players")
     detections: list[PerceptionDetectionResponse] = []
+    authoritative_player_start = 1 + len(additional_perception_paths or [])
+    dedicated_player_perception = bool(player_perception_paths)
     for artifact_index, (perception_payload, allowed_types) in enumerate(perception_sources):
         source_detections = [
             PerceptionDetectionResponse.model_validate(item)
             for item in perception_payload.get("detections") or []
-            if allowed_types is None or str(item.get("object_type") or "") in allowed_types
+            if (allowed_types is None or str(item.get("object_type") or "") in allowed_types)
+            and not (
+                dedicated_player_perception
+                and artifact_index < authoritative_player_start
+                and str(item.get("object_type") or "") == "player"
+            )
         ]
         preserve_player_id = False
         if identity_artifact is not None and artifact_index == identity_graph_perception_index:
@@ -274,6 +297,22 @@ def build_candidates(
         config=settings,
         event_id_prefix="raw-vision",
     )
+    shot_validity_model = None
+    vision_shot_count_before_gate = sum(
+        event.event_type == "field_goal_attempt" for event in vision_events
+    )
+    if shot_validity_model_path is not None:
+        shot_validity_model = ShotValidityModel(
+            json.loads(shot_validity_model_path.read_text(encoding="utf-8"))
+        )
+        vision_events = apply_shot_validity_gate(
+            vision_events,
+            model=shot_validity_model,
+            threshold=shot_validity_threshold,
+        )
+    vision_shot_count_after_gate = sum(
+        event.event_type == "field_goal_attempt" for event in vision_events
+    )
     candidate_groups = [vision_events]
     if legacy_analysis_path is not None:
         legacy_payload = json.loads(legacy_analysis_path.read_text(encoding="utf-8"))
@@ -314,6 +353,7 @@ def build_candidates(
             "candidate_sources": ["ball_rim", *(["legacy_analysis"] if legacy_analysis_path else [])],
             "perception_artifact_count": len(perception_sources),
             "player_only_perception_artifact_count": len(player_perception_paths or []),
+            "dedicated_player_perception_authoritative": dedicated_player_perception,
             "min_shot_candidate_confidence": min_shot_candidate_confidence,
             "suppress_rebound_after_vision_make": suppress_rebound_after_vision_make,
             "rebound_suppression_make_confidence": rebound_suppression_make_confidence,
@@ -329,11 +369,27 @@ def build_candidates(
             "face_gallery_anchored_player_count": len(face_gallery_player_ids),
             "pose_artifact_count": len(pose_paths or []),
             "merge_gap_sec": merge_gap_sec,
+            "shot_validity_enabled": shot_validity_model is not None,
+            "shot_validity_threshold": (
+                shot_validity_threshold
+                if shot_validity_threshold is not None
+                else (
+                    float(shot_validity_model.artifact["threshold"])
+                    if shot_validity_model is not None
+                    else None
+                )
+            ),
+            "vision_shot_count_before_gate": vision_shot_count_before_gate,
+            "vision_shot_count_after_gate": vision_shot_count_after_gate,
         },
         model_provenance={
             "producer": "agu",
             "artifact_role": "candidate_only",
-            "candidate_backend": "traditional_cv_ball_rim+agu_action_model",
+            "candidate_backend": (
+                "traditional_cv_ball_rim+shot_validity+agu_action_model"
+                if shot_validity_model is not None
+                else "traditional_cv_ball_rim+agu_action_model"
+            ),
             "perception_schema": str(payload["schema_version"]),
             "detector_model_sha256": str((payload.get("detector") or {}).get("model_sha256") or ""),
             "additional_detector_model_sha256": ",".join(
@@ -347,6 +403,13 @@ def build_candidates(
                 identity_artifact.model_provenance.get("embedding_model", "") if identity_artifact else ""
             ),
             "pose_model_sha256": ",".join(pose_model_hashes),
+            "shot_validity_model_sha256": (
+                str(shot_validity_model.artifact["model_sha256"])
+                if shot_validity_model is not None
+                else ""
+            ),
+            "vision_shot_count_before_gate": str(vision_shot_count_before_gate),
+            "vision_shot_count_after_gate": str(vision_shot_count_after_gate),
         },
     )
 
@@ -407,6 +470,8 @@ def main() -> int:
         minimum_approach_rise_px=args.minimum_approach_rise_px,
         approach_lookback_sec=args.approach_lookback_sec,
         maximum_ball_speed_px_per_frame=args.maximum_ball_speed_px_per_frame,
+        shot_validity_model_path=args.shot_validity_model,
+        shot_validity_threshold=args.shot_validity_threshold,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(bundle.model_dump_json(indent=2) + "\n", encoding="utf-8")

@@ -24,9 +24,9 @@ Please keep these out of AGU:
 ## Development Setup
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 

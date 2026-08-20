@@ -1,0 +1,227 @@
+"""End-to-end test of the TASK-0258 v2 production pipeline orchestration."""
+
+from __future__ import annotations
+
+import json
+
+from app.analysis.task0258_module_a_v2 import MODULE_ID
+from app.analysis.task0258_v2_pipeline import (
+    build_candidate_gate_payload,
+    build_candidate_receipt_bundle_payload,
+    build_postpublication_verification_payload,
+    seal_candidate_v2,
+)
+from app.analysis.task0258_v2_pipeline_cli import assemble_candidate_members, run_v2_pipeline
+
+
+def _receipt():
+    return {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64}
+
+
+def _trust_slots(providers):
+    out = []
+    for p in providers:
+        if p == "run_history_ledger":
+            out.append(
+                {
+                    "provider": p,
+                    "verification_state": "verified",
+                    "receipt": {"run_identity_receipt": _receipt(), "head_receipt": _receipt(), "marker_count": 0},
+                }
+            )
+        elif p == "static_inputs":
+            out.append(
+                {
+                    "provider": p,
+                    "verification_state": "verified",
+                    "receipt": {
+                        "temporal_plan_artifact_sha256": "0" * 64,
+                        "temporal_plan_file_sha256": "0" * 64,
+                        "task0257_receipts_projection_sha256": "0" * 64,
+                    },
+                }
+            )
+        else:
+            out.append({"provider": p, "verification_state": "verified", "receipt": _receipt()})
+    return out
+
+
+def _claim():
+    return {
+        "schema_version": "agu.task0258-module-a-v2-run-consumption-claim.v1",
+        "module_id": MODULE_ID,
+        "authorization_receipt": _receipt(),
+        "run_id": "run-1",
+        "output_root_absolute_path": "/x",
+        "nonce": "0" * 64,
+        "state": "claimed",
+        "created_at_utc": "2026-08-17T00:00:00Z",
+        "artifact_sha256": "0" * 64,
+    }
+
+
+def _admission():
+    return {
+        "schema_version": "agu.task0258-module-a-v2-run-admission.v1",
+        "module_id": MODULE_ID,
+        "authorization_receipt": _receipt(),
+        "claim_receipt": _receipt(),
+        "nonce": "0" * 64,
+        "run_id": "run-1",
+        "output_root_absolute_path": "/x",
+        "static_input_contract": {
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        "maximum_run_count": 1,
+        "admission_state": "admitted",
+        "module_b_authorized": False,
+        "created_at_utc": "2026-08-17T00:00:00Z",
+        "artifact_sha256": "0" * 64,
+    }
+
+
+def _completed():
+    return {
+        "schema_version": "agu.task0258-module-a-v2-run-consumption-completed.v1",
+        "module_id": MODULE_ID,
+        "authorization_receipt": _receipt(),
+        "claim_receipt": _receipt(),
+        "admission_receipt": _receipt(),
+        "nonce": "0" * 64,
+        "run_id": "run-1",
+        "output_root_absolute_path": "/x",
+        "consumption_count": 1,
+        "state": "completed",
+        "root_identity": {"device": 1, "inode": 2},
+        "admission_identity": {
+            "device": 1,
+            "inode": 3,
+            "size_bytes": 4,
+            "internal_sha256": "0" * 64,
+            "file_sha256": "0" * 64,
+        },
+        "created_at_utc": "2026-08-17T00:00:00Z",
+        "artifact_sha256": "0" * 64,
+    }
+
+
+def _gate():
+    return build_candidate_gate_payload(
+        input_receipts=_trust_slots(
+            (
+                "parent_spec_approval",
+                "amendment_implementation_approval",
+                "amended_implementation_review",
+                "exact_v2_rerun_authorization",
+                "run_history_ledger",
+                "run_admission",
+                "static_inputs",
+                "producer_embedding",
+                "verification_embedding",
+                "verification_attempt",
+                "retrospective",
+                "baseline_evaluator",
+                "candidate_evaluator",
+            )
+        ),
+        producer_attempt_chain=[],
+        verification_attempt_receipt=_receipt(),
+        error_bound_result={},
+        candidate_metric_outcome="within_frozen_error_bounds",
+    )
+
+
+def _json_member(name):
+    return {"schema_version": f"agu.{name}", "artifact_sha256": "0" * 64}
+
+
+def _members():
+    return {
+        "terminal_attempt/resource_guard.jsonl": b'{"attempt_role":"producer"}\n',
+        "terminal_attempt/attempt_record.json": _json_member("attempt"),
+        "producer_tiled_swin_embeddings.json": _json_member("embeddings"),
+        "verification_attempt/resource_guard.jsonl": b'{"attempt_role":"verification"}\n',
+        "verification_attempt/attempt_record.json": _json_member("verification-attempt"),
+        "verification_tiled_swin_embeddings.json": _json_member("verification-embeddings"),
+        "temporal_retrospective.json": _json_member("retrospective"),
+        "baseline_final_evaluator.json": _json_member("baseline-evaluator"),
+        "candidate_final_evaluator.json": _json_member("candidate-evaluator"),
+        "candidate_gate.json": _gate(),
+    }
+
+
+def _result_payload():
+    return build_postpublication_verification_payload(
+        error_bounds_pass=True,
+        authorization_receipts={},
+        run_history_contract_receipt={},
+        run_admission_receipt=_receipt(),
+        static_input_contract=_admission()["static_input_contract"],
+        candidate_receipt_bundle_receipt=_receipt(),
+        candidate_member_receipts=[],
+        prior_attempt_receipts=[],
+        producer_embedding_receipt=_receipt(),
+        verification_embedding_receipt=_receipt(),
+        verification_attempt_receipt=_receipt(),
+        error_bound_result={},
+        evaluator_receipts={},
+    )
+
+
+def test_run_v2_pipeline_end_to_end(tmp_path):
+    members = _members()
+    encoded = assemble_candidate_members(members)
+
+    # Pre-publish candidate_v2 in a scratch root to compute the bundle's member
+    # receipts from the exact bytes the pipeline will publish.
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    lock = scratch / ".lock"
+    lock.write_text("")
+    pre_candidate = seal_candidate_v2(scratch, encoded, flock_path=lock)
+
+    bundle_payload = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract=_admission()["static_input_contract"],
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=pre_candidate,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+
+    # Run the pipeline on a fresh registry + fresh output root.
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock2 = out / ".lock"
+    lock2.write_text("")
+    root = out / "vru_causal_temporal_retrospective_v2"
+    bundle_path = tmp_path / "bundle.json"
+
+    result = run_v2_pipeline(
+        output_root=root,
+        registry_dir=reg,
+        flock_path=lock2,
+        auth_sha256="0" * 64,
+        claim_payload=_claim(),
+        admission_payload=_admission(),
+        completion_payload=_completed(),
+        candidate_members=members,
+        bundle_path=bundle_path,
+        bundle_payload=bundle_payload,
+        result_payload=_result_payload(),
+    )
+    assert result["candidate"] == root / "candidate_v2"
+    assert result["result"] == root / "verified_result_v2"
+    assert (reg / f"{'0' * 64}.claim.json").is_file()
+    assert (reg / f"{'0' * 64}.completed.json").is_file()
+    assert (result["candidate"] / "candidate_gate.json").is_file()
+    assert (result["candidate"] / "producer_tiled_swin_embeddings.json").is_file()
+    assert (result["result"] / "verification_registry.json").is_file()
+    assert bundle_path.is_file()
+    assert json.loads(bundle_path.read_text())["candidate_generation_name"] == "candidate_v2"
+    assert json.loads((root / "run_admission.json").read_text())["admission_state"] == "admitted"

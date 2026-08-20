@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.analysis.box_score import EventLedger
 from app.analysis.game_state import (
     ControlSpan,
@@ -12,7 +14,7 @@ from app.analysis.game_state import (
     classify_shot_value,
 )
 from app.analysis.game_state.candidates import _nearby_player_candidates
-from app.analysis.perception import BallTracker
+from app.analysis.perception import BallTracker, GlobalBallPathSelector
 from app.analysis.schemas import (
     BallTrackPointResponse,
     BoundingBoxResponse,
@@ -107,6 +109,60 @@ def test_ball_tracker_links_motion_and_interpolates_short_occlusion() -> None:
     interpolated = tracker.interpolate(tracks[0])
     assert [point.frame for point in interpolated.points] == [1, 2, 3, 4]
     assert interpolated.points[2].predicted is True
+
+
+def test_global_ball_path_prefers_consistent_lower_confidence_candidates() -> None:
+    detections = []
+    for frame, true_x, false_x in ((1, 0, 200), (2, 10, 300), (3, 20, 200)):
+        detections.extend(
+            [
+                _ball_detection(frame, true_x, 10).model_copy(
+                    update={
+                        "detection_id": f"true-{frame}",
+                        "confidence": 0.4,
+                    }
+                ),
+                _ball_detection(frame, false_x, 10).model_copy(
+                    update={
+                        "detection_id": f"false-{frame}",
+                        "confidence": 0.9,
+                    }
+                ),
+            ]
+        )
+
+    tracks = GlobalBallPathSelector(
+        max_candidates_per_frame=10,
+        speed_cap_px_per_frame=40,
+        speed_weight=1.0,
+    ).select(detections)
+
+    assert len(tracks) == 1
+    assert [point.center.x for point in tracks[0].points] == [0, 10, 20]
+    assert tracks[0].backend == "agu_ball_global_path_v1"
+
+
+def test_global_ball_path_resets_at_explicit_scene_boundaries() -> None:
+    detections = [
+        _ball_detection(1, 0, 10),
+        _ball_detection(2, 10, 10),
+        _ball_detection(3, 500, 10),
+        _ball_detection(4, 510, 10),
+    ]
+
+    tracks = GlobalBallPathSelector().select(detections, reset_frames={3})
+
+    assert [[point.frame for point in track.points] for track in tracks] == [
+        [1, 2],
+        [3, 4],
+    ]
+    assert tracks[0].track_id == "ball_global_0001"
+    assert tracks[1].track_id == "ball_global_0002"
+
+
+def test_global_ball_path_rejects_invalid_thresholds() -> None:
+    with pytest.raises(ValueError, match="global ball path thresholds"):
+        GlobalBallPathSelector(speed_cap_px_per_frame=0)
 
 
 def test_possession_machine_distinguishes_control_release_shot_and_miss() -> None:
