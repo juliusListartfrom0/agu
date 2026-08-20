@@ -10,6 +10,7 @@ self-validates the resulting attestation.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -121,7 +122,7 @@ def build_read_isolation_attestation(
     worker_role: str,
     child_pid: int,
     ordered_observed_process_ids: object,
-    provider_process_instance_id: int,
+    provider_process_instance_id: str,
     child_nonce: str,
     prepare_artifact_sha256: str,
     prepared_artifact_sha256: str,
@@ -133,25 +134,68 @@ def build_read_isolation_attestation(
     audit_started_before_spawn: bool = True,
     audit_ended_after_child_exit: bool = True,
 ) -> dict[str, object]:
-    """Build and self-validate a read-isolation attestation from audited events.
+    """Reject untrusted ``fs_usage`` rows instead of minting an attestation.
 
-    ``denied_read_attempt_count`` counts observed events whose path matches a
-    denied-policy row; ``unknown_read_attempt_count`` is always zero (fs_usage
-    reports every resolution). The projection is the SHA-256 of the compact
-    canonical ordered event list.
+    ``fs_usage`` is retained as a diagnostic parser, but its lossy text rows do
+    not contain the authenticated metadata required by the production schema.
+    Use :func:`build_verified_read_isolation_attestation` with rows emitted by a
+    trusted kernel-audit provider for an actual attestation.
     """
-    ordered = [
-        {
-            "operation": e.operation,
-            "path": e.path,
-            "errno": e.errno,
-        }
-        for e in events
-    ]
-    denied = sum(1 for e in events if e.path is not None and _denied_paths_match(e.path, denied_paths))
-    projection = hashlib.sha256(
-        __import__("json").dumps(ordered, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    if events:
+        raise ValueError("raw fs_usage rows cannot mint a read-isolation attestation")
+    return build_verified_read_isolation_attestation(
+        policy_artifact_sha256=policy_artifact_sha256,
+        provider_receipt=provider_receipt,
+        run_identity_receipt=run_identity_receipt,
+        worker_role=worker_role,
+        child_pid=child_pid,
+        ordered_observed_process_ids=ordered_observed_process_ids,
+        provider_process_instance_id=provider_process_instance_id,
+        child_nonce=child_nonce,
+        prepare_artifact_sha256=prepare_artifact_sha256,
+        prepared_artifact_sha256=prepared_artifact_sha256,
+        child_started_artifact_sha256=child_started_artifact_sha256,
+        permit_artifact_sha256=permit_artifact_sha256,
+        finalize_artifact_sha256=finalize_artifact_sha256,
+        verified_event_rows=[],
+        denied_paths=denied_paths,
+        audit_started_before_spawn=audit_started_before_spawn,
+        audit_ended_after_child_exit=audit_ended_after_child_exit,
+    )
+
+
+def build_verified_read_isolation_attestation(
+    *,
+    policy_artifact_sha256: str,
+    provider_receipt: object,
+    run_identity_receipt: object,
+    worker_role: str,
+    child_pid: int,
+    ordered_observed_process_ids: object,
+    provider_process_instance_id: str,
+    child_nonce: str,
+    prepare_artifact_sha256: str,
+    prepared_artifact_sha256: str,
+    child_started_artifact_sha256: str,
+    permit_artifact_sha256: str,
+    finalize_artifact_sha256: str,
+    verified_event_rows: list[dict[str, object]],
+    denied_paths: object,
+    audit_started_before_spawn: bool = True,
+    audit_ended_after_child_exit: bool = True,
+) -> dict[str, object]:
+    """Build an attestation only from complete provider-authenticated rows."""
+    if not isinstance(verified_event_rows, list):
+        raise ValueError("verified_event_rows must be a list")
+    ordered = [dict(row) for row in verified_event_rows]
+    denied = sum(
+        1
+        for row in ordered
+        if isinstance(row.get("normalized_path"), str) and _denied_paths_match(row["normalized_path"], denied_paths)
+    )
+    if denied:
+        raise ValueError("kernel-audit provider observed a denied read")
+    projection = hashlib.sha256(json.dumps(ordered, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     payload: dict[str, object] = {
         "schema_version": READ_ISOLATION_ATTESTATION_SCHEMA,
         "module_id": MODULE_ID,
@@ -186,4 +230,5 @@ __all__ = [
     "parse_fsusage_line",
     "parse_fsusage_transcript",
     "build_read_isolation_attestation",
+    "build_verified_read_isolation_attestation",
 ]

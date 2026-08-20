@@ -4,10 +4,12 @@
 
 The implementation has completed scoped self-review, adversarial receipt and
 path-boundary tests, resource failure review, and adjacent-contract regression.
-The required separate fresh-context implementation review has not run. The
-schema-layer review and the amendment specification review are not substitutes
-for a final implementation review. This remains an open W5 gate and prevents
-archive or rerun authorization.
+The required separate fresh-context implementation review ran on 2026-08-20
+from commit `c5157f2`, and failed with `Critical=7 / Required=5 /
+Optional=3`. Its complete evidence is recorded in
+`fresh-context-review-2026-08-20.md`. The schema-layer review and amendment
+specification review are not substitutes for a passing implementation review.
+This remains an open W5 gate and prevents archive or rerun authorization.
 
 The 2026-08-20 P0 check additionally found five scoped Ruff findings before
 cleanup; they must be zero before the P0 branch is merged.
@@ -30,6 +32,9 @@ cleanup; they must be zero before the P0 branch is merged.
 
 ## Residual gate
 
-The v1 terminal generation is immutable and cannot be retried in place. A
-different fresh-context reviewer must review the final implementation and the
-user must explicitly authorize any new versioned execution boundary.
+The current v2 implementation must first close the fresh-context findings,
+including the production admission/read-isolation boundary and adversarial
+coverage. A different fresh-context reviewer must then review the resulting
+implementation and seal `Critical=0 / Required=0`. The v1 terminal generation
+is immutable and cannot be retried in place; the user must explicitly authorize
+any new versioned execution boundary after the passing review.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 import pytest
 
@@ -49,3 +50,23 @@ def test_run_worker_subprocess_timeout():
             argv=[sys.executable, "-c", "import time; time.sleep(30)"],
             timeout_seconds=1,
         )
+
+
+def test_timeout_kills_descendant_process_group(tmp_path):
+    child_pid_file = tmp_path / "child.pid"
+    code = (
+        "import pathlib,subprocess,sys,time; "
+        f"p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+        f"pathlib.Path({str(child_pid_file)!r}).write_text(str(p.pid)); time.sleep(30)"
+    )
+    with pytest.raises(WorkerTimeoutError):
+        run_worker_subprocess(argv=[sys.executable, "-c", code], timeout_seconds=1)
+    child_pid = int(child_pid_file.read_text())
+    for _ in range(20):
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("worker descendant survived process-group cleanup")

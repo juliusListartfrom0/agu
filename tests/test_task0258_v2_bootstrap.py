@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import pytest
 
+from app.analysis.task0258_module_a_v2 import MODULE_ID, canonical_artifact_sha256
 from app.analysis.task0258_v2_bootstrap import (
     build_sys_path_from_entries,
     dispatch_module,
     parse_bootstrap_flags,
+    validate_review_driver_request,
     validate_target_module,
 )
 
@@ -55,3 +57,32 @@ def test_validate_target_module():
 def test_dispatch_module_rejects_bad_run_name():
     with pytest.raises(ValueError):
         dispatch_module("pytest", [], run_name="not-main")
+
+
+def test_review_driver_request_is_closed_and_target_bound():
+    request = {
+        "schema_version": "agu.task0258-review-driver-request.v1",
+        "module_id": MODULE_ID,
+        "review_execution_kind": "evidence",
+        "check_name": "focused_pytest",
+        "target_module": "pytest",
+        "target_argv": ["-q", "tests/test_task0258_module_a_v2.py"],
+        "runtime_snapshot_receipt": {},
+        "namespace_provider_manifest_receipt": None,
+        "expected_runtime_read_receipts": None,
+        "review_bootstrap_source_size_bytes": 1,
+        "review_bootstrap_source_sha256": "0" * 64,
+    }
+    request["artifact_sha256"] = canonical_artifact_sha256(request)
+    validate_review_driver_request(request)
+    bad = dict(request)
+    bad["target_module"] = "ruff"
+    with pytest.raises(ValueError):
+        validate_review_driver_request(bad)
+    bad = dict(request)
+    bad["target_argv"] = ["-c", "print('escape')"]
+    bad["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bad.items() if key != "artifact_sha256"}
+    )
+    with pytest.raises(ValueError):
+        validate_review_driver_request(bad)

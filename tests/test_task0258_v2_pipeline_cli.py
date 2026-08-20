@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 
-from app.analysis.task0258_module_a_v2 import MODULE_ID
+import pytest
+
+from app.analysis.task0258_module_a_v2 import MODULE_ID, canonical_artifact_sha256, compact_canonical_json
 from app.analysis.task0258_v2_pipeline import (
     build_candidate_gate_payload,
     build_candidate_receipt_bundle_payload,
@@ -16,6 +18,18 @@ from app.analysis.task0258_v2_pipeline_cli import assemble_candidate_members, ru
 
 def _receipt():
     return {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64}
+
+
+def _seal(payload):
+    payload["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    )
+    return payload
+
+
+def _file_receipt(payload):
+    data = (compact_canonical_json(payload) + "\n").encode()
+    return {"artifact_sha256": payload["artifact_sha256"], "file_sha256": hashlib.sha256(data).hexdigest()}
 
 
 def _trust_slots(providers):
@@ -46,65 +60,68 @@ def _trust_slots(providers):
     return out
 
 
-def _claim():
-    return {
-        "schema_version": "agu.task0258-module-a-v2-run-consumption-claim.v1",
-        "module_id": MODULE_ID,
-        "authorization_receipt": _receipt(),
-        "run_id": "run-1",
-        "output_root_absolute_path": "/x",
-        "nonce": "0" * 64,
-        "state": "claimed",
-        "created_at_utc": "2026-08-17T00:00:00Z",
-        "artifact_sha256": "0" * 64,
-    }
+def _claim(output_root="/x"):
+    return _seal(
+        {
+            "schema_version": "agu.task0258-module-a-v2-run-consumption-claim.v1",
+            "module_id": MODULE_ID,
+            "authorization_receipt": _receipt(),
+            "run_id": "run-1",
+            "output_root_absolute_path": output_root,
+            "nonce": "0" * 64,
+            "state": "claimed",
+            "created_at_utc": "2026-08-17T00:00:00Z",
+        }
+    )
 
 
-def _admission():
-    return {
-        "schema_version": "agu.task0258-module-a-v2-run-admission.v1",
-        "module_id": MODULE_ID,
-        "authorization_receipt": _receipt(),
-        "claim_receipt": _receipt(),
-        "nonce": "0" * 64,
-        "run_id": "run-1",
-        "output_root_absolute_path": "/x",
-        "static_input_contract": {
-            "temporal_plan_artifact_sha256": "0" * 64,
-            "temporal_plan_file_sha256": "0" * 64,
-            "task0257_receipts_projection_sha256": "0" * 64,
-        },
-        "maximum_run_count": 1,
-        "admission_state": "admitted",
-        "module_b_authorized": False,
-        "created_at_utc": "2026-08-17T00:00:00Z",
-        "artifact_sha256": "0" * 64,
-    }
+def _admission(output_root="/x", claim_receipt=None):
+    return _seal(
+        {
+            "schema_version": "agu.task0258-module-a-v2-run-admission.v1",
+            "module_id": MODULE_ID,
+            "authorization_receipt": _receipt(),
+            "claim_receipt": claim_receipt or _receipt(),
+            "nonce": "0" * 64,
+            "run_id": "run-1",
+            "output_root_absolute_path": output_root,
+            "static_input_contract": {
+                "temporal_plan_artifact_sha256": "0" * 64,
+                "temporal_plan_file_sha256": "0" * 64,
+                "task0257_receipts_projection_sha256": "0" * 64,
+            },
+            "maximum_run_count": 1,
+            "admission_state": "admitted",
+            "module_b_authorized": False,
+            "created_at_utc": "2026-08-17T00:00:00Z",
+        }
+    )
 
 
-def _completed():
-    return {
-        "schema_version": "agu.task0258-module-a-v2-run-consumption-completed.v1",
-        "module_id": MODULE_ID,
-        "authorization_receipt": _receipt(),
-        "claim_receipt": _receipt(),
-        "admission_receipt": _receipt(),
-        "nonce": "0" * 64,
-        "run_id": "run-1",
-        "output_root_absolute_path": "/x",
-        "consumption_count": 1,
-        "state": "completed",
-        "root_identity": {"device": 1, "inode": 2},
-        "admission_identity": {
-            "device": 1,
-            "inode": 3,
-            "size_bytes": 4,
-            "internal_sha256": "0" * 64,
-            "file_sha256": "0" * 64,
-        },
-        "created_at_utc": "2026-08-17T00:00:00Z",
-        "artifact_sha256": "0" * 64,
-    }
+def _completed(output_root="/x", claim_receipt=None, admission_receipt=None):
+    return _seal(
+        {
+            "schema_version": "agu.task0258-module-a-v2-run-consumption-completed.v1",
+            "module_id": MODULE_ID,
+            "authorization_receipt": _receipt(),
+            "claim_receipt": claim_receipt or _receipt(),
+            "admission_receipt": admission_receipt or _receipt(),
+            "nonce": "0" * 64,
+            "run_id": "run-1",
+            "output_root_absolute_path": output_root,
+            "consumption_count": 1,
+            "state": "completed",
+            "root_identity": {"device": 1, "inode": 2},
+            "admission_identity": {
+                "device": 1,
+                "inode": 3,
+                "size_bytes": 4,
+                "internal_sha256": "0" * 64,
+                "file_sha256": "0" * 64,
+            },
+            "created_at_utc": "2026-08-17T00:00:00Z",
+        }
+    )
 
 
 def _gate():
@@ -134,7 +151,9 @@ def _gate():
 
 
 def _json_member(name):
-    return {"schema_version": f"agu.{name}", "artifact_sha256": "0" * 64}
+    payload = {"schema_version": f"agu.{name}"}
+    payload["artifact_sha256"] = canonical_artifact_sha256(payload)
+    return payload
 
 
 def _members():
@@ -155,8 +174,17 @@ def _members():
 def _result_payload():
     return build_postpublication_verification_payload(
         error_bounds_pass=True,
-        authorization_receipts={},
-        run_history_contract_receipt={},
+        authorization_receipts={
+            "parent_spec_approval": _receipt(),
+            "amendment_implementation_approval": _receipt(),
+            "amended_implementation_review": _receipt(),
+            "rerun_authorization": _receipt(),
+        },
+        run_history_contract_receipt={
+            "run_identity_receipt": _receipt(),
+            "head_receipt": _receipt(),
+            "marker_count": 0,
+        },
         run_admission_receipt=_receipt(),
         static_input_contract=_admission()["static_input_contract"],
         candidate_receipt_bundle_receipt=_receipt(),
@@ -201,27 +229,24 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
     lock2.write_text("")
     root = out / "vru_causal_temporal_retrospective_v2"
     bundle_path = tmp_path / "bundle.json"
+    claim = _claim(str(root))
+    admission = _admission(str(root), _file_receipt(claim))
+    completion = _completed(str(root), _file_receipt(claim), _file_receipt(admission))
 
-    result = run_v2_pipeline(
-        output_root=root,
-        registry_dir=reg,
-        flock_path=lock2,
-        auth_sha256="0" * 64,
-        claim_payload=_claim(),
-        admission_payload=_admission(),
-        completion_payload=_completed(),
-        candidate_members=members,
-        bundle_path=bundle_path,
-        bundle_payload=bundle_payload,
-        result_payload=_result_payload(),
-    )
-    assert result["candidate"] == root / "candidate_v2"
-    assert result["result"] == root / "verified_result_v2"
-    assert (reg / f"{'0' * 64}.claim.json").is_file()
-    assert (reg / f"{'0' * 64}.completed.json").is_file()
-    assert (result["candidate"] / "candidate_gate.json").is_file()
-    assert (result["candidate"] / "producer_tiled_swin_embeddings.json").is_file()
-    assert (result["result"] / "verification_registry.json").is_file()
-    assert bundle_path.is_file()
-    assert json.loads(bundle_path.read_text())["candidate_generation_name"] == "candidate_v2"
-    assert json.loads((root / "run_admission.json").read_text())["admission_state"] == "admitted"
+    with pytest.raises(PermissionError):
+        run_v2_pipeline(
+            output_root=root,
+            registry_dir=reg,
+            flock_path=lock2,
+            auth_sha256="0" * 64,
+            claim_payload=claim,
+            admission_payload=admission,
+            completion_payload=completion,
+            candidate_members=members,
+            bundle_path=bundle_path,
+            bundle_payload=bundle_payload,
+            result_payload=_result_payload(),
+        )
+    assert not any(reg.iterdir())
+    assert not root.exists()
+    assert not bundle_path.exists()

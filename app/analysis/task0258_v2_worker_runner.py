@@ -11,6 +11,7 @@ runner is the process isolation layer that audit wraps.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 from dataclasses import dataclass
 
@@ -67,19 +68,26 @@ def run_worker_subprocess(
     On timeout the process group is hard-killed and ``WorkerTimeoutError`` is
     raised with the captured output.
     """
-    if not argv or not isinstance(argv[0], str):
+    if not argv or not isinstance(argv[0], str) or any(not isinstance(arg, str) for arg in argv):
         raise ValueError("worker argv is invalid")
+    expected_env = sanitized_worker_env()
+    if env is not None and env != expected_env:
+        raise ValueError("worker environment must be the exact sanitized contract environment")
     proc = subprocess.Popen(
         argv,
-        env=env if env is not None else sanitized_worker_env(),
+        env=expected_env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         stdout, stderr = proc.communicate()
         raise WorkerTimeoutError(argv, timeout_seconds, stdout, stderr) from None
     return WorkerResult(proc.returncode, stdout, stderr)

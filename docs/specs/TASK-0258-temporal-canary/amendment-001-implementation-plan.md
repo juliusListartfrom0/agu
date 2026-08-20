@@ -6,8 +6,12 @@ review Critical/Required 0/0, exact-SHA approval sealed 2026-08-17; see
 
 ## Progress to date (2026-08-20)
 
-The schema/validation/grammar/persistence layer is complete (TDD, 152 tests
-passing, ruff clean); the execution layer is largely implemented and smoke-verified.
+The schema/validation/grammar/persistence layer is partially implemented and
+being hardened after the independent fresh-context review failed with
+`Critical=7 / Required=5 / Optional=3` (see
+`fresh-context-review-2026-08-20.md`). The remediation slice now has 165
+focused tests passing and keeps unauthorized v2 publication fail-closed; it is
+not a passing implementation-review seal.
 Implemented modules:
 
 - `app/analysis/task0258_module_a_v2.py` — receipt primitives + exact field sets.
@@ -25,20 +29,22 @@ Implemented modules:
 - `app/analysis/task0258_v2_worker_runner.py` — worker subprocess isolation runner.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 161 TASK-0258 tests pass and the AGU Harness
-structural gate passes. The scoped Ruff check currently has five findings in
-the pre-P0 working tree; P0 is responsible for clearing them. The existing
+Current working-tree verification: 165 TASK-0258 tests pass and the AGU Harness
+structural gate passes. Scoped Ruff/format checks are clean after the P0 and
+P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45
 rows (4x768) with computational projection
 `3d8dfba9…3c72`, but no retained v2 result/terminal receipt has been found in
 the current repository state. This smoke claim is therefore not a v2 run
 result and does not authorize execution.
 
-Remaining gates: a different fresh-context implementation review, the
-kernel-audit read-isolation production path (macOS Endpoint Security / syscall
-audit), and the OS-enforced FD review sandbox driver. The worker subprocess
-isolation layer that audit wraps is implemented, but the full production proof
-boundary is not yet sealed. Module B and the v2 rerun remain unauthorized.
+Remaining gates: close the fresh-context findings and repeat the independent
+review, then complete the kernel-audit read-isolation production path (macOS
+Endpoint Security / syscall audit), OS-enforced FD review sandbox driver,
+verified loaders, and exact authorization-bound production admission. The
+worker subprocess layer now sanitizes its environment, starts a process group,
+and kills the group on timeout, but the full production proof boundary is not
+sealed. Module B and the v2 rerun remain unauthorized.
 
 This plan decomposes the amendment-001 v2 proof boundary into dependency-ordered
 phases matching the spec's acyclic hash order (amendment §"Acyclic producer and

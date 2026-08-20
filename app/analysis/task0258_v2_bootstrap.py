@@ -17,6 +17,31 @@ from __future__ import annotations
 import runpy
 from collections.abc import Mapping, Sequence
 
+from app.analysis.task0258_module_a_v2 import (
+    MODULE_ID,
+    canonical_artifact_sha256,
+    is_sha256,
+)
+
+REVIEW_DRIVER_REQUEST_SCHEMA = "agu.task0258-review-driver-request.v1"
+REVIEW_CHECK_NAMES = frozenset({"focused_pytest", "full_pytest", "ruff_check", "ruff_format_check"})
+REVIEW_DRIVER_REQUEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "review_execution_kind",
+        "check_name",
+        "target_module",
+        "target_argv",
+        "runtime_snapshot_receipt",
+        "namespace_provider_manifest_receipt",
+        "expected_runtime_read_receipts",
+        "review_bootstrap_source_size_bytes",
+        "review_bootstrap_source_sha256",
+        "artifact_sha256",
+    }
+)
+
 
 def parse_bootstrap_flags(argv: Sequence[str]) -> tuple[int, int]:
     """Parse ``--task0258-review-request-fd N --task0258-source-fd N``.
@@ -98,6 +123,50 @@ def validate_target_module(target_module: object) -> None:
         raise ValueError("target module is invalid")
 
 
+def validate_review_driver_request(request: Mapping[str, object]) -> None:
+    """Validate the closed request accepted by the pre-import bootstrap."""
+    if not isinstance(request, Mapping) or set(request) != REVIEW_DRIVER_REQUEST_FIELDS:
+        raise ValueError("review driver request field set is invalid")
+    if request["schema_version"] != REVIEW_DRIVER_REQUEST_SCHEMA or request["module_id"] != MODULE_ID:
+        raise ValueError("review driver request identity is invalid")
+    if request["review_execution_kind"] not in {"discovery", "evidence"}:
+        raise ValueError("review driver request execution kind is invalid")
+    check_name = request["check_name"]
+    if check_name not in REVIEW_CHECK_NAMES:
+        raise ValueError("review driver request check name is invalid")
+    target_module = request["target_module"]
+    validate_target_module(target_module)
+    expected_module = "pytest" if check_name.endswith("pytest") else "ruff"
+    if target_module != expected_module:
+        raise ValueError("review driver target module does not match the fixed check")
+    target_argv = request["target_argv"]
+    if (
+        not isinstance(target_argv, (list, tuple))
+        or not target_argv
+        or any(not isinstance(value, str) or not value for value in target_argv)
+    ):
+        raise ValueError("review driver target argv is invalid")
+    if any(value in {"-c", "-m", "--exec", "--pdb"} for value in target_argv):
+        raise ValueError("review driver target argv contains an executable escape")
+    runtime = request["runtime_snapshot_receipt"]
+    if not isinstance(runtime, Mapping):
+        raise ValueError("review driver runtime snapshot is invalid")
+    for field in ("namespace_provider_manifest_receipt", "expected_runtime_read_receipts"):
+        value = request[field]
+        if value is not None and not isinstance(value, (Mapping, list, tuple)):
+            raise ValueError(f"review driver {field} is invalid")
+    size = request["review_bootstrap_source_size_bytes"]
+    if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+        raise ValueError("review bootstrap source size is invalid")
+    if not is_sha256(request["review_bootstrap_source_sha256"]):
+        raise ValueError("review bootstrap source hash is invalid")
+    expected_hash = canonical_artifact_sha256(
+        {key: value for key, value in request.items() if key != "artifact_sha256"}
+    )
+    if request["artifact_sha256"] != expected_hash:
+        raise ValueError("review driver request artifact hash is invalid")
+
+
 def dispatch_module(
     target_module: str,
     target_argv: Sequence[str],
@@ -127,5 +196,6 @@ __all__ = [
     "parse_bootstrap_flags",
     "build_sys_path_from_entries",
     "validate_target_module",
+    "validate_review_driver_request",
     "dispatch_module",
 ]

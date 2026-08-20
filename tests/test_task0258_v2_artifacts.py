@@ -11,6 +11,7 @@ from app.analysis.task0258_module_a_v2 import (
     MODULE_ID,
     POSTPUBLICATION_FAILURE_SCHEMA_V2,
     POSTPUBLICATION_VERIFICATION_SCHEMA_V2,
+    canonical_artifact_sha256,
 )
 from app.analysis.task0258_v2_artifacts import (
     CANDIDATE_INPUT_RECEIPT_PROVIDERS,
@@ -48,6 +49,13 @@ def _false_common(schema_version):
 
 def _receipt():
     return {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64}
+
+
+def _seal(payload):
+    payload["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    )
+    return payload
 
 
 def _slot(provider, state="verified"):
@@ -108,7 +116,7 @@ def _candidate_gate():
             "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def _mechanical_failure(phase="candidate_sealing"):
@@ -140,7 +148,7 @@ def _mechanical_failure(phase="candidate_sealing"):
             "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def test_verify_common_false_fields():
@@ -224,7 +232,7 @@ def _bundle():
             "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def test_candidate_receipt_bundle_valid():
@@ -247,20 +255,29 @@ def _result(pass_error_bounds=True):
     p.update(
         {
             "candidate_generation_name": "candidate_v2",
-            "authorization_receipts": {},
-            "run_history_contract_receipt": {},
-            "run_admission_receipt": {},
+            "authorization_receipts": {
+                "parent_spec_approval": _receipt(),
+                "amendment_implementation_approval": _receipt(),
+                "amended_implementation_review": _receipt(),
+                "rerun_authorization": _receipt(),
+            },
+            "run_history_contract_receipt": {
+                "run_identity_receipt": _receipt(),
+                "head_receipt": _receipt(),
+                "marker_count": 0,
+            },
+            "run_admission_receipt": _receipt(),
             "static_input_contract": {
                 "temporal_plan_artifact_sha256": "0" * 64,
                 "temporal_plan_file_sha256": "0" * 64,
                 "task0257_receipts_projection_sha256": "0" * 64,
             },
-            "candidate_receipt_bundle_receipt": {},
+            "candidate_receipt_bundle_receipt": _receipt(),
             "candidate_member_receipts": [],
             "prior_attempt_receipts": [],
-            "producer_embedding_receipt": {},
-            "verification_embedding_receipt": {},
-            "verification_attempt_receipt": {},
+            "producer_embedding_receipt": _receipt(),
+            "verification_embedding_receipt": _receipt(),
+            "verification_attempt_receipt": _receipt(),
             "ordered_check_results": [
                 {"check_name": name, "passed": (name != "frozen_error_bounds" or pass_error_bounds)}
                 for name in RESULT_ORDERED_CHECKS
@@ -278,7 +295,7 @@ def _result(pass_error_bounds=True):
             "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def test_postpublication_verification_valid():
@@ -327,10 +344,9 @@ def _postfailure(check="retrospective"):
             "stop_reason": check,
             "final_result_published": False,
             "conditional_downstream": {},
-            "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def test_postpublication_failure_valid():
@@ -338,6 +354,7 @@ def test_postpublication_failure_valid():
     # global_resource_caps maps to limit_failure
     g = _postfailure("global_resource_caps")
     g["observed_result"]["observation_state"] = "limit_failure"
+    g = _seal(g)
     verify_postpublication_failure(g)
 
 

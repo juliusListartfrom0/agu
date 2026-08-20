@@ -17,14 +17,19 @@ later phases.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
+from pathlib import Path, PurePosixPath
 
 from app.analysis.task0258_module_a_v2 import (
+    compact_canonical_json,
     is_rfc3339,
     is_safe_slug,
     is_sha256,
     verify_artifact_file_receipt,
+    verify_internal_artifact_hash,
 )
 
 MARKER_SCHEMA = "agu.task0258-module-a-v2-run-history-marker.v1"
@@ -267,6 +272,88 @@ def verify_registry_listing(
         if nn != prev_nn + 1:
             raise ValueError(f"registry history ordinal gap at {name!r}")
         prev_nn = nn
+    events = [parse_history_filename(name, auth_sha256)[1] for name in filenames[2:]]
+    if events:
+        verify_completed_successor(events[0])
+        for prior, current in zip(events, events[1:]):
+            verify_history_transition(prior, current)
+
+
+def registry_history_filenames(registry_dir: Path, auth_sha256: str) -> list[str]:
+    """Return the JSON registry listing in the canonical replay order."""
+    if not registry_dir.is_dir() or registry_dir.is_symlink():
+        raise ValueError("registry directory must be a real directory")
+    filenames = [entry.name for entry in registry_dir.iterdir() if entry.name.endswith(".json")]
+    if not filenames:
+        raise ValueError("registry directory is empty")
+    ordered = [claim_filename(auth_sha256), completion_filename(auth_sha256)]
+    if any(required not in filenames for required in ordered):
+        raise ValueError("registry is missing claim or completion ledger")
+    markers = sorted(name for name in filenames if ".history-" in name)
+    unexpected = set(filenames) - set(ordered) - set(markers)
+    if unexpected:
+        raise ValueError(f"registry contains unexpected JSON files: {sorted(unexpected)!r}")
+    ordered.extend(markers)
+    verify_registry_listing(ordered, auth_sha256)
+    return ordered
+
+
+def replay_run_history_registry(registry_dir: Path, auth_sha256: str) -> list[Mapping[str, object]]:
+    """Load and replay every durable ledger/marker binding in order."""
+    filenames = registry_history_filenames(registry_dir, auth_sha256)
+    payloads: list[Mapping[str, object]] = []
+    for filename in filenames:
+        path = registry_dir / filename
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"registry member is not a regular file: {filename}")
+        raw = path.read_bytes()
+        if not raw.endswith(b"\n"):
+            raise ValueError(f"registry member is missing its final LF: {filename}")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"registry member is not canonical JSON: {filename}") from exc
+        if not isinstance(payload, Mapping) or raw != (compact_canonical_json(payload) + "\n").encode("utf-8"):
+            raise ValueError(f"registry member bytes are not canonical: {filename}")
+        verify_internal_artifact_hash(payload)
+        if filename.endswith(".claim.json"):
+            verify_run_consumption_claim(payload)
+        elif filename.endswith(".completed.json"):
+            verify_run_consumption_completed(payload)
+        else:
+            verify_run_history_marker(payload)
+            ordinal, event = parse_history_filename(filename, auth_sha256)
+            if payload["sequence_ordinal"] != ordinal or payload["event"] != event:
+                raise ValueError(f"registry marker payload does not match its basename: {filename}")
+        payloads.append(payload)
+    claim = payloads[0]
+    completion = payloads[1]
+    auth_receipt = claim["authorization_receipt"]
+    if not isinstance(auth_receipt, Mapping) or auth_receipt["artifact_sha256"] != auth_sha256:
+        raise ValueError("registry claim authorization is not bound to the registry name")
+    completion_receipt = _file_receipt(completion)
+    previous_receipt = completion_receipt
+    previous_event = None
+    for marker in payloads[2:]:
+        if marker["authorization_receipt"] != auth_receipt:
+            raise ValueError("registry marker authorization binding drifted")
+        if marker["run_identity_receipt"] != completion_receipt:
+            raise ValueError("registry marker run identity binding drifted")
+        if marker["prior_marker_receipt"] != previous_receipt:
+            raise ValueError("registry marker prior-head receipt does not replay")
+        event = marker["event"]
+        if previous_event is None:
+            verify_completed_successor(event)
+        else:
+            verify_history_transition(previous_event, event)
+        previous_event = event
+        previous_receipt = _file_receipt(marker)
+    return payloads
+
+
+def _file_receipt(payload: Mapping[str, object]) -> dict[str, str]:
+    data = (compact_canonical_json(payload) + "\n").encode("utf-8")
+    return {"artifact_sha256": str(payload["artifact_sha256"]), "file_sha256": hashlib.sha256(data).hexdigest()}
 
 
 def verify_history_subject_receipt(row: object) -> None:
@@ -507,10 +594,12 @@ def verify_worker_launch_claim(value: object) -> None:
     ):
         if not is_sha256(value[field]):
             raise ValueError(f"worker_launch_claim {field} is invalid")
-    for field in ("parent_pid", "provider_process_instance_id"):
+    for field in ("parent_pid",):
         v = value[field]
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:
             raise ValueError(f"worker_launch_claim {field} is invalid")
+    if not is_sha256(value["provider_process_instance_id"]):
+        raise ValueError("worker_launch_claim provider_process_instance_id is invalid")
     stage = value["private_stage_identity"]
     if not isinstance(stage, Mapping) or set(stage) != {"device", "inode"}:
         raise ValueError("worker_launch_claim private_stage_identity is invalid")
@@ -539,6 +628,9 @@ def verify_root_subject_cas_row(row: object) -> None:
         raise ValueError("root_subject_cas row shape is invalid")
     if not isinstance(row["relative_path"], str) or not row["relative_path"]:
         raise ValueError("root_subject_cas relative_path is invalid")
+    rel = PurePosixPath(row["relative_path"])
+    if "\\" in row["relative_path"] or rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+        raise ValueError("root_subject_cas relative_path must be safe and POSIX-relative")
     for field in ("device", "inode"):
         value = row[field]
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -571,7 +663,17 @@ def verify_run_history_marker(payload: Mapping[str, object]) -> None:
     """
     if not isinstance(payload, Mapping) or set(payload) != MARKER_FIELDS:
         raise ValueError("marker field set is invalid")
+    verify_internal_artifact_hash(payload)
     verify_marker_scalars(payload)
+    verify_artifact_file_receipt(payload["authorization_receipt"])
+    verify_artifact_file_receipt(payload["run_identity_receipt"])
+    if not is_safe_slug(payload["run_id"]):
+        raise ValueError("marker run_id invalid")
+    if not isinstance(payload["output_root"], str) or not payload["output_root"].startswith("/"):
+        raise ValueError("marker output_root invalid")
+    if not is_sha256(payload["nonce"]):
+        raise ValueError("marker nonce invalid")
+    verify_artifact_file_receipt(payload["prior_marker_receipt"])
     subject_kind = payload["subject_kind"]
     if subject_kind not in SUBJECT_KINDS:
         raise ValueError("marker subject_kind is invalid")
@@ -590,6 +692,8 @@ def verify_run_history_marker(payload: Mapping[str, object]) -> None:
         raise ValueError("marker root_subject_cas must be a non-empty list")
     for row in root_cas:
         verify_root_subject_cas_row(row)
+    if [row["relative_path"] for row in root_cas] != sorted(row["relative_path"] for row in root_cas):
+        raise ValueError("marker root_subject_cas rows must be sorted by relative_path")
     projection = payload["subject_projection_sha256"]
     if projection is not None and not is_sha256(projection):
         raise ValueError("marker subject_projection_sha256 is invalid")
@@ -649,6 +753,8 @@ __all__ = [
     "completion_filename",
     "history_filename",
     "verify_registry_listing",
+    "registry_history_filenames",
+    "replay_run_history_registry",
     "verify_history_subject_receipt",
     "verify_root_subject_cas_row",
     "verify_worker_launch_claim",

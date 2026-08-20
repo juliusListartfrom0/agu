@@ -15,7 +15,7 @@ import os
 import secrets
 import sys
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from app.analysis.task0258_module_a_v2 import compact_canonical_json
 
@@ -47,6 +47,26 @@ def verify_absent(path: Path) -> None:
     """Raise when ``path`` exists (including a dangling symlink)."""
     if path.exists() or path.is_symlink():
         raise FileExistsError(f"target already exists: {path}")
+
+
+def _verify_no_symlink_ancestors(path: Path) -> None:
+    """Reject symlinked path components before a publication transaction."""
+    current = Path(path.anchor) if path.is_absolute() else Path()
+    for part in path.parts[1:] if path.is_absolute() else path.parts:
+        current /= part
+        try:
+            if current.is_symlink():
+                raise ValueError(f"symlinked publication path component: {current}")
+        except OSError as exc:
+            raise ValueError(f"cannot inspect publication path component: {current}") from exc
+
+
+def _validate_member_path(relative_path: str) -> None:
+    if not isinstance(relative_path, str) or not relative_path or "\\" in relative_path or "//" in relative_path:
+        raise ValueError("generation member path must be a non-empty POSIX relative path")
+    posix = PurePosixPath(relative_path)
+    if posix.is_absolute() or any(part in ("", ".", "..") for part in posix.parts):
+        raise ValueError(f"generation member path escapes the generation root: {relative_path!r}")
 
 
 def _rename_no_clobber_darwin(staged: Path, final: Path) -> None:
@@ -91,6 +111,9 @@ def atomic_write_bytes(final: Path, data: bytes, *, mode: int = 0o600) -> None:
     ``publish_no_clobber``, then fsyncs the parent directory.
     """
     parent = final.parent
+    _verify_no_symlink_ancestors(parent)
+    if not isinstance(data, bytes):
+        raise TypeError("atomic_write_bytes data must be bytes")
     stage = parent / f".{final.name}.{secrets.token_hex(16)}.stage"
     fd = os.open(os.fspath(stage), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
@@ -129,13 +152,20 @@ def build_generation_directory(parent: Path, members: dict[str, bytes]) -> Path:
     Every member is written with :func:`atomic_write_bytes` (mode 0o600). Returns
     the stage directory path; the caller is responsible for publishing it.
     """
+    _verify_no_symlink_ancestors(parent)
     parent.mkdir(parents=True, exist_ok=True)
+    _verify_no_symlink_ancestors(parent)
+    for relpath, data in members.items():
+        _validate_member_path(relpath)
+        if not isinstance(data, bytes):
+            raise TypeError("generation member data must be bytes")
     stage = parent / f".task0258-{secrets.token_hex(8)}"
     stage.mkdir(mode=0o700)
     try:
         for relpath, data in members.items():
             target = stage / relpath
             target.parent.mkdir(parents=True, exist_ok=True)
+            _verify_no_symlink_ancestors(target.parent)
             atomic_write_bytes(target, data, mode=0o600)
     except BaseException:
         import shutil
@@ -153,11 +183,48 @@ def publish_generation_directory(staged: Path, final: Path, *, flock_path: Path)
     publishers so the absence check is not TOCTOU-raced within this process
     family. Fsyncs the parent afterwards.
     """
+    _verify_no_symlink_ancestors(staged)
+    _verify_no_symlink_ancestors(final.parent)
     final.parent.mkdir(parents=True, exist_ok=True)
+    _verify_no_symlink_ancestors(final.parent)
     with exclusive_flock(flock_path):
         verify_absent(final)
-        os.rename(staged, final)
+        if sys.platform == "darwin":
+            _rename_no_clobber_darwin(staged, final)
+        else:
+            # A portable directory rename has no no-clobber primitive. Refuse
+            # the trust-boundary operation instead of silently relying on the
+            # cooperative flock against an unrelated publisher.
+            raise OSError("atomic no-clobber directory publication is unavailable on this platform")
         fsync_dir(final.parent)
+
+
+def verify_generation_directory(final: Path, expected_paths: tuple[str, ...]) -> None:
+    """Re-open a published generation and verify exact no-symlink coverage."""
+    if final.is_symlink() or not final.is_dir():
+        raise ValueError("published generation is not a real directory")
+    expected_files = {PurePosixPath(path) for path in expected_paths}
+    expected_dirs = {PurePosixPath(".")}
+    for path in expected_files:
+        expected_dirs.update(PurePosixPath(*path.parts[:index]) for index in range(1, len(path.parts)))
+    actual_files: set[PurePosixPath] = set()
+    actual_dirs: set[PurePosixPath] = {PurePosixPath(".")}
+    for entry in final.rglob("*"):
+        relative = PurePosixPath(entry.relative_to(final).as_posix())
+        if entry.is_symlink():
+            raise ValueError(f"published generation contains a symlink: {relative}")
+        if entry.is_dir():
+            actual_dirs.add(relative)
+        elif entry.is_file():
+            actual_files.add(relative)
+        else:
+            raise ValueError(f"published generation contains a non-regular member: {relative}")
+    if actual_files != expected_files or actual_dirs != expected_dirs:
+        raise ValueError(
+            f"published generation coverage drifted: expected_files={sorted(expected_files)!r} "
+            f"actual_files={sorted(actual_files)!r} expected_dirs={sorted(expected_dirs)!r} "
+            f"actual_dirs={sorted(actual_dirs)!r}"
+        )
 
 
 def seal_generation_directory(
@@ -181,9 +248,12 @@ def seal_generation_directory(
             f"missing={sorted(set(expected_paths) - set(members))} "
             f"extra={sorted(set(members) - set(expected_paths))}"
         )
+    for relpath in members:
+        _validate_member_path(relpath)
     staged = build_generation_directory(parent, members)
     final = parent / final_name
     publish_generation_directory(staged, final, flock_path=flock_path)
+    verify_generation_directory(final, expected_paths)
     return final
 
 
@@ -196,5 +266,6 @@ __all__ = [
     "atomic_write_json",
     "build_generation_directory",
     "publish_generation_directory",
+    "verify_generation_directory",
     "seal_generation_directory",
 ]

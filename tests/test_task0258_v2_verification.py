@@ -9,6 +9,7 @@ from app.analysis.task0258_module_a_v2 import (
     VERIFICATION_ATTEMPT_SCHEMA_V2,
     VERIFICATION_EMBEDDING_SCHEMA_V2,
     VERIFICATION_RESOURCE_SAMPLE_SCHEMA,
+    canonical_artifact_sha256,
 )
 from app.analysis.task0258_v2_verification import (
     ROLE,
@@ -257,32 +258,47 @@ def test_build_verification_embedding_payload():
 def _policy():
     from app.analysis.task0258_v2_read_isolation import (
         MAXIMUM_POLICY_BYTES,
+        MAXIMUM_READ_EVENT_BYTES,
+        MAXIMUM_READ_EVENT_ROWS,
+        READ_EVENT_PROJECTION_PROTOCOL,
         READ_ISOLATION_POLICY_SCHEMA,
     )
 
-    return {
+    payload = {
         "schema_version": READ_ISOLATION_POLICY_SCHEMA,
         "module_id": MODULE_ID,
         "provider_receipt": _receipt(),
         "run_identity_receipt": _receipt(),
         "worker_role": "verification",
         "child_nonce": "0" * 64,
-        "output_root_identity": {"device": 1, "inode": 2},
-        "runtime_snapshot_contract_input": {},
+        "output_root_identity": {"absolute_path": "/output", "device": 1, "inode": 2},
+        "runtime_snapshot_contract_input": {
+            "runtime_root_absolute_path": "/runtime",
+            "runtime_root_device": 1,
+            "runtime_root_inode": 2,
+            "runtime_contract_absolute_path": "/runtime/contract.json",
+            "runtime_contract_size_bytes": 1,
+            "runtime_contract_receipt": _receipt(),
+            "runtime_manifest_absolute_path": "/runtime/manifest.json",
+            "runtime_manifest_size_bytes": 1,
+            "runtime_manifest_receipt": _receipt(),
+            "runtime_tree_projection_sha256": "0" * 64,
+        },
         "ordered_allowed_read_rows": [],
         "ordered_denied_read_rows": [],
-        "read_event_projection_protocol": "v1",
-        "maximum_read_event_rows": 1000,
-        "maximum_read_event_bytes": 4096,
+        "read_event_projection_protocol": READ_EVENT_PROJECTION_PROTOCOL,
+        "maximum_read_event_rows": MAXIMUM_READ_EVENT_ROWS,
+        "maximum_read_event_bytes": MAXIMUM_READ_EVENT_BYTES,
         "maximum_policy_bytes": MAXIMUM_POLICY_BYTES,
-        "artifact_sha256": "0" * 64,
     }
+    payload["artifact_sha256"] = canonical_artifact_sha256(payload)
+    return payload
 
 
 def _attestation():
     from app.analysis.task0258_v2_read_isolation import READ_ISOLATION_ATTESTATION_SCHEMA
 
-    return {
+    payload = {
         "schema_version": READ_ISOLATION_ATTESTATION_SCHEMA,
         "module_id": MODULE_ID,
         "policy_artifact_sha256": "0" * 64,
@@ -291,7 +307,7 @@ def _attestation():
         "worker_role": "verification",
         "child_pid": 42,
         "ordered_observed_process_ids": [42],
-        "provider_process_instance_id": 1,
+        "provider_process_instance_id": "1" * 64,
         "child_nonce": "0" * 64,
         "prepare_artifact_sha256": "0" * 64,
         "prepared_artifact_sha256": "0" * 64,
@@ -302,11 +318,12 @@ def _attestation():
         "audit_ended_after_child_exit": True,
         "audit_overflow": False,
         "ordered_observed_read_events": [],
-        "read_event_projection_sha256": "0" * 64,
+        "read_event_projection_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
         "denied_read_attempt_count": 0,
         "unknown_read_attempt_count": 0,
-        "artifact_sha256": "0" * 64,
     }
+    payload["artifact_sha256"] = canonical_artifact_sha256(payload)
+    return payload
 
 
 def test_verification_attempt_binds_read_isolation():

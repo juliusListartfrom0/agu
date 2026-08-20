@@ -17,10 +17,12 @@ model execution or readiness transition.
 
 ### P1 — Independent implementation review
 
-- [ ] Review the exact current implementation from a different fresh context.
+- [x] Review the exact current implementation from a different fresh context.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
+- [ ] Remediate the 7 Critical and 5 Required findings recorded in
+      `fresh-context-review-2026-08-20.md`, then repeat the independent review.
 
 ### P2 — Platform isolation gate
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_pipeline import (
     build_candidate_gate_payload,
@@ -78,7 +79,8 @@ def _make_members():
         if rel.endswith(".jsonl"):
             members[rel] = b'{"schema_version":"x"}\n'
         else:
-            payload = {"schema_version": "x", "artifact_sha256": "0" * 64}
+            payload = {"schema_version": "x"}
+            payload["artifact_sha256"] = canonical_artifact_sha256(payload)
             members[rel] = (json.dumps(payload) + "\n").encode()
     return members
 
@@ -107,7 +109,7 @@ def test_seal_candidate_v2_and_member_receipts(tmp_path):
     assert len(jsonl) == 2
     assert len(json_rows) == 8
     for r in json_rows:
-        assert r["artifact_sha256"] == "0" * 64
+        assert len(r["artifact_sha256"]) == 64
         assert r["internal_sha256_field"] == "artifact_sha256"
 
 
@@ -144,8 +146,17 @@ def _result(error_bounds_pass=True):
 
     return build_postpublication_verification_payload(
         error_bounds_pass=error_bounds_pass,
-        authorization_receipts={},
-        run_history_contract_receipt={},
+        authorization_receipts={
+            "parent_spec_approval": _receipt(),
+            "amendment_implementation_approval": _receipt(),
+            "amended_implementation_review": _receipt(),
+            "rerun_authorization": _receipt(),
+        },
+        run_history_contract_receipt={
+            "run_identity_receipt": _receipt(),
+            "head_receipt": _receipt(),
+            "marker_count": 0,
+        },
         run_admission_receipt=_receipt(),
         static_input_contract={
             "temporal_plan_artifact_sha256": "0" * 64,

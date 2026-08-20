@@ -12,6 +12,8 @@ from app.analysis.task0258_module_a_v2 import (
     V2_RECEIPT_FIELDS,
     VERIFICATION_ATTEMPT_FIELDS,
     VERIFICATION_EMBEDDING_FIELDS,
+    compact_canonical_json,
+    is_safe_slug,
     is_sha256,
     verify_artifact_file_receipt,
     verify_authorization_receipts,
@@ -35,6 +37,15 @@ def test_is_sha256():
     assert not is_sha256("g" * 64)  # non-hex rejected
     assert not is_sha256("0" * 63)  # wrong length
     assert not is_sha256(0)  # non-string
+
+
+def test_safe_slug_is_ascii_and_canonical_json_rejects_nonfinite_float():
+    assert is_safe_slug("producer_worker-1")
+    assert not is_safe_slug("模型")
+    with pytest.raises(ValueError):
+        compact_canonical_json({"value": float("nan")})
+    with pytest.raises(ValueError):
+        compact_canonical_json({"value": float("inf")})
 
 
 def test_artifact_file_receipt_valid():

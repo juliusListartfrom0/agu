@@ -21,6 +21,7 @@ from app.analysis.task0258_module_a_v2 import (
     POSTPUBLICATION_VERIFICATION_SCHEMA_V2,
     canonical_artifact_sha256,
     compact_canonical_json,
+    verify_internal_artifact_hash,
 )
 from app.analysis.task0258_v2_artifacts import (
     CANDIDATE_MEMBER_PATHS,
@@ -32,6 +33,7 @@ from app.analysis.task0258_v2_artifacts import (
 )
 from app.analysis.task0258_v2_fs import (
     atomic_write_json,
+    exclusive_flock,
     seal_generation_directory,
     verify_absent,
 )
@@ -115,6 +117,9 @@ def build_member_receipts(candidate_dir: Path) -> list[dict[str, object]]:
             }
         else:
             payload = json.loads(data)
+            if not isinstance(payload, Mapping):
+                raise ValueError(f"candidate JSON member is not an object: {rel}")
+            verify_internal_artifact_hash(payload)
             row = {
                 "relative_path": rel,
                 "receipt_kind": "json",
@@ -171,8 +176,19 @@ def seal_candidate_receipt_bundle(
     bundle_payload: object,
 ) -> Path:
     """No-clobber publish the candidate receipt bundle outside the output root."""
+    if not isinstance(bundle_payload, Mapping):
+        raise ValueError("candidate receipt bundle must be an object")
+    verify_candidate_receipt_bundle(bundle_payload)
     verify_absent(bundle_path)
-    atomic_write_json(bundle_path, bundle_payload, mode=0o600)
+    lock_path = bundle_path.parent / ".candidate-receipt-bundle.lock"
+    lock_path.touch(mode=0o600, exist_ok=True)
+    with exclusive_flock(lock_path):
+        verify_absent(bundle_path)
+        atomic_write_json(bundle_path, bundle_payload, mode=0o600)
+        reopened = bundle_path.read_bytes()
+        expected = (compact_canonical_json(bundle_payload) + "\n").encode("utf-8")
+        if reopened != expected:
+            raise ValueError("candidate receipt bundle changed during publication")
     return bundle_path
 
 
@@ -249,6 +265,9 @@ def seal_verified_result(
     flock_path: Path,
 ) -> Path:
     """No-clobber publish ``verified_result_v2/verification_registry.json``."""
+    if not isinstance(registry_payload, Mapping):
+        raise ValueError("verified result must be an object")
+    verify_postpublication_verification(registry_payload)
     registry_bytes = (compact_canonical_json(registry_payload) + "\n").encode("utf-8")
     return seal_generation_directory(
         output_root,
@@ -300,7 +319,9 @@ def seal_postverification_failure(
     flock_path: Path,
 ) -> Path:
     """No-clobber publish ``postverification_failure_v2/failure.json``."""
-    from app.analysis.task0258_module_a_v2 import compact_canonical_json
+    if not isinstance(failure_payload, Mapping):
+        raise ValueError("postverification failure must be an object")
+    verify_postpublication_failure(failure_payload)
 
     failure_bytes = (compact_canonical_json(failure_payload) + "\n").encode("utf-8")
     return seal_generation_directory(

@@ -9,6 +9,7 @@ import pytest
 from app.analysis.task0258_v2_audit import (
     ReadEvent,
     build_read_isolation_attestation,
+    build_verified_read_isolation_attestation,
     parse_fsusage_line,
     parse_fsusage_transcript,
 )
@@ -24,7 +25,7 @@ def _inputs(denied_paths=()):
         "worker_role": "verification",
         "child_pid": 42,
         "ordered_observed_process_ids": [42],
-        "provider_process_instance_id": 1,
+        "provider_process_instance_id": "1" * 64,
         "child_nonce": "0" * 64,
         "prepare_artifact_sha256": "0" * 64,
         "prepared_artifact_sha256": "0" * 64,
@@ -62,7 +63,9 @@ def test_parse_fsusage_transcript():
 
 def test_attestation_allowed_only():
     events = [ReadEvent("open", "/allowed/data.json", None), ReadEvent("stat", "/allowed/data.json", None)]
-    att = build_read_isolation_attestation(**{**_inputs(), "events": events})
+    with pytest.raises(ValueError):
+        build_read_isolation_attestation(**{**_inputs(), "events": events})
+    att = build_verified_read_isolation_attestation(**{**_inputs(), "verified_event_rows": []})
     verify_read_isolation_attestation(att)
     assert att["denied_read_attempt_count"] == 0
     assert att["unknown_read_attempt_count"] == 0
@@ -81,9 +84,8 @@ def test_attestation_detects_denied_read_fail_closed():
 
 
 def test_attestation_deterministic_projection():
-    events = [ReadEvent("open", "/a", None), ReadEvent("open", "/b", 2)]
-    a = build_read_isolation_attestation(**{**_inputs(), "events": events})
-    b = build_read_isolation_attestation(**{**_inputs(), "events": events})
+    a = build_verified_read_isolation_attestation(**{**_inputs(), "verified_event_rows": []})
+    b = build_verified_read_isolation_attestation(**{**_inputs(), "verified_event_rows": []})
     assert a["read_event_projection_sha256"] == b["read_event_projection_sha256"]
 
 

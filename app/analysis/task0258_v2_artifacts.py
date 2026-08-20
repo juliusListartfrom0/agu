@@ -20,10 +20,13 @@ from app.analysis.task0258_module_a_v2 import (
     POSTPUBLICATION_VERIFICATION_SCHEMA_V2,
     is_sha256,
     verify_artifact_file_receipt,
+    verify_authorization_receipts,
     verify_exact_field_set,
     verify_history_artifact_receipt,
+    verify_internal_artifact_hash,
     verify_provider_slot,
     verify_provider_slots,
+    verify_run_history_contract_receipt,
     verify_static_input_contract,
 )
 from app.analysis.task0258_v2_gate import (
@@ -343,6 +346,7 @@ def verify_candidate_gate(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-candidate-gate.v2` payload."""
     verify_exact_field_set(payload, CANDIDATE_GATE_FIELDS)
     verify_common_false_fields(payload, schema_version=CANDIDATE_GATE_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
     if payload["publication_state"] != "not_yet_observed":
         raise ValueError("candidate gate publication_state must be not_yet_observed")
     if payload["postpublication_verification_required"] is not True:
@@ -366,6 +370,7 @@ def verify_mechanical_failure(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-mechanical-failure.v2` payload."""
     verify_exact_field_set(payload, MECHANICAL_FAILURE_FIELDS)
     verify_common_false_fields(payload, schema_version=MECHANICAL_FAILURE_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
     if payload["decision"] != "mechanical_failure":
         raise ValueError("mechanical failure decision must be mechanical_failure")
     failed_phase = payload["failed_phase"]
@@ -398,6 +403,7 @@ def verify_candidate_receipt_bundle(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-candidate-receipt-bundle.v1` payload."""
     verify_exact_field_set(payload, CANDIDATE_RECEIPT_BUNDLE_FIELDS)
     verify_common_false_fields(payload, schema_version=CANDIDATE_RECEIPT_BUNDLE_SCHEMA)
+    verify_internal_artifact_hash(payload)
     if payload["candidate_generation_name"] != "candidate_v2":
         raise ValueError("bundle candidate_generation_name must be candidate_v2")
     verify_artifact_file_receipt(payload["authorization_receipt"])
@@ -418,6 +424,17 @@ def verify_postpublication_verification(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-postpublication-verification.v2` payload."""
     verify_exact_field_set(payload, POSTPUBLICATION_VERIFICATION_FIELDS)
     verify_common_false_fields(payload, schema_version=POSTPUBLICATION_VERIFICATION_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
+    verify_authorization_receipts(payload["authorization_receipts"])
+    verify_run_history_contract_receipt(payload["run_history_contract_receipt"])
+    verify_artifact_file_receipt(payload["run_admission_receipt"])
+    verify_static_input_contract(payload["static_input_contract"])
+    verify_artifact_file_receipt(payload["candidate_receipt_bundle_receipt"])
+    for field in ("producer_embedding_receipt", "verification_embedding_receipt", "verification_attempt_receipt"):
+        verify_artifact_file_receipt(payload[field])
+    for field in ("candidate_member_receipts", "prior_attempt_receipts"):
+        if not isinstance(payload[field], (list, tuple)):
+            raise ValueError(f"result {field} must be a list")
     if payload["candidate_generation_name"] != "candidate_v2":
         raise ValueError("result candidate_generation_name must be candidate_v2")
     checks = payload["ordered_check_results"]
@@ -449,6 +466,7 @@ def verify_postpublication_failure(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-postpublication-failure.v2` payload."""
     verify_exact_field_set(payload, POSTPUBLICATION_FAILURE_FIELDS)
     verify_common_false_fields(payload, schema_version=POSTPUBLICATION_FAILURE_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
     if payload["decision"] != "mechanical_failure":
         raise ValueError("postverification failure decision must be mechanical_failure")
     if payload["final_result_published"] is not False:

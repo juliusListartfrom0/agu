@@ -119,5 +119,22 @@ def test_seal_generation_directory_coverage(tmp_path):
     # missing member fails before publish
     with pytest.raises(ValueError):
         seal_generation_directory(
-            root, "other", {p: b"x\n" for p in CANDIDATE_MEMBER_PATHS[:-1]}, CANDIDATE_MEMBER_PATHS, flock_path=flock
+            root,
+            "other",
+            {p: b"x\n" for p in CANDIDATE_MEMBER_PATHS[:-1]},
+            CANDIDATE_MEMBER_PATHS,
+            flock_path=flock,
         )
+
+
+def test_generation_rejects_traversal_and_symlinked_parent(tmp_path):
+    from app.analysis.task0258_v2_fs import build_generation_directory
+
+    with pytest.raises(ValueError):
+        build_generation_directory(tmp_path / "out", {"../escape.json": b"x"})
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    with pytest.raises(ValueError):
+        build_generation_directory(link, {"member.json": b"x"})

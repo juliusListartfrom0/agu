@@ -2,14 +2,16 @@
 
 ## Automated verification
 
-### Current P0 working-tree check (2026-08-20)
+### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `161 passed`.
-- `scripts/verify_harness.py --test-command` with the focused suite: passed.
-- `git diff --check`: passed.
-- Scoped Ruff: five findings before P0 cleanup; no completion claim until zero.
-- Full repository pytest is deferred until P0 cleanup and documentation
-  reconciliation; no model execution was performed.
+- TASK-0258 focused suite: `165 passed`.
+- The independent fresh-context implementation review: **failed** with
+  `Critical=7 / Required=5 / Optional=3`.
+- No model/video extraction or v2 rerun was performed.
+- The passing focused suite does not prove receipt binding, kernel read
+  isolation, authenticated bootstrap, or process-tree cleanup.
+- Full repository pytest remains deferred until the remediation slice is
+  implemented and reviewed; no v2 terminal/result artifact is claimed.
 
 - Module-A focused tests: `67 passed`.
 - Adjacent TASK-0257 export/probe/backbone/causal regression: `523 passed, 3 skipped`.
