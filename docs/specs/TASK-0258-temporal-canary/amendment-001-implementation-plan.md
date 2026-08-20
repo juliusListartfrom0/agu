@@ -32,8 +32,8 @@ Implemented modules:
   contexts cannot authorize production publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 173 TASK-0258 tests pass and the AGU Harness
-structural gate passes. The full repository suite reports 2,041 passed, 5
+Current working-tree verification: 172 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The full repository suite reports 2,040 passed, 5
 skipped, and 15 warnings. Scoped Ruff/format checks are clean after the P0 and
 P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45
