@@ -189,6 +189,26 @@ Use the repeatable procedure in `docs/harness/LOCAL-SERVICE-CURL-HOOK.md`. If lo
 
 Use the workflow in `docs/harness/WORKFLOW.md` for changes that affect API contracts, inference preprocessing, training behavior, configuration, output JSON/video formats, or task orchestration. Small documentation-only or narrowly scoped test changes may use the compact workflow.
 
+## Codex Session and Memory Hygiene
+
+Prevent the host memory-pressure hang diagnosed on 2026-08-20 (see
+`docs/harness/TASK-BOARD.md` TASK-0272 and wiki
+`agu-codex-memory-crash-root-cause-2026-08-20`): a single 3.79 GB Codex session
+plus 27 parallel ~210 MB duplicates of the same task, held by Codex renderers,
+froze a 16 GB machine (57.7 GB RSS, no kernel panic).
+
+- Do not open Codex with `~` as the workspace root; use a project directory so
+  session logs stay bounded and writable scope stays small.
+- Prefer scripts for large-file edits or deletes so full file contents do not
+  enter tool `changes` payloads in session logs (a single 101.5 MB tool result
+  was the main driver of the 3.79 GB session).
+- Do not re-run the same prompt in many parallel windows; reuse one session or
+  start a fresh one instead.
+- Restart Codex periodically and close idle huge sessions; a renderer holds the
+  whole conversation in memory (~4.5 GB per renderer in the incident).
+- If a session log grows beyond ~100 MB, archive it out of `~/.codex/sessions/`
+  (e.g. to `~/Codex-Session-Archive/`) so Codex stops loading it.
+
 Keep `AGENTS.md` focused on durable rules. Put repeatable procedures in repo skills under `.agents/skills/`, and put task state or project maps under `docs/harness/`.
 
 Do not mark implementation work complete until relevant verification has run or the reason for not running it is recorded. Prefer focused pytest runs while iterating; run broader checks when shared behavior changes.

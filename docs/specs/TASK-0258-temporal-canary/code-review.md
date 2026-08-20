@@ -4,9 +4,13 @@
 
 The implementation has completed scoped self-review, adversarial receipt and
 path-boundary tests, resource failure review, and adjacent-contract regression.
-The required separate fresh-context implementation review has not run because
-the current execution policy does not permit starting another reviewer. This
-remains an open W5 gate and prevents archive or rerun authorization.
+The required separate fresh-context implementation review has not run. The
+schema-layer review and the amendment specification review are not substitutes
+for a final implementation review. This remains an open W5 gate and prevents
+archive or rerun authorization.
+
+The 2026-08-20 P0 check additionally found five scoped Ruff findings before
+cleanup; they must be zero before the P0 branch is merged.
 
 ## Closed findings
 

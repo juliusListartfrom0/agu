@@ -1,0 +1,115 @@
+# TASK-0258 Amendment-001 — v2 implementation plan
+
+Status: **IMPLEMENTATION AUTHORIZED — PARTIALLY IMPLEMENTED** (amendment fresh
+review Critical/Required 0/0, exact-SHA approval sealed 2026-08-17; see
+`amendment_implementation_approval.json`).
+
+## Progress to date (2026-08-20)
+
+The schema/validation/grammar/persistence layer is complete (TDD, 152 tests
+passing, ruff clean); the execution layer is largely implemented and smoke-verified.
+Implemented modules:
+
+- `app/analysis/task0258_module_a_v2.py` — receipt primitives + exact field sets.
+- `app/analysis/task0258_run_history.py` — run-history events/graph/marker/claim/admission/completion schemas.
+- `app/analysis/task0258_v2_gate.py` — candidate/result check sequences + failure matrix.
+- `app/analysis/task0258_v2_artifacts.py` — candidate/failure/bundle/result/failure artifact schemas + membership.
+- `app/analysis/task0258_v2_fs.py` — atomic publication primitives.
+- `app/analysis/task0258_v2_registry.py` — registry durable write path + `create_run_history_registry`.
+- `app/analysis/task0258_v2_verification.py` — verification embedding/attempt/resource schemas, float32 projection, embedding builder.
+- `app/analysis/task0258_v2_verification_extract.py` — empty-state extraction wiring (parent reuse).
+- `app/analysis/task0258_v2_read_isolation.py` — read-isolation policy/attestation schemas.
+- `app/analysis/task0258_v2_bootstrap.py` + `scripts/task0258_module_a_verified_bootstrap.py` — authorized pre-import bootstrap core + FD entry.
+- `app/analysis/task0258_v2_pipeline.py` — candidate/bundle/post-publication builders + sealers.
+- `app/analysis/task0258_v2_pipeline_cli.py` — full pipeline orchestration (registry→candidate→bundle→result).
+- `app/analysis/task0258_v2_worker_runner.py` — worker subprocess isolation runner.
+- `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
+
+Current working-tree verification: 161 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The scoped Ruff check currently has five findings in
+the pre-P0 working tree; P0 is responsible for clearing them. The existing
+implementation plan records a real empty-state extraction smoke producing 45
+rows (4x768) with computational projection
+`3d8dfba9…3c72`, but no retained v2 result/terminal receipt has been found in
+the current repository state. This smoke claim is therefore not a v2 run
+result and does not authorize execution.
+
+Remaining gates: a different fresh-context implementation review, the
+kernel-audit read-isolation production path (macOS Endpoint Security / syscall
+audit), and the OS-enforced FD review sandbox driver. The worker subprocess
+isolation layer that audit wraps is implemented, but the full production proof
+boundary is not yet sealed. Module B and the v2 rerun remain unauthorized.
+
+This plan decomposes the amendment-001 v2 proof boundary into dependency-ordered
+phases matching the spec's acyclic hash order (amendment §"Acyclic producer and
+verification artifacts"). Each phase is TDD: RED tests first (per amendment
+§"TDD, review and execution gates"), then production code, then GREEN.
+
+## Delta from v1 (what already exists)
+
+The 4,246-line `app/analysis/vru_causal_temporal_retrospective.py` already
+implements the parent Module-A computation: tiled-Swin feature plan, batch-one
+MPS extraction, four-game nested LOGO screening, baseline/candidate final
+evaluators, mechanical gate, disk budget (`DiskWriteBudgetError`), resource
+guard, atomic publication, and signal-only resume. The amendment does **not**
+change the parent computation contract; it adds the closed-evidence
+post-publication boundary and a second empty-state extraction on top.
+
+## New v2 schema versions to introduce
+
+| Kind | Schema |
+| --- | --- |
+| producer attempt | `agu.vru-causal-tiled-swin-attempt.v2` |
+| producer resume | `agu.vru-causal-tiled-swin-embeddings-resume.v2` |
+| producer embedding | `agu.vru-causal-tiled-swin-embeddings.v2` |
+| verification embedding | `agu.vru-causal-tiled-swin-verification-embeddings.v2` |
+| verification attempt | `agu.vru-causal-tiled-swin-verification-attempt.v2` |
+| verification resource row | `agu.vru-causal-verification-resource-sample.v1` |
+| candidate gate | `agu.vru-causal-temporal-candidate-gate.v2` |
+| mechanical failure | `agu.vru-causal-temporal-mechanical-failure.v2` |
+| candidate receipt bundle | `agu.vru-causal-temporal-candidate-receipt-bundle.v1` |
+| postpublication verification | `agu.vru-causal-temporal-postpublication-verification.v2` |
+| postpublication failure | `agu.vru-causal-temporal-postpublication-failure.v2` |
+| run-history marker | `agu.task0258-module-a-v2-run-history-marker.v1` |
+| run-history claim/completion | `agu.task0258-module-a-v2-run-history-*.v1` (exact names in §2726) |
+| rerun authorization | `agu.task0258-module-a-v2-rerun-authorization.v1` (issued separately) |
+
+## Phases
+
+1. **Run-history registry** (foundation / trust spine) — new module
+   `app/analysis/task0258_run_history.py`: claim/completion files
+   `<AUTH_SHA>.claim.json` / `<AUTH_SHA>.completed.json`, 14-event history markers
+   with the exact transition graph, `root_subject_cas`, `subject_receipts`, and
+   cumulative counters. Exposes `create_run_history_registry`,
+   `verify_run_history_marker`, `load_verified_run_history_ledger`.
+2. **v2 producer schemas** — version `attempt/resume/embedding` to `.v2`, adding
+   `authorization_receipts`, `run_identity_receipt`, `history_head_receipt`,
+   `run_admission_receipt` (+ worker isolation objects on the attempt).
+3. **Verification worker** — second empty-state extraction (role
+   `independent_empty_state_verification`), `verification_embeddings.v2` +
+   `verification_attempt.v2`, read-isolation policy/attestation, shared global
+   resource caps, `computational_projection_sha256`.
+4. **Candidate generation** — `candidate_v2/` ten members +
+   `candidate_gate.v2` (24 ordered checks, `publication_state=not_yet_observed`).
+5. **Failure generation** — `terminal_failure_v2/mechanical_failure.json` +
+   the phase/member/check/reason matrix (§3361-3515).
+6. **Candidate receipt bundle** — external sealer
+   `candidate_receipt_bundle.v1` (§3517-3579).
+7. **Post-publication verification** — `verified_result_v2/verification_registry.json`
+   (§3639-3745) and `postverification_failure_v2/failure.json` (§3753-3806).
+8. **Bootstrap + review sandbox + public API** — `scripts/task0258_module_a_verified_bootstrap.py`,
+   the seven review-sandbox-only functions (§3808-3967), and the FD-based review
+   driver.
+
+## Verification
+
+- Focused pytest per phase (RED→GREEN), then the full suite.
+- `ruff check` + `ruff format --check` + `git diff --check`.
+- No runtime/formal/promotion/readiness/blind-inference change; every v2
+  eligibility flag is hard-false.
+
+## Output boundary
+
+New output root is `vru_causal_temporal_retrospective_v2` (never reuses v1).
+Module B remains unauthorized. The v2 rerun authorization is a **separate**
+user-issued artifact after implementation + a fresh implementation review.

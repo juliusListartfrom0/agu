@@ -2,6 +2,15 @@
 
 ## Automated verification
 
+### Current P0 working-tree check (2026-08-20)
+
+- TASK-0258 focused suite: `161 passed`.
+- `scripts/verify_harness.py --test-command` with the focused suite: passed.
+- `git diff --check`: passed.
+- Scoped Ruff: five findings before P0 cleanup; no completion claim until zero.
+- Full repository pytest is deferred until P0 cleanup and documentation
+  reconciliation; no model execution was performed.
+
 - Module-A focused tests: `67 passed`.
 - Adjacent TASK-0257 export/probe/backbone/causal regression: `523 passed, 3 skipped`.
 - Scoped Ruff check and Ruff format check passed.
