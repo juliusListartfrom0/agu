@@ -14,17 +14,42 @@ target validation, guarded dispatch). The FD/OS plumbing lives in
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import runpy
+import stat
 from collections.abc import Mapping, Sequence
 
 from app.analysis.task0258_module_a_v2 import (
     MODULE_ID,
     canonical_artifact_sha256,
+    compact_canonical_json,
     is_sha256,
 )
 
 REVIEW_DRIVER_REQUEST_SCHEMA = "agu.task0258-review-driver-request.v1"
 REVIEW_CHECK_NAMES = frozenset({"focused_pytest", "full_pytest", "ruff_check", "ruff_format_check"})
+
+_FOCUSED_PYTEST_TARGETS = (
+    "tests/test_vru_causal_temporal_feature_plan.py",
+    "tests/test_vru_causal_tiled_swin_embeddings.py",
+    "tests/test_vru_causal_temporal_retrospective.py",
+    "tests/test_vru_causal_final_evaluator.py",
+    "tests/test_task0258_module_a_cli.py",
+)
+_RUFF_TARGETS = (
+    "app/analysis/vru_causal_temporal_retrospective.py",
+    "scripts/seal_vru_causal_temporal_feature_plan.py",
+    "scripts/extract_vru_causal_tiled_swin_embeddings.py",
+    "scripts/screen_vru_causal_temporal_retrospective.py",
+    "scripts/task0258_module_a_verified_bootstrap.py",
+    "tests/test_vru_causal_temporal_feature_plan.py",
+    "tests/test_vru_causal_tiled_swin_embeddings.py",
+    "tests/test_vru_causal_temporal_retrospective.py",
+    "tests/test_vru_causal_final_evaluator.py",
+    "tests/test_task0258_module_a_cli.py",
+)
 REVIEW_DRIVER_REQUEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -43,6 +68,33 @@ REVIEW_DRIVER_REQUEST_FIELDS = frozenset(
 )
 RUNTIME_SNAPSHOT_RECEIPT_FIELDS = frozenset(
     {"contract_absolute_path", "artifact_sha256", "file_sha256", "postpublication_free_bytes"}
+)
+RUNTIME_SNAPSHOT_CONTRACT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "manifest_absolute_path",
+        "manifest_artifact_sha256",
+        "manifest_file_sha256",
+        "runtime_root_absolute_path",
+        "runtime_root_device",
+        "runtime_root_inode",
+        "ordered_mount_flags",
+        "ordered_origin_root_rows",
+        "ordered_python_sys_path_entries",
+        "python_snapshot_location",
+        "python_executable_copy_receipt",
+        "bootstrap_source_copy_receipt",
+        "ordered_venv_executable_symlink_receipts",
+        "ordered_tree_member_receipts",
+        "tree_projection_sha256",
+        "ordered_subprocess_executable_receipts",
+        "review_heavy_execution_policy_receipt",
+        "os_system_runtime_receipt",
+        "build_resource_limits",
+        "build_prepublication_observation",
+        "artifact_sha256",
+    }
 )
 
 
@@ -80,7 +132,140 @@ def parse_bootstrap_flags(argv: Sequence[str]) -> tuple[int, int]:
         "--task0258-source-fd",
     }:
         raise ValueError("bootstrap must receive both request-fd and source-fd")
-    return flags["--task0258-review-request-fd"], flags["--task0258-source-fd"]
+    request_fd = flags["--task0258-review-request-fd"]
+    source_fd = flags["--task0258-source-fd"]
+    if request_fd == source_fd:
+        raise ValueError("bootstrap request-fd and source-fd must be distinct")
+    if (request_fd, source_fd) != (202, 203):
+        raise ValueError("bootstrap fd assignment is not the fixed 202/203 map")
+    return request_fd, source_fd
+
+
+def expected_review_target_argv(check_name: object) -> list[str]:
+    """Return the exact target argv authorized by the parent review command."""
+    if check_name == "focused_pytest":
+        return ["-q", "-p", "no:cacheprovider", "--import-mode=importlib", *_FOCUSED_PYTEST_TARGETS]
+    if check_name == "full_pytest":
+        return ["-q", "-p", "no:cacheprovider", "--import-mode=importlib"]
+    if check_name == "ruff_check":
+        return ["check", *_RUFF_TARGETS]
+    if check_name == "ruff_format_check":
+        return ["format", "--check", *_RUFF_TARGETS]
+    raise ValueError(f"review check name is not fixed: {check_name!r}")
+
+
+def _validate_no_follow_absolute_path(path: str) -> None:
+    """Reject non-canonical or symlinked path components before opening."""
+    if not isinstance(path, str) or not path.startswith("/") or "\x00" in path:
+        raise ValueError("runtime contract path is not absolute")
+    if os.path.normpath(path) != path:
+        raise ValueError("runtime contract path is not canonical")
+    current = "/"
+    for component in path.split("/")[1:]:
+        if not component:
+            raise ValueError("runtime contract path contains an empty component")
+        current = os.path.join(current, component)
+        try:
+            entry = os.lstat(current)
+        except OSError as exc:
+            raise ValueError("runtime contract path cannot be reopened") from exc
+        if stat.S_ISLNK(entry.st_mode):
+            raise ValueError("runtime contract path contains a symlink")
+        if current != path and not stat.S_ISDIR(entry.st_mode):
+            raise ValueError("runtime contract path ancestor is not a directory")
+
+
+def load_runtime_snapshot_contract(receipt: Mapping[str, object]) -> Mapping[str, object]:
+    """Reopen and verify the standalone runtime contract bound by a small receipt."""
+    if not isinstance(receipt, Mapping) or set(receipt) != RUNTIME_SNAPSHOT_RECEIPT_FIELDS:
+        raise ValueError("runtime snapshot receipt is invalid")
+    if not is_sha256(receipt["artifact_sha256"]) or not is_sha256(receipt["file_sha256"]):
+        raise ValueError("runtime snapshot receipt hashes are invalid")
+    if (
+        not isinstance(receipt["postpublication_free_bytes"], int)
+        or isinstance(receipt["postpublication_free_bytes"], bool)
+        or receipt["postpublication_free_bytes"] < 0
+    ):
+        raise ValueError("runtime snapshot receipt free-byte observation is invalid")
+    contract_path = receipt["contract_absolute_path"]
+    if not isinstance(contract_path, str):
+        raise ValueError("runtime contract path is invalid")
+    _validate_no_follow_absolute_path(contract_path)
+    try:
+        fd = os.open(contract_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ValueError("runtime contract cannot be opened without following links") from exc
+    try:
+        file_stat = os.fstat(fd)
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or stat.S_IMODE(file_stat.st_mode) != 0o600
+            or file_stat.st_size > 67_108_864
+        ):
+            raise ValueError("runtime contract file kind or size is invalid")
+        chunks: list[bytes] = []
+        remaining = file_stat.st_size
+        while remaining:
+            chunk = os.read(fd, min(1 << 20, remaining))
+            if not chunk:
+                raise ValueError("runtime contract ended before its recorded size")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        contract_bytes = b"".join(chunks)
+    finally:
+        os.close(fd)
+    if hashlib.sha256(contract_bytes).hexdigest() != receipt["file_sha256"]:
+        raise ValueError("runtime contract file hash does not match its receipt")
+    try:
+        contract = json.loads(contract_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("runtime contract is not canonical JSON") from exc
+    if not isinstance(contract, Mapping) or set(contract) != RUNTIME_SNAPSHOT_CONTRACT_FIELDS:
+        raise ValueError("runtime contract field set is invalid")
+    if contract_bytes != compact_canonical_json(contract).encode("utf-8"):
+        raise ValueError("runtime contract bytes are not compact canonical JSON")
+    if contract["artifact_sha256"] != canonical_artifact_sha256(
+        {key: value for key, value in contract.items() if key != "artifact_sha256"}
+    ):
+        raise ValueError("runtime contract artifact hash is invalid")
+    if contract["artifact_sha256"] != receipt["artifact_sha256"]:
+        raise ValueError("runtime contract artifact hash does not match its receipt")
+    if contract["schema_version"] != "agu.task0258-runtime-snapshot-contract.v1":
+        raise ValueError("runtime contract schema is invalid")
+    if contract["module_id"] != MODULE_ID:
+        raise ValueError("runtime contract module identity is invalid")
+    for field in ("manifest_absolute_path", "runtime_root_absolute_path"):
+        value = contract[field]
+        if not isinstance(value, str) or not value.startswith("/") or os.path.normpath(value) != value:
+            raise ValueError(f"runtime contract {field} is invalid")
+    for field in ("manifest_artifact_sha256", "manifest_file_sha256", "tree_projection_sha256"):
+        if not is_sha256(contract[field]):
+            raise ValueError(f"runtime contract {field} is invalid")
+    for field in ("runtime_root_device", "runtime_root_inode"):
+        value = contract[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"runtime contract {field} is invalid")
+    if contract["ordered_mount_flags"] != ["nodev", "nosuid", "read_only"]:
+        raise ValueError("runtime contract mount flags are invalid")
+    entries = contract["ordered_python_sys_path_entries"]
+    if not isinstance(entries, list) or len(entries) != 3:
+        raise ValueError("runtime contract Python sys.path entries are invalid")
+    expected = (
+        (1, "base_runtime", "lib/python3.11", "stdlib"),
+        (2, "base_runtime", "lib/python3.11/lib-dynload", "dynload"),
+        (3, "venv_site_packages", "", "site_packages"),
+    )
+    for row, (ordinal, root_id, relative_path, purpose) in zip(entries, expected):
+        if not isinstance(row, Mapping) or set(row) != {"ordinal", "root_id", "relative_path", "purpose"}:
+            raise ValueError("runtime contract Python sys.path row is invalid")
+        if (row["ordinal"], row["root_id"], row["relative_path"], row["purpose"]) != (
+            ordinal,
+            root_id,
+            relative_path,
+            purpose,
+        ):
+            raise ValueError("runtime contract Python sys.path row is not the fixed entry")
+    return contract
 
 
 def build_sys_path_from_entries(
@@ -135,7 +320,7 @@ def validate_review_driver_request(request: Mapping[str, object]) -> None:
     if request["review_execution_kind"] not in {"discovery", "evidence"}:
         raise ValueError("review driver request execution kind is invalid")
     check_name = request["check_name"]
-    if check_name not in REVIEW_CHECK_NAMES:
+    if not isinstance(check_name, str) or check_name not in REVIEW_CHECK_NAMES:
         raise ValueError("review driver request check name is invalid")
     target_module = request["target_module"]
     validate_target_module(target_module)
@@ -143,14 +328,10 @@ def validate_review_driver_request(request: Mapping[str, object]) -> None:
     if target_module != expected_module:
         raise ValueError("review driver target module does not match the fixed check")
     target_argv = request["target_argv"]
-    if (
-        not isinstance(target_argv, (list, tuple))
-        or not target_argv
-        or any(not isinstance(value, str) or not value for value in target_argv)
+    if not isinstance(target_argv, (list, tuple)) or tuple(target_argv) != tuple(
+        expected_review_target_argv(check_name)
     ):
-        raise ValueError("review driver target argv is invalid")
-    if any(value in {"-c", "-m", "--exec", "--pdb"} for value in target_argv):
-        raise ValueError("review driver target argv contains an executable escape")
+        raise ValueError("review driver target argv is not the fixed parent command")
     runtime = request["runtime_snapshot_receipt"]
     if not isinstance(runtime, Mapping) or set(runtime) != RUNTIME_SNAPSHOT_RECEIPT_FIELDS:
         raise ValueError("review driver runtime snapshot is invalid")
@@ -218,6 +399,8 @@ def dispatch_module(
 
 __all__ = [
     "parse_bootstrap_flags",
+    "expected_review_target_argv",
+    "load_runtime_snapshot_contract",
     "build_sys_path_from_entries",
     "validate_target_module",
     "validate_review_driver_request",

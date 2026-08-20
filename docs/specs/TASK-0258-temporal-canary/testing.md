@@ -4,14 +4,17 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `171 passed`.
+- TASK-0258 focused suite: `173 passed`.
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the remediation slice: `2,039 passed, 5
+- Full repository pytest after the remediation slice: `2,041 passed, 5
   skipped, 15 warnings`.
+- The bootstrap regression coverage now pins the four exact parent review
+  command arrays, the fixed request/source FD map `202/203`, and no-follow
+  canonical reopening of the standalone runtime contract.
 - The review-only capability/loader tests prove temporary-ancestor identity
   re-open, canonical artifact/file hashes, context separation, and wrong-context
   rejection; they do not provide kernel-audit or production admission evidence.

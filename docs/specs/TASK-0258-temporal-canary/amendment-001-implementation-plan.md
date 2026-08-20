@@ -32,8 +32,8 @@ Implemented modules:
   contexts cannot authorize production publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 171 TASK-0258 tests pass and the AGU Harness
-structural gate passes. The full repository suite reports 2,039 passed, 5
+Current working-tree verification: 173 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The full repository suite reports 2,041 passed, 5
 skipped, and 15 warnings. Scoped Ruff/format checks are clean after the P0 and
 P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45
@@ -46,8 +46,11 @@ Remaining gates: close the fresh-context findings and repeat the independent
 review, then complete the kernel-audit read-isolation production path (macOS
 Endpoint Security / syscall audit), OS-enforced FD review sandbox driver,
 externally authenticated verified loaders, and exact authorization-bound
-production admission. The current review-only contexts/loaders are deliberately
-not an admission substitute. The
+production admission. The bootstrap now rejects non-fixed target commands and
+FD assignments and reopens the standalone runtime contract through the
+four-field receipt with no-follow/canonical checks; the runtime contract and
+kernel/provider evidence are still external gates. The current review-only
+contexts/loaders are deliberately not an admission substitute. The
 worker subprocess layer now sanitizes its environment, starts a process group,
 and kills the group on timeout, but the full production proof boundary is not
 sealed. Module B and the v2 rerun remain unauthorized.

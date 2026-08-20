@@ -33,7 +33,11 @@ model execution or readiness transition.
       but the temporary client is only ad-hoc signed and lacks the required
       entitlement; the probe correctly remains fail-closed.
 - [ ] Complete macOS Endpoint Security/syscall read-isolation observation.
-- [ ] Complete the FD review sandbox and verify worker/process cleanup.
+- [ ] Complete the OS-enforced FD review sandbox and verify worker/process
+      cleanup. The pure bootstrap now rejects arbitrary target argv, fixes the
+      request/source map to FD `202/203`, and reopens the standalone runtime
+      contract through its receipt with no-follow/canonical checks; this is not
+      yet an OS/kernel attestation.
 - [ ] Prove model-visible reads are logged and receipt-bound.
 
 ### P3 — Explicit v2 run authorization

@@ -25,6 +25,7 @@ def main() -> int:
     from app.analysis.task0258_v2_bootstrap import (
         build_sys_path_from_entries,
         dispatch_module,
+        load_runtime_snapshot_contract,
         parse_bootstrap_flags,
         validate_review_driver_request,
     )
@@ -66,13 +67,17 @@ def main() -> int:
         return 2
     if hashlib.sha256(source_bytes).hexdigest() != request["review_bootstrap_source_sha256"]:
         return 2
-    os.lseek(source_fd, 0, os.SEEK_SET)
-    entries = request["runtime_snapshot_receipt"].get("ordered_python_sys_path_entries")
-    if entries is None:
+    try:
+        runtime_contract = load_runtime_snapshot_contract(request["runtime_snapshot_receipt"])
+    except ValueError:
         return 2
-    runtime_root = request["runtime_snapshot_receipt"]["runtime_root_absolute_path"]
+    entries = runtime_contract["ordered_python_sys_path_entries"]
+    runtime_root = runtime_contract["runtime_root_absolute_path"]
     sys.path[:] = build_sys_path_from_entries(runtime_root, entries)
-    dispatch_module(request["target_module"], request["target_argv"])
+    try:
+        dispatch_module(request["target_module"], request["target_argv"])
+    except (ImportError, RuntimeError, ValueError):
+        return 2
     return 0
 
 
