@@ -24,7 +24,9 @@ from app.analysis.task0258_module_a_v2 import (
     verify_internal_artifact_hash,
 )
 from app.analysis.task0258_run_history import replay_run_history_registry
-from app.analysis.task0258_v2_artifacts import verify_candidate_receipt_bundle
+from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS, verify_candidate_receipt_bundle
+from app.analysis.task0258_v2_fs import verify_generation_directory
+from app.analysis.task0258_v2_pipeline import build_member_receipts
 
 _DISCOVERY_TOKEN = object()
 _SANDBOX_TOKEN = object()
@@ -137,12 +139,26 @@ def _verify_review_check(check_name: object, command_sha256: object) -> None:
 
 
 def _verify_real_directory(path: Path) -> tuple[int, int]:
-    if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+    if path.is_symlink() or not path.is_dir():
         raise ValueError("path must be an absolute real directory")
     identity = path.stat(follow_symlinks=False)
     if not stat.S_ISDIR(identity.st_mode):
         raise ValueError("path is not a directory")
     return identity.st_dev, identity.st_ino
+
+
+def _verify_absolute_no_symlink_path(path: Path) -> None:
+    path = Path(path)
+    if not path.is_absolute() or os.path.normpath(os.fspath(path)) != os.fspath(path):
+        raise ValueError("path must be an absolute canonical path")
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            if current.is_symlink():
+                raise ValueError(f"path contains a symlinked component: {current}")
+        except OSError as exc:
+            raise ValueError(f"cannot inspect path component: {current}") from exc
 
 
 def _verify_temp_ancestor(path: Path) -> tuple[int, int]:
@@ -422,10 +438,11 @@ def load_verified_candidate_receipt_bundle(
     *,
     execution_context: object,
     bundle_path: Path,
+    candidate_dir: Path,
     expected_artifact_sha256: str,
     expected_file_sha256: str,
 ) -> VerifiedJsonArtifact:
-    """Load a candidate bundle only inside an externally bound review context."""
+    """Load a bundle and replay its exact member receipts against ``candidate_v2``."""
     if type(execution_context) not in {
         VerifiedImplementationReviewSandboxContext,
     }:
@@ -436,6 +453,16 @@ def load_verified_candidate_receipt_bundle(
         expected_file_sha256=expected_file_sha256,
     )
     verify_candidate_receipt_bundle(artifact.payload)
+    candidate_dir = Path(candidate_dir)
+    if candidate_dir.name != "candidate_v2":
+        raise ValueError("candidate bundle replay requires candidate_v2")
+    _verify_absolute_no_symlink_path(candidate_dir)
+    _verify_real_directory(candidate_dir)
+    verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
+    actual_member_receipts = build_member_receipts(candidate_dir)
+    if list(artifact.payload["ordered_member_receipts"]) != actual_member_receipts:
+        raise ValueError("candidate bundle member receipts do not match candidate_v2 bytes")
+    verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
     return artifact
 
 

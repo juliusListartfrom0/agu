@@ -215,6 +215,7 @@ def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_pat
     loaded = load_verified_candidate_receipt_bundle(
         execution_context=review,
         bundle_path=bundle_path,
+        candidate_dir=candidate,
         expected_artifact_sha256=bundle["artifact_sha256"],
         expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
     )
@@ -223,6 +224,7 @@ def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_pat
         load_verified_candidate_receipt_bundle(
             execution_context=object(),
             bundle_path=bundle_path,
+            candidate_dir=candidate,
             expected_artifact_sha256=bundle["artifact_sha256"],
             expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
         )
@@ -232,6 +234,48 @@ def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_pat
         load_verified_candidate_receipt_bundle(
             execution_context=review,
             bundle_path=symlinked_parent / bundle_path.name,
+            candidate_dir=candidate,
+            expected_artifact_sha256=bundle["artifact_sha256"],
+            expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
+        )
+
+
+def test_candidate_bundle_loader_rejects_candidate_member_drift(tmp_path):
+    root = tmp_path / "output"
+    root.mkdir()
+    lock = root / ".lock"
+    lock.write_text("")
+    candidate = seal_candidate_v2(root, _members(), flock_path=lock)
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=candidate,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    bundle_parent = tmp_path / "bundle-parent"
+    bundle_parent.mkdir()
+    bundle_path = bundle_parent / "bundle.json"
+    bundle_raw = (compact_canonical_json(bundle) + "\n").encode()
+    bundle_path.write_bytes(bundle_raw)
+    (candidate / "temporal_retrospective.json").write_bytes(
+        (candidate / "temporal_retrospective.json").read_bytes() + b" "
+    )
+    review = bind_implementation_review_sandbox_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+
+    with pytest.raises(ValueError, match="member receipts"):
+        load_verified_candidate_receipt_bundle(
+            execution_context=review,
+            bundle_path=bundle_path,
+            candidate_dir=candidate,
             expected_artifact_sha256=bundle["artifact_sha256"],
             expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
         )

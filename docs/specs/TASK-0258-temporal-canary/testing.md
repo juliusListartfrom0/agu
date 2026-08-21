@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `190 passed` (including the local simulation command,
+- TASK-0258 focused suite: `191 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the marker-chain hardening: `2,058 passed, 5
+- Full repository pytest after the candidate-loader hardening: `2,059 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -49,6 +49,10 @@
   authorization/admission/history/static-input tuple and exact candidate-member
   rows. Mismatches fail before registry, output-root, or bundle writes; tests
   cover admission drift and result-member drift with zero side effects.
+- The review-only candidate bundle loader now requires the real absolute
+  `candidate_v2` directory, reopens exact member coverage, recomputes all ten
+  member receipts, and rejects candidate-byte drift. It remains a review-only
+  loader and supplies no production admission or kernel evidence.
 - `verified_result_v2` and `postverification_failure_v2` sealing now derive
   deterministic stage-directory names from the rerun-authorization SHA, reject
   pre-existing stage residue, publish no-clobber, and reopen exact member
