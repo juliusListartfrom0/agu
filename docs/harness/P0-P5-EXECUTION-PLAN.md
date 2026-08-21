@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 233 passed and
-      full suite is 2,101 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 235 passed and
+      full suite is 2,103 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -132,8 +132,9 @@ model execution or readiness transition.
       and non-positive/non-integer timeouts before spawning; environment
       isolation and process-group cleanup remain local evidence only.
       The fs_usage audit harness now drains diagnostic pipes while retaining
-      at most the shared byte cap and fails closed on overflow; this remains a
-      diagnostic resource bound, not kernel evidence.
+      at most the shared byte cap, propagates malformed-input and background
+      iterator failures to the main caller, and fails closed on overflow; this
+      remains a diagnostic resource bound, not kernel evidence.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
 
