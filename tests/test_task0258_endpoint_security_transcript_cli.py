@@ -68,3 +68,17 @@ def test_inspector_rejects_symlinked_transcript(monkeypatch, capsys, tmp_path: P
     report = json.loads(capsys.readouterr().out)
     assert report["status"] == "invalid_diagnostic_transcript"
     assert report["production_capability"] is False
+
+
+def test_inspector_rejects_symlinked_transcript_parent(monkeypatch, capsys, tmp_path: Path):
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    (real_parent / "audit.jsonl").write_text(_transcript(), encoding="utf-8")
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    monkeypatch.setattr(sys, "argv", ["inspect", "--transcript", str(linked_parent / "audit.jsonl"), "--json"])
+
+    assert inspector.main() == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "invalid_diagnostic_transcript"
+    assert report["production_capability"] is False

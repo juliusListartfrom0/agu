@@ -23,17 +23,29 @@ SCHEMA_VERSION = "agu.task0258-endpoint-security-diagnostic-inspection.v1"
 
 def _open_regular_transcript(path: Path) -> TextIO:
     """Open an absolute, regular, non-symlink transcript for bounded reading."""
+    raw_path = str(path)
     if not path.is_absolute():
         raise ValueError("transcript path must be absolute")
-    if not hasattr(os, "O_NOFOLLOW"):
-        raise OSError("platform does not provide O_NOFOLLOW")
-    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if raw_path.startswith("//") or "//" in raw_path:
+        raise ValueError("transcript path must be canonical absolute path")
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise OSError("platform does not provide no-follow directory opening")
+    common_flags = os.O_RDONLY | os.O_NOFOLLOW
     if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
+        common_flags |= os.O_CLOEXEC
+    directory_flags = common_flags | os.O_DIRECTORY
+    parts = path.parts
+    if len(parts) < 2 or parts[0] != "/" or any(part in {"", ".", ".."} for part in parts[1:]):
+        raise ValueError("transcript path contains an invalid component")
+    directory_fd = os.open("/", directory_flags)
     try:
-        descriptor = os.open(str(path), flags)
-    except OSError:
-        raise
+        for component in parts[1:-1]:
+            next_directory_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_directory_fd
+        descriptor = os.open(parts[-1], common_flags, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
