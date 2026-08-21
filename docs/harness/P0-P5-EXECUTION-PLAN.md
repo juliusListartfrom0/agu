@@ -57,7 +57,9 @@ model execution or readiness transition.
       authorization/admission/history receipts to the actual admission and
       completion bytes, requires the bundle and result to share the same tuple
       and candidate-member receipts, and rejects mismatches before registry or
-      output writes. Run-history marker append now also binds the new marker's
+      output writes. The pipeline entry now refuses production execution
+      unless an external admission issuer is present; temporary end-to-end
+      tests must opt into an explicit synthetic-only context. Run-history marker append now also binds the new marker's
       authorization, run identity, root/nonce, and predecessor receipt to the
       durable ledger head under the registry lock. The review-only candidate
       bundle loader now requires an absolute `candidate_v2` directory and

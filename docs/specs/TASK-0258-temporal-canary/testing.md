@@ -49,6 +49,10 @@
   authorization/admission/history/static-input tuple and exact candidate-member
   rows. Mismatches fail before registry, output-root, or bundle writes; tests
   cover admission drift and result-member drift with zero side effects.
+- The pipeline entry now refuses production execution before any filesystem
+  write because no external admission issuer is bound locally. End-to-end
+  temporary tests must explicitly pass the synthetic-only context and flag;
+  that path remains diagnostic and is not P2/P5 authorization.
 - The review-only candidate bundle loader now requires the real absolute
   `candidate_v2` directory, reopens exact member coverage, recomputes all ten
   member receipts, and rejects candidate-byte drift. It remains a review-only

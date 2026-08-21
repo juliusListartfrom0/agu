@@ -16,7 +16,7 @@ from app.analysis.task0258_v2_pipeline import (
     seal_candidate_v2,
 )
 from app.analysis.task0258_v2_pipeline_cli import (
-    _issue_verified_v2_pipeline_admission_context,
+    _issue_synthetic_v2_pipeline_test_context,
     assemble_candidate_members,
     run_v2_pipeline,
 )
@@ -337,6 +337,26 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
     assert not root.exists()
     assert not bundle_path.exists()
 
+    with pytest.raises(PermissionError, match="explicit test context"):
+        run_v2_pipeline(
+            output_root=root,
+            registry_dir=reg,
+            flock_path=lock2,
+            auth_sha256="0" * 64,
+            claim_payload=claim,
+            admission_payload=admission,
+            completion_payload=completion,
+            candidate_members=members,
+            bundle_path=bundle_path,
+            bundle_payload=bundle_payload,
+            result_payload=result_payload,
+            authorization_context=object(),
+            synthetic_test_only=True,
+        )
+    assert not any(reg.iterdir())
+    assert not root.exists()
+    assert not bundle_path.exists()
+
     bad_bundle = dict(bundle_payload)
     bad_bundle["run_admission_receipt"] = _receipt()
     bad_bundle["artifact_sha256"] = canonical_artifact_sha256(
@@ -355,7 +375,8 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
             bundle_path=bundle_path,
             bundle_payload=bad_bundle,
             result_payload=result_payload,
-            authorization_context=_issue_verified_v2_pipeline_admission_context(),
+            authorization_context=_issue_synthetic_v2_pipeline_test_context(),
+            synthetic_test_only=True,
         )
     assert not any(reg.iterdir())
     assert not root.exists()
@@ -382,7 +403,8 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
             bundle_path=bundle_path,
             bundle_payload=bundle_payload,
             result_payload=bad_result,
-            authorization_context=_issue_verified_v2_pipeline_admission_context(),
+            authorization_context=_issue_synthetic_v2_pipeline_test_context(),
+            synthetic_test_only=True,
         )
     assert not any(reg.iterdir())
     assert not root.exists()
@@ -400,7 +422,8 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
         bundle_path=bundle_path,
         bundle_payload=bundle_payload,
         result_payload=result_payload,
-        authorization_context=_issue_verified_v2_pipeline_admission_context(),
+        authorization_context=_issue_synthetic_v2_pipeline_test_context(),
+        synthetic_test_only=True,
     )
     assert result["candidate"] == root / "candidate_v2"
     assert result["bundle"] == bundle_path

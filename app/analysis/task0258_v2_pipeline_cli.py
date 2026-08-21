@@ -38,30 +38,35 @@ from app.analysis.task0258_v2_pipeline import (
 )
 from app.analysis.task0258_v2_registry import create_run_history_registry
 
-_PIPELINE_CONTEXT_TOKENS: set[tuple[int, bytes]] = set()
+_SYNTHETIC_PIPELINE_CONTEXT_TOKENS: set[tuple[int, bytes]] = set()
+_SYNTHETIC_PIPELINE_CONTEXT_TOKEN = object()
 
 
-class _VerifiedV2PipelineAdmissionContext:
-    """Process-private admission capability issued by the authorized runner."""
+class _SyntheticV2PipelineTestContext:
+    """Process-private context for temporary diagnostic pipeline tests only."""
 
-    __slots__ = ("_pid", "_token")
+    __slots__ = ("_marker", "_pid", "_token")
 
     def __init__(self, token: bytes) -> None:
+        self._marker = _SYNTHETIC_PIPELINE_CONTEXT_TOKEN
         self._pid = os.getpid()
         self._token = token
 
 
-def _issue_verified_v2_pipeline_admission_context() -> _VerifiedV2PipelineAdmissionContext:
+def _issue_synthetic_v2_pipeline_test_context() -> _SyntheticV2PipelineTestContext:
     token = secrets.token_bytes(32)
-    _PIPELINE_CONTEXT_TOKENS.add((os.getpid(), token))
-    return _VerifiedV2PipelineAdmissionContext(token)
+    _SYNTHETIC_PIPELINE_CONTEXT_TOKENS.add((os.getpid(), token))
+    return _SyntheticV2PipelineTestContext(token)
 
 
-def _require_verified_pipeline_context(context: object) -> None:
-    if not isinstance(context, _VerifiedV2PipelineAdmissionContext):
-        raise PermissionError("v2 pipeline requires an authorized admission context")
-    if (context._pid, context._token) not in _PIPELINE_CONTEXT_TOKENS or context._pid != os.getpid():
-        raise PermissionError("v2 pipeline admission context is invalid or expired")
+def _require_synthetic_pipeline_test_context(context: object) -> None:
+    if (
+        not isinstance(context, _SyntheticV2PipelineTestContext)
+        or context._marker is not _SYNTHETIC_PIPELINE_CONTEXT_TOKEN
+    ):
+        raise PermissionError("synthetic v2 pipeline requires its explicit test context")
+    if (context._pid, context._token) not in _SYNTHETIC_PIPELINE_CONTEXT_TOKENS or context._pid != os.getpid():
+        raise PermissionError("synthetic v2 pipeline test context is invalid or expired")
 
 
 def encode_member(value: object) -> bytes:
@@ -105,14 +110,23 @@ def run_v2_pipeline(
     bundle_payload: object,
     result_payload: object,
     authorization_context: object | None = None,
+    synthetic_test_only: bool = False,
 ) -> dict[str, Path]:
-    """Run the guarded v2 state machine to a sealed verified result.
+    """Run the guarded v2 state machine to a sealed diagnostic result.
 
     Phases: registry open -> candidate_v2 publish -> candidate receipt bundle ->
     verified_result_v2 publish. Every transition validates first and publishes
-    no-clobber; a failure at any phase leaves fail-closed residue.
+    no-clobber; a failure at any phase leaves fail-closed residue. The local
+    implementation has no production admission issuer: callers must opt into
+    ``synthetic_test_only`` explicitly, while an unimplemented production
+    invocation fails before any filesystem write.
     """
-    _require_verified_pipeline_context(authorization_context)
+    if not synthetic_test_only:
+        raise PermissionError(
+            "production v2 pipeline requires an externally authorized admission; "
+            "use synthetic_test_only only for temporary diagnostics"
+        )
+    _require_synthetic_pipeline_test_context(authorization_context)
     encoded = assemble_candidate_members(candidate_members)
     candidate_gate = candidate_members.get("candidate_gate.json")
     if not isinstance(candidate_gate, Mapping):

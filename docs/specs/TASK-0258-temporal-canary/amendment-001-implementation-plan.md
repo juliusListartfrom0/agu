@@ -57,10 +57,12 @@ four-field receipt with descriptor-relative no-follow/canonical checks; the
 runtime contract and kernel/provider evidence are still external gates. The
 Python audit parser also refuses to mint an attestation from raw or caller-
 supplied "verified" rows. The current review-only
-contexts/loaders are deliberately not an admission substitute. The
-worker subprocess layer now sanitizes its environment, starts a process group,
-and kills the group on timeout, but the full production proof boundary is not
-sealed. Module B and the v2 rerun remain unauthorized.
+  contexts/loaders are deliberately not an admission substitute. The
+  worker subprocess layer now sanitizes its environment, starts a process group,
+  and kills the group on timeout, but the full production proof boundary is not
+  sealed. The pipeline CLI now refuses production execution unless a future
+  external admission issuer is bound; its end-to-end tests require an explicit
+  synthetic-only flag. Module B and the v2 rerun remain unauthorized.
 
 This plan decomposes the amendment-001 v2 proof boundary into dependency-ordered
 phases matching the spec's acyclic hash order (amendment §"Acyclic producer and
