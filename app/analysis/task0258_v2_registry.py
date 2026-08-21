@@ -146,6 +146,8 @@ def append_run_history_marker(
     The marker's ``event`` must be the exact legal successor; the ordinal must
     match the filename ``NN``. Publishes ``<AUTH_SHA>.history-<NN>-<EVENT>.json``.
     """
+    if not is_sha256(auth_sha256):
+        raise ValueError("history authorization SHA is invalid")
     verify_run_history_marker(payload)
     lock_path = registry_dir / f".{auth_sha256}.history.lock"
     lock_path.touch(mode=0o600, exist_ok=True)

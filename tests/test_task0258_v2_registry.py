@@ -229,6 +229,23 @@ def test_append_marker_no_clobber(tmp_path):
         append_run_history_marker(reg, AUTH, _marker("producer_attempt_1_admitted"), None)
 
 
+def test_append_marker_rejects_invalid_authorization_before_lock_path(tmp_path):
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    escaped_lock = tmp_path / "escaped.history.lock"
+
+    with pytest.raises(ValueError):
+        append_run_history_marker(
+            reg,
+            "/../escaped",
+            _marker("producer_attempt_1_admitted"),
+            None,
+        )
+
+    assert not escaped_lock.exists()
+    assert list(reg.iterdir()) == []
+
+
 def _admission(output_root="/x", claim_receipt=None):
     return _seal(
         {
