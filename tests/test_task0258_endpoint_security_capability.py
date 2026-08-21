@@ -1,5 +1,6 @@
 """Tests for the fail-closed Endpoint Security capability report."""
 
+import plistlib
 import sys
 from pathlib import Path
 
@@ -27,6 +28,8 @@ def test_inspect_signed_artifact_reads_entitlement_from_the_requested_path(monke
     artifact.mkdir()
 
     def fake_run(*args: str):
+        if args[:2] == ("codesign", "--verify"):
+            return capability.subprocess.CompletedProcess(args, 0, stdout="", stderr="")
         if args[:3] == ("codesign", "-dv", "--verbose=4"):
             return capability.subprocess.CompletedProcess(
                 args, 0, stdout="Executable=\nAuthority=Developer ID Application: AGU\n", stderr=""
@@ -35,13 +38,48 @@ def test_inspect_signed_artifact_reads_entitlement_from_the_requested_path(monke
             return capability.subprocess.CompletedProcess(
                 args,
                 0,
-                stdout="<key>com.apple.developer.endpoint-security.client</key>\n<true/>",
+                stdout=plistlib.dumps({"com.apple.developer.endpoint-security.client": True}).decode("utf-8"),
                 stderr="",
             )
         raise AssertionError(args)
 
     monkeypatch.setattr(capability, "_run", fake_run)
     assert capability.inspect_signed_artifact(artifact) == ("signed", True)
+
+
+def test_inspect_signed_artifact_rejects_failed_strict_codesign(monkeypatch, tmp_path: Path):
+    artifact = tmp_path / "audit.systemextension"
+    artifact.mkdir()
+
+    def fake_run(*args: str):
+        assert args[:2] == ("codesign", "--verify")
+        return capability.subprocess.CompletedProcess(args, 1, stdout="", stderr="invalid")
+
+    monkeypatch.setattr(capability, "_run", fake_run)
+    with pytest.raises(ValueError, match="verification failed"):
+        capability.inspect_signed_artifact(artifact)
+
+
+def test_inspect_signed_artifact_requires_true_entitlement_value(monkeypatch, tmp_path: Path):
+    artifact = tmp_path / "audit.systemextension"
+    artifact.mkdir()
+
+    def fake_run(*args: str):
+        if args[:2] == ("codesign", "--verify"):
+            return capability.subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:3] == ("codesign", "-dv", "--verbose=4"):
+            return capability.subprocess.CompletedProcess(args, 0, stdout="Authority=AGU\n", stderr="")
+        if args[:4] == ("codesign", "-d", "--entitlements", ":-"):
+            return capability.subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=plistlib.dumps({"com.apple.developer.endpoint-security.client": False}).decode("utf-8"),
+                stderr="",
+            )
+        raise AssertionError(args)
+
+    monkeypatch.setattr(capability, "_run", fake_run)
+    assert capability.inspect_signed_artifact(artifact) == ("signed", False)
 
 
 def test_inspect_signed_artifact_rejects_missing_path(tmp_path: Path):

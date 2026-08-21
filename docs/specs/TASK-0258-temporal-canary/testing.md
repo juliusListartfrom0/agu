@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `216 passed` (including the local simulation command,
+- TASK-0258 focused suite: `218 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the verified-bootstrap launcher integration increment: `2,084 passed, 5
+- Full repository pytest after the verified-bootstrap launcher integration increment: `2,086 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -176,8 +176,10 @@ signature `adhoc`, required entitlement absent,
 `blocked_external_authorization`. This is a platform blocker, not a
 read-isolation attestation. The probe now accepts
 `--signed-artifact <path> --json` to inspect the actual signed executable or
-`.systemextension`; without that option it intentionally reports the
-temporary ad-hoc compile and cannot observe an installed system extension.
+`.systemextension`; it first requires strict `codesign --verify` success and
+parses the entitlement plist, accepting the entitlement only when its value is
+the boolean `true`. Without that option it intentionally reports the temporary
+ad-hoc compile and cannot observe an installed system extension.
 
 ## Repository-local simulation
 

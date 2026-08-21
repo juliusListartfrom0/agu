@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
-import re
+import plistlib
 import subprocess
 import tempfile
 from pathlib import Path
@@ -34,8 +34,12 @@ def derive_status(*, sdk_available: bool, compile_ok: bool, entitlement_present:
 
 def inspect_signed_artifact(path: Path) -> tuple[str, bool]:
     """Inspect a caller-selected signed executable or system-extension bundle."""
-    if not path.exists():
+    path = Path(path)
+    if not path.exists() or path.is_symlink():
         raise FileNotFoundError(path)
+    verification = _run("codesign", "--verify", "--deep", "--strict", "--verbose=4", str(path))
+    if verification.returncode != 0:
+        raise ValueError(f"codesign verification failed for {path}: {verification.stderr[-1000:]}")
     codesign = _run("codesign", "-dv", "--verbose=4", str(path))
     if codesign.returncode != 0:
         raise ValueError(f"codesign verification failed for {path}: {codesign.stderr[-1000:]}")
@@ -47,8 +51,19 @@ def inspect_signed_artifact(path: Path) -> tuple[str, bool]:
     else:
         signature_kind = "unknown"
     entitlements = _run("codesign", "-d", "--entitlements", ":-", str(path))
-    entitlement_text = f"{entitlements.stdout}\n{entitlements.stderr}"
-    entitlement_present = bool(re.search(r"com\.apple\.developer\.endpoint-security\.client", entitlement_text))
+    if entitlements.returncode != 0:
+        raise ValueError(f"codesign entitlement inspection failed for {path}: {entitlements.stderr[-1000:]}")
+    entitlement_bytes = entitlements.stdout.encode("utf-8")
+    if not entitlement_bytes.strip():
+        entitlement_payload: object = {}
+    else:
+        try:
+            entitlement_payload = plistlib.loads(entitlement_bytes)
+        except (plistlib.InvalidFileException, ValueError, TypeError) as exc:
+            raise ValueError(f"codesign entitlements are not a plist for {path}") from exc
+    if not isinstance(entitlement_payload, dict):
+        raise ValueError(f"codesign entitlements have an invalid shape for {path}")
+    entitlement_present = entitlement_payload.get("com.apple.developer.endpoint-security.client") is True
     return signature_kind, entitlement_present
 
 
