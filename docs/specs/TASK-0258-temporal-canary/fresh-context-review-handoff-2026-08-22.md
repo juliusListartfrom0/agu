@@ -1,10 +1,10 @@
 # TASK-0258 Amendment-001 — current fresh-context review handoff
 
-Review target: `codex/agu-p2` at commit `e8b4077`  
-Baseline: `main` / `origin/main` at `c5157f2`  
-Diff SHA-256 (`git diff --binary c5157f2...e8b4077`):
-`151000a99a98369d2b798ca265d09f44d060d404cb213f772b4c3e3a5b2783d7`  
-Changed-file count: 43
+Review target: `codex/agu-p2` at commit `9fc27a9`
+Baseline: `main` / `origin/main` at `c5157f2`
+Diff SHA-256 (`git diff --binary c5157f2...9fc27a9`):
+`b07b23102bc05e5344c4c7184d47e1536b17e6e68cfa8f33a902d5700302feb9`
+Changed-file count: 44
 
 ## Purpose
 
@@ -27,7 +27,7 @@ repository artifacts together with the code:
 - `docs/harness/P0-P5-EXECUTION-PLAN.md`
 - `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`
 
-Review the complete `c5157f2...e8b4077` scope, not only the latest two local
+Review the complete `c5157f2...9fc27a9` scope, not only the latest two local
 fixes. In particular, adversarially review receipt/marker replay, publication
 locks and races, canonical/no-follow loaders, bootstrap and FD binding, worker
 process-tree cleanup, diagnostic-vs-production admission, and every place a
@@ -46,7 +46,7 @@ Use the canonical environment and record exact output:
 .venv/bin/python scripts/task0258_endpoint_security_capability.py --json
 ```
 
-The current local evidence is 262 focused TASK-0258 tests and 2,130 full-suite
+The current local evidence is 264 focused TASK-0258 tests and 2,132 full-suite
 tests, with 5 skips and 15 warnings. The simulation and capability probe must
 remain explicitly diagnostic-only and must report no production capability.
 

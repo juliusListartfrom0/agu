@@ -13,8 +13,8 @@
   output-root lock.
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
-- The current independent-review handoff is fixed at `e8b4077` against
-  `c5157f2` with a 43-file diff SHA; it remains a request for a separate review,
+- The current independent-review handoff is fixed at `9fc27a9` against
+  `c5157f2` with a 44-file diff SHA; it remains a request for a separate review,
   not a review receipt or authority.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read

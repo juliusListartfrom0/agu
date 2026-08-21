@@ -44,7 +44,7 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 > Current P1 review handoff (2026-08-22):
 > `docs/specs/TASK-0258-temporal-canary/fresh-context-review-handoff-2026-08-22.md`
-> fixes the exact target `codex/agu-p2@e8b4077`, baseline `c5157f2`, 43-file
+> fixes the exact target `codex/agu-p2@9fc27a9`, baseline `c5157f2`, 44-file
 > diff SHA, reproducible commands, and required independent `Critical=0 /
 > Required=0` receipt fields. It is a handoff only; it does not claim a passing
 > review or authorize P2/P3/P4/P5.
