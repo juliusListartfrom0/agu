@@ -10,6 +10,7 @@ the production boundary must satisfy.
 
 from __future__ import annotations
 
+import posixpath
 from collections.abc import Mapping
 
 from app.analysis.task0258_module_a_v2 import (
@@ -35,6 +36,7 @@ _READ_EVENT_LOCATORS = frozenset(
     {
         "path",
         "verified_inherited_fd",
+        "verified_inherited_directory_fd",
         "manifest_bound_runtime_subtree",
         "envelope_bound_marker_fd",
         "owned_stage_subtree",
@@ -155,8 +157,7 @@ def verify_read_isolation_policy(payload: Mapping[str, object]) -> None:
     root_identity = payload["output_root_identity"]
     if not isinstance(root_identity, Mapping) or set(root_identity) != {"absolute_path", "device", "inode"}:
         raise ValueError("read-isolation policy output_root_identity is invalid")
-    if not isinstance(root_identity["absolute_path"], str) or not root_identity["absolute_path"].startswith("/"):
-        raise ValueError("read-isolation policy output root path is invalid")
+    _verify_absolute_path(root_identity["absolute_path"], "read-isolation policy output root path")
     _verify_nonnegative_int(root_identity["device"], "output root device")
     _verify_nonnegative_int(root_identity["inode"], "output root inode")
     if payload["maximum_policy_bytes"] != MAXIMUM_POLICY_BYTES:
@@ -174,8 +175,7 @@ def verify_read_isolation_policy(payload: Mapping[str, object]) -> None:
     if not isinstance(runtime, Mapping) or set(runtime) != _RUNTIME_SNAPSHOT_FIELDS:
         raise ValueError("read-isolation policy runtime_snapshot_contract_input is invalid")
     for field in ("runtime_root_absolute_path", "runtime_contract_absolute_path", "runtime_manifest_absolute_path"):
-        if not isinstance(runtime[field], str) or not runtime[field].startswith("/"):
-            raise ValueError(f"read-isolation policy runtime path is invalid: {field}")
+        _verify_absolute_path(runtime[field], f"read-isolation policy runtime path: {field}")
     for field in (
         "runtime_root_device",
         "runtime_root_inode",
@@ -204,7 +204,8 @@ def verify_read_isolation_attestation(payload: Mapping[str, object]) -> None:
         raise ValueError("read-isolation attestation worker_role is invalid")
     if not is_sha256(payload["child_nonce"]):
         raise ValueError("read-isolation attestation child_nonce is invalid")
-    _verify_nonnegative_int(payload["child_pid"], "child_pid")
+    if not isinstance(payload["child_pid"], int) or isinstance(payload["child_pid"], bool) or payload["child_pid"] <= 0:
+        raise ValueError("child_pid is invalid")
     if not is_sha256(payload["provider_process_instance_id"]):
         raise ValueError("provider_process_instance_id is invalid")
     for field in ("ordered_observed_process_ids", "ordered_observed_read_events"):
@@ -247,6 +248,121 @@ def verify_read_isolation_attestation(payload: Mapping[str, object]) -> None:
         raise ValueError("read-isolation attestation artifact hash is invalid")
 
 
+def verify_read_isolation_binding(policy: Mapping[str, object], attestation: Mapping[str, object]) -> None:
+    """Bind an externally produced attestation to its exact read policy.
+
+    The function only verifies an already-produced provider artifact; it never
+    creates one.  In particular, the caller must still obtain the attestation
+    from an externally authenticated kernel-audit provider.  This local
+    binding closes the separate seam where two individually schema-valid
+    objects could otherwise describe different workers or an unlisted read.
+    """
+    if not isinstance(policy, Mapping) or not isinstance(attestation, Mapping):
+        raise TypeError("read-isolation policy and attestation must be mappings")
+    verify_read_isolation_policy(policy)
+    verify_read_isolation_attestation(attestation)
+
+    if attestation["policy_artifact_sha256"] != policy["artifact_sha256"]:
+        raise ValueError("read-isolation attestation policy hash does not match policy bytes")
+    for field in ("provider_receipt", "run_identity_receipt", "worker_role", "child_nonce"):
+        if attestation[field] != policy[field]:
+            raise ValueError(f"read-isolation attestation {field.replace('_', ' ')} does not match policy")
+
+    allowed_rows = policy["ordered_allowed_read_rows"]
+    denied_rows = policy["ordered_denied_read_rows"]
+    for event in attestation["ordered_observed_read_events"]:
+        matching_denied = [row for row in denied_rows if _denied_row_matches_event(row, event)]
+        if matching_denied:
+            raise ValueError("denied read event matched the read-isolation policy")
+
+        matching_allowed = [row for row in allowed_rows if _allowed_row_matches_event(row, event)]
+        if not matching_allowed:
+            raise ValueError("unknown read event is not covered by the read-isolation policy")
+        selected = _select_unique_allowed_row(matching_allowed)
+        if event["path_role"] != selected["path_role"]:
+            raise ValueError("read event path role does not match the policy row")
+        _verify_event_against_allowed_row(event, selected)
+
+
+def _verify_absolute_path(value: object, name: str) -> None:
+    if (
+        not isinstance(value, str)
+        or not value.startswith("/")
+        or "\x00" in value
+        or value.startswith("//")
+        or posixpath.normpath(value) != value
+    ):
+        raise ValueError(f"{name} is invalid")
+
+
+def _is_lower_hex(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and all(char in "0123456789abcdef" for char in value)
+
+
+def _path_is_within(path: str, root: str) -> bool:
+    return path == root or root == "/" or path.startswith(root.rstrip("/") + "/")
+
+
+def _denied_row_matches_event(row: Mapping[str, object], event: Mapping[str, object]) -> bool:
+    if event["locator_kind"] != "path" or not isinstance(event["normalized_path"], str):
+        return False
+    path = event["normalized_path"]
+    denied_path = row["absolute_path"]
+    if row["match_kind"] == "exact_file":
+        return path == denied_path
+    return _path_is_within(path, denied_path)
+
+
+def _allowed_row_matches_event(row: Mapping[str, object], event: Mapping[str, object]) -> bool:
+    if event["locator_kind"] != row["locator_kind"]:
+        return False
+    if event["operation"] not in row["ordered_allowed_operations"]:
+        return False
+    locator_kind = row["locator_kind"]
+    if locator_kind in {"verified_inherited_fd", "verified_inherited_directory_fd", "envelope_bound_marker_fd"}:
+        return event["normalized_path"] is None and event["fd_number"] == row["fd_number"]
+    if not isinstance(event["normalized_path"], str) or not isinstance(row["absolute_path"], str):
+        return False
+    if row["match_kind"] in {"owned_stage_subtree", "manifest_bound_runtime_subtree"}:
+        return _path_is_within(event["normalized_path"], row["absolute_path"])
+    return event["normalized_path"] == row["absolute_path"]
+
+
+def _select_unique_allowed_row(rows: list[Mapping[str, object]]) -> Mapping[str, object]:
+    if len(rows) == 1:
+        return rows[0]
+    path_rows = [row for row in rows if isinstance(row["absolute_path"], str)]
+    if len(path_rows) != len(rows):
+        raise ValueError("read event matches ambiguous policy rows")
+    longest = max(len(row["absolute_path"]) for row in path_rows)
+    selected = [row for row in path_rows if len(row["absolute_path"]) == longest]
+    if len(selected) != 1:
+        raise ValueError("read event matches ambiguous policy rows")
+    return selected[0]
+
+
+def _verify_event_against_allowed_row(event: Mapping[str, object], row: Mapping[str, object]) -> None:
+    if event["result_state"] == "error":
+        return
+    if event["entry_kind"] != row["entry_kind"]:
+        raise ValueError("read event entry kind does not match the policy row")
+    expected_fields = {
+        "expected_device": "device",
+        "expected_inode": "inode",
+        "expected_size_bytes": "size_bytes",
+        "expected_file_sha256": "file_sha256",
+        "expected_symlink_target_text": "symlink_target_text",
+    }
+    for expected_field, event_field in expected_fields.items():
+        expected = row[expected_field]
+        if expected is not None and event[event_field] != expected:
+            raise ValueError(f"read event {event_field} does not match the policy row")
+    if event["operation"] == "open" and event["opened_fd_number"] is None:
+        raise ValueError("successful open event lacks its opened descriptor")
+    if event["operation"] != "open" and event["opened_fd_number"] is not None:
+        raise ValueError("non-open event carries an opened descriptor")
+
+
 def _verify_policy_rows(rows: object, *, allowed: bool) -> None:
     if not isinstance(rows, (list, tuple)):
         raise ValueError("read-isolation policy rows must be lists")
@@ -286,13 +402,28 @@ def _verify_policy_rows(rows: object, *, allowed: bool) -> None:
                 "symlink",
             }:
                 raise ValueError("read-isolation policy allowed row discriminator is invalid")
-            if row["locator_kind"] in {"verified_inherited_fd", "envelope_bound_marker_fd"}:
+            if row["locator_kind"] in {
+                "verified_inherited_fd",
+                "verified_inherited_directory_fd",
+                "envelope_bound_marker_fd",
+            }:
                 if row["absolute_path"] is not None:
                     raise ValueError("read-isolation FD row must not carry a path")
-            elif not isinstance(row["absolute_path"], str) or not row["absolute_path"].startswith("/"):
-                raise ValueError("read-isolation policy row absolute_path is invalid")
-            if row["fd_number"] is not None and (
-                not isinstance(row["fd_number"], int) or isinstance(row["fd_number"], bool) or row["fd_number"] < 0
+                if not isinstance(row["fd_number"], int) or isinstance(row["fd_number"], bool) or row["fd_number"] < 0:
+                    raise ValueError("read-isolation FD row must carry a fixed descriptor")
+            else:
+                _verify_absolute_path(row["absolute_path"], "read-isolation policy row absolute_path")
+            if (
+                row["locator_kind"]
+                not in {
+                    "verified_inherited_fd",
+                    "verified_inherited_directory_fd",
+                    "envelope_bound_marker_fd",
+                }
+                and row["fd_number"] is not None
+                and (
+                    not isinstance(row["fd_number"], int) or isinstance(row["fd_number"], bool) or row["fd_number"] < 0
+                )
             ):
                 raise ValueError("read-isolation policy fd_number is invalid")
             if row["match_kind"] not in {
@@ -310,20 +441,44 @@ def _verify_policy_rows(rows: object, *, allowed: bool) -> None:
                     or row["expected_size_bytes"] < 0
                 ):
                     raise ValueError("read-isolation policy regular size is invalid")
+                _verify_nonnegative_int(row["expected_device"], "read-isolation policy regular device")
+                _verify_nonnegative_int(row["expected_inode"], "read-isolation policy regular inode")
                 if not is_sha256(row["expected_file_sha256"]):
                     raise ValueError("read-isolation policy regular hash is invalid")
             elif row["entry_kind"] == "directory":
-                if row["expected_size_bytes"] is not None or row["expected_file_sha256"] is not None:
+                _verify_nonnegative_int(row["expected_device"], "read-isolation policy directory device")
+                _verify_nonnegative_int(row["expected_inode"], "read-isolation policy directory inode")
+                if (
+                    row["expected_size_bytes"] is not None
+                    or row["expected_file_sha256"] is not None
+                    or row["expected_symlink_target_text"] is not None
+                ):
                     raise ValueError("read-isolation policy directory nullability is invalid")
-            elif row["entry_kind"] == "symlink" and not isinstance(row["expected_symlink_target_text"], str):
-                raise ValueError("read-isolation policy symlink target is invalid")
+            elif row["entry_kind"] == "symlink":
+                _verify_nonnegative_int(row["expected_device"], "read-isolation policy symlink device")
+                _verify_nonnegative_int(row["expected_inode"], "read-isolation policy symlink inode")
+                if not isinstance(row["expected_symlink_target_text"], str):
+                    raise ValueError("read-isolation policy symlink target is invalid")
+                if row["expected_size_bytes"] is not None or row["expected_file_sha256"] is not None:
+                    raise ValueError("read-isolation policy symlink nullability is invalid")
+            if row["match_kind"] == "exact_os_signed_regular":
+                signature = row["expected_code_signature"]
+                if (
+                    not isinstance(signature, Mapping)
+                    or set(signature) != {"absolute_path", "team_identifier", "cdhash"}
+                    or signature["absolute_path"] != row["absolute_path"]
+                    or not is_safe_slug(signature["team_identifier"])
+                    or not _is_lower_hex(signature["cdhash"])
+                ):
+                    raise ValueError("read-isolation OS-signed code signature is invalid")
+            elif row["expected_code_signature"] is not None:
+                raise ValueError("read-isolation code signature is only valid for OS-signed rows")
             if not isinstance(row["ordered_allowed_operations"], (list, tuple)) or any(
                 operation not in _READ_EVENT_OPERATIONS for operation in row["ordered_allowed_operations"]
             ):
                 raise ValueError("read-isolation policy allowed operations are invalid")
         else:
-            if not isinstance(row["absolute_path"], str) or not row["absolute_path"].startswith("/"):
-                raise ValueError("read-isolation policy denied path is invalid")
+            _verify_absolute_path(row["absolute_path"], "read-isolation policy denied path")
             if row["match_kind"] not in {"exact_file", "subtree", "remaining_output_root"}:
                 raise ValueError("read-isolation policy denied row discriminator is invalid")
 
@@ -338,8 +493,8 @@ def _verify_read_event(row: object, ordinal: int) -> None:
     if row["locator_kind"] not in _READ_EVENT_LOCATORS:
         raise ValueError("read-isolation event locator is invalid")
     path = row["normalized_path"]
-    if path is not None and (not isinstance(path, str) or not path.startswith("/")):
-        raise ValueError("read-isolation event normalized_path is invalid")
+    if path is not None:
+        _verify_absolute_path(path, "read-isolation event normalized_path")
     for field in ("fd_number", "opened_fd_number", "access_mode", "mode_bits", "device", "inode", "size_bytes"):
         value = row[field]
         if value is not None:
@@ -378,8 +533,13 @@ def _verify_read_event(row: object, ordinal: int) -> None:
     if row["xattr_value_sha256"] is not None and not is_sha256(row["xattr_value_sha256"]):
         raise ValueError("read-isolation event xattr hash is invalid")
     children = row["ordered_child_names"]
-    if children is not None and (not isinstance(children, (list, tuple)) or list(children) != sorted(children)):
-        raise ValueError("read-isolation event child listing is invalid")
+    if children is not None:
+        if (
+            not isinstance(children, (list, tuple))
+            or any(not isinstance(child, str) or "/" in child or "\x00" in child for child in children)
+            or list(children) != sorted(children)
+        ):
+            raise ValueError("read-isolation event child listing is invalid")
 
 
 __all__ = [
@@ -393,4 +553,5 @@ __all__ = [
     "READ_ISOLATION_ATTESTATION_FIELDS",
     "verify_read_isolation_policy",
     "verify_read_isolation_attestation",
+    "verify_read_isolation_binding",
 ]
