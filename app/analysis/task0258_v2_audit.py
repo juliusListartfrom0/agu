@@ -74,6 +74,9 @@ _ENDPOINT_SECURITY_EVENTS = frozenset(
 _ENDPOINT_SECURITY_BASE_FIELDS = frozenset(
     {"event", "pid", "pidversion", "ppid", "seq_num", "global_seq_num", "path", "result_type"}
 )
+_ENDPOINT_SECURITY_FINAL_FIELDS = frozenset(
+    {"record_type", "rows", "bytes", "overflow", "sequence_gap", "protocol_error", "timed_out"}
+)
 MAXIMUM_ENDPOINT_SECURITY_ROW_BYTES = 512
 
 
@@ -227,9 +230,10 @@ def parse_endpoint_security_transcript(
 ) -> list[EndpointSecurityEvent]:
     """Parse a bounded Endpoint Security JSONL transcript for diagnostics.
 
-    The C client already performs sequence-gap checks before writing rows. This
-    parser repeats the retained-row ordering check and validates the exact
-    result projection, but it never upgrades the transcript into a provider
+    The C client performs sequence-gap checks before writing rows and appends a
+    clean finalization row after observation. This parser repeats the
+    retained-row ordering check, validates the exact result projection and
+    finalization counts, but it never upgrades the transcript into a provider
     receipt or a read-isolation attestation.
     """
     if isinstance(maximum_rows, bool) or not isinstance(maximum_rows, int) or maximum_rows <= 0:
@@ -239,8 +243,10 @@ def parse_endpoint_security_transcript(
 
     events: list[EndpointSecurityEvent] = []
     total_bytes = 0
+    event_bytes = 0
     last_global_seq_num: int | None = None
     last_seq_num: dict[str, int] = {}
+    finalization_seen = False
     for line_number, line in enumerate(stream, start=1):
         try:
             line_bytes = len(line.encode("utf-8"))
@@ -251,10 +257,10 @@ def parse_endpoint_security_transcript(
         total_bytes += line_bytes
         if total_bytes > maximum_bytes:
             raise ValueError("Endpoint Security transcript exceeds byte cap")
+        if finalization_seen:
+            raise ValueError(f"line {line_number} appears after finalization")
         if not line.strip():
             raise ValueError(f"line {line_number} is empty")
-        if len(events) >= maximum_rows:
-            raise ValueError("Endpoint Security transcript exceeds event-row cap")
         try:
             payload = json.loads(
                 line,
@@ -265,6 +271,24 @@ def parse_endpoint_security_transcript(
             if isinstance(exc, ValueError) and str(exc).startswith("duplicate JSON field"):
                 raise
             raise ValueError(f"line {line_number} is invalid JSON") from exc
+        if isinstance(payload, dict) and "record_type" in payload:
+            if set(payload) != _ENDPOINT_SECURITY_FINAL_FIELDS:
+                raise ValueError(f"line {line_number} finalization field set is invalid")
+            if payload["record_type"] != "final":
+                raise ValueError(f"line {line_number} finalization record type is invalid")
+            final_rows = _verify_json_integer(payload["rows"], f"line {line_number} finalization rows")
+            final_bytes = _verify_json_integer(payload["bytes"], f"line {line_number} finalization bytes")
+            for field in ("overflow", "sequence_gap", "protocol_error", "timed_out"):
+                if not isinstance(payload[field], bool):
+                    raise ValueError(f"line {line_number} finalization {field} is invalid")
+                if payload[field] is not False:
+                    raise ValueError(f"line {line_number} finalization is not clean")
+            if final_rows != len(events) or final_bytes != event_bytes:
+                raise ValueError(f"line {line_number} finalization counts are invalid")
+            finalization_seen = True
+            continue
+        if len(events) >= maximum_rows:
+            raise ValueError("Endpoint Security transcript exceeds event-row cap")
         event = _parse_endpoint_security_row(payload, line_number)
         if event.seq_num is not None:
             previous = last_seq_num.get(event.event)
@@ -276,6 +300,9 @@ def parse_endpoint_security_transcript(
                 raise ValueError(f"line {line_number} global sequence is not increasing")
             last_global_seq_num = event.global_seq_num
         events.append(event)
+        event_bytes += line_bytes
+    if not finalization_seen:
+        raise ValueError("Endpoint Security transcript is missing finalization")
     return events
 
 

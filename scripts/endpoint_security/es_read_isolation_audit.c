@@ -4,8 +4,10 @@
 // requires an "authenticated kernel-audit provider". On macOS this is the
 // Endpoint Security framework (es_* C API). This client subscribes to the
 // kernel's path-resolution notify events for the audited worker process tree and
-// streams a bounded, canonical transcript (JSONL) that the Python side folds
-// into `agu.task0258-module-a-worker-read-isolation-attestation.v1`.
+// streams a bounded, canonical transcript (JSONL) that ends with a clean
+// finalization record. The Python side can validate the diagnostic projection,
+// but still cannot fold it into `agu.task0258-module-a-worker-read-isolation-attestation.v1`
+// without a future externally authenticated provider.
 //
 // BUILD (unsigned; signing + entitlement are a separate platform step):
 //   clang -O2 -framework EndpointSecurity -framework CoreFoundation -lbsm \
@@ -484,6 +486,27 @@ static int open_output_no_follow(const char *path) {
     return output_fd;
 }
 
+static int write_final_row(void) {
+    char row[MAX_ROW_BYTES];
+    int written = snprintf(
+        row, sizeof(row),
+        "{\"record_type\":\"final\",\"rows\":%llu,\"bytes\":%llu,"
+        "\"overflow\":%s,\"sequence_gap\":%s,\"protocol_error\":%s,\"timed_out\":%s}\n",
+        (unsigned long long)g_row_count,
+        (unsigned long long)g_row_bytes,
+        g_overflow ? "true" : "false",
+        g_sequence_gap ? "true" : "false",
+        g_protocol_error ? "true" : "false",
+        g_timed_out ? "true" : "false");
+    if (written <= 0 || (size_t)written >= sizeof(row)) {
+        return 0;
+    }
+    if (g_row_bytes + (uint64_t)written > MAX_TRANSCRIPT_BYTES) {
+        return 0;
+    }
+    return fwrite(row, 1, (size_t)written, g_out) == (size_t)written;
+}
+
 int main(int argc, char **argv) {
     const char *out_path = NULL;
     for (int i = 1; i < argc; i++) {
@@ -560,7 +583,8 @@ int main(int argc, char **argv) {
     }
     alarm(0);
     es_delete_client(client);
-    int flush_result = fflush(g_out);
+    int final_row_result = write_final_row();
+    int flush_result = final_row_result == 1 ? fflush(g_out) : -1;
     int sync_result = flush_result == 0 ? fsync(fileno(g_out)) : -1;
     int close_result = fclose(g_out);
     if (flush_result != 0 || sync_result != 0 || close_result != 0) {

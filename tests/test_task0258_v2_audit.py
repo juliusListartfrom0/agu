@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 
 import pytest
 
@@ -36,6 +37,19 @@ def _inputs(denied_paths=()):
         "finalize_artifact_sha256": "0" * 64,
         "denied_paths": denied_paths,
     }
+
+
+def _endpoint_finalization(event_rows: str, **flags: bool) -> str:
+    payload = {
+        "record_type": "final",
+        "rows": len([line for line in event_rows.splitlines() if line]),
+        "bytes": len(event_rows.encode("utf-8")),
+        "overflow": flags.get("overflow", False),
+        "sequence_gap": flags.get("sequence_gap", False),
+        "protocol_error": flags.get("protocol_error", False),
+        "timed_out": flags.get("timed_out", False),
+    }
+    return json.dumps(payload, separators=(",", ":")) + "\n"
 
 
 def test_parse_fsusage_line():
@@ -78,15 +92,16 @@ def test_parse_fsusage_transcript_enforces_byte_cap():
 
 
 def test_parse_endpoint_security_transcript_preserves_notify_results_and_sequences():
-    text = (
+    event_rows = (
         '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":10,'
         '"global_seq_num":100,"path":"/private/tmp/input.json",'
         '"result_type":"auth","result_auth":"allow"}\n'
         '{"event":"fork","pid":43,"pidversion":8,"ppid":42,"seq_num":11,'
         '"global_seq_num":102,"path":null,"result_type":"flags","result_flags":3}\n'
     )
+    text = event_rows + _endpoint_finalization(event_rows)
 
-    assert parse_endpoint_security_transcript(io.StringIO(text)) == [
+    expected = [
         EndpointSecurityEvent(
             event="open",
             pid=42,
@@ -112,6 +127,26 @@ def test_parse_endpoint_security_transcript_preserves_notify_results_and_sequenc
             result_flags=3,
         ),
     ]
+    assert parse_endpoint_security_transcript(io.StringIO(text)) == expected
+    assert parse_endpoint_security_transcript(io.StringIO(text), maximum_rows=2) == expected
+
+
+def test_parse_endpoint_security_transcript_requires_clean_finalization():
+    event_rows = (
+        '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":1,'
+        '"global_seq_num":1,"path":null,"result_type":"auth","result_auth":"allow"}\n'
+    )
+    with pytest.raises(ValueError, match="finalization"):
+        parse_endpoint_security_transcript(io.StringIO(event_rows))
+    with pytest.raises(ValueError, match="finalization"):
+        parse_endpoint_security_transcript(io.StringIO(event_rows + _endpoint_finalization(event_rows, timed_out=True)))
+
+    mismatched = json.loads(_endpoint_finalization(event_rows))
+    mismatched["rows"] = 0
+    with pytest.raises(ValueError, match="finalization counts"):
+        parse_endpoint_security_transcript(
+            io.StringIO(event_rows + json.dumps(mismatched, separators=(",", ":")) + "\n")
+        )
 
 
 @pytest.mark.parametrize(
