@@ -41,12 +41,14 @@ from app.analysis.task0258_v2_artifacts import (
 )
 from app.analysis.task0258_v2_fs import verify_generation_directory
 from app.analysis.task0258_v2_pipeline import build_member_receipts
+from app.analysis.task0258_v2_read_isolation import verify_read_isolation_binding
 
 _DISCOVERY_TOKEN = object()
 _SANDBOX_TOKEN = object()
 _SYNTHETIC_DISCOVERY_TOKEN = object()
 _SYNTHETIC_REVIEW_TOKEN = object()
 _JSON_ARTIFACT_TOKEN = object()
+_READ_ISOLATION_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
 
@@ -124,6 +126,28 @@ class VerifiedJsonArtifact:
         self.payload = kwargs["payload"]
         self.artifact_sha256 = kwargs["artifact_sha256"]
         self.file_sha256 = kwargs["file_sha256"]
+
+
+class VerifiedReviewReadIsolationBinding:
+    """Review-only pair of canonical read-isolation provider artifacts.
+
+    The object proves only that the two supplied artifacts are internally
+    valid and cross-bound.  It does not prove that the provider is an
+    authenticated kernel-audit source and cannot be used as production
+    authorization.
+    """
+
+    __slots__ = ("_token", "policy", "attestation")
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _READ_ISOLATION_TOKEN:
+            raise TypeError("VerifiedReviewReadIsolationBinding cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        self._token = token
+        self.policy = kwargs["policy"]
+        self.attestation = kwargs["attestation"]
 
 
 class VerifiedRunHistoryLedger:
@@ -492,6 +516,46 @@ def _load_verified_json_artifact(
     )
 
 
+def load_verified_read_isolation_binding(
+    *,
+    execution_context: object,
+    policy_path: Path,
+    expected_policy_artifact_sha256: str,
+    expected_policy_file_sha256: str,
+    attestation_path: Path,
+    expected_attestation_artifact_sha256: str,
+    expected_attestation_file_sha256: str,
+) -> VerifiedReviewReadIsolationBinding:
+    """Load and cross-bind read-isolation artifacts in a review sandbox.
+
+    This loader is deliberately diagnostic-only.  It reopens both canonical
+    JSON files through the existing bounded no-follow loader, then validates
+    the policy↔attestation binding.  The external kernel-audit provenance
+    required for production remains outside this function.
+    """
+    if (
+        type(execution_context) is not VerifiedImplementationReviewSandboxContext
+        or execution_context._token is not _SANDBOX_TOKEN
+    ):
+        raise PermissionError("read-isolation loader requires a verified review context")
+    policy = _load_verified_json_artifact(
+        path=policy_path,
+        expected_artifact_sha256=expected_policy_artifact_sha256,
+        expected_file_sha256=expected_policy_file_sha256,
+    )
+    attestation = _load_verified_json_artifact(
+        path=attestation_path,
+        expected_artifact_sha256=expected_attestation_artifact_sha256,
+        expected_file_sha256=expected_attestation_file_sha256,
+    )
+    verify_read_isolation_binding(policy.payload, attestation.payload)
+    return VerifiedReviewReadIsolationBinding(
+        _READ_ISOLATION_TOKEN,
+        policy=policy,
+        attestation=attestation,
+    )
+
+
 def _artifact_file_receipt(artifact: VerifiedJsonArtifact) -> dict[str, str]:
     return {
         "artifact_sha256": artifact.artifact_sha256,
@@ -824,6 +888,7 @@ __all__ = [
     "VerifiedSyntheticDiscoveryTransactionContext",
     "VerifiedSyntheticModuleATransactionContext",
     "VerifiedJsonArtifact",
+    "VerifiedReviewReadIsolationBinding",
     "VerifiedRunHistoryLedger",
     "VerifiedReviewRunAdmission",
     "bind_implementation_review_discovery_context",
@@ -834,6 +899,7 @@ __all__ = [
     "exercise_module_a_v2_state_machine_for_discovery",
     "exercise_module_a_v2_state_machine_for_review",
     "load_verified_run_admission",
+    "load_verified_read_isolation_binding",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",
     "load_verified_run_history_ledger",

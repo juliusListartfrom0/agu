@@ -14,6 +14,7 @@ from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_capabilities import (
     VerifiedImplementationReviewSandboxContext,
     VerifiedReviewDiscoveryContext,
+    VerifiedReviewReadIsolationBinding,
     bind_implementation_review_discovery_context,
     bind_implementation_review_sandbox_context,
     bind_synthetic_module_a_discovery_context,
@@ -21,6 +22,7 @@ from app.analysis.task0258_v2_capabilities import (
     exercise_module_a_v2_state_machine_for_discovery,
     exercise_module_a_v2_state_machine_for_review,
     load_verified_candidate_receipt_bundle,
+    load_verified_read_isolation_binding,
     load_verified_run_admission,
     load_verified_run_history_ledger,
     load_verified_terminal_artifact,
@@ -35,6 +37,14 @@ from app.analysis.task0258_v2_pipeline import (
     seal_candidate_v2,
     seal_postverification_failure,
     seal_verified_result,
+)
+from app.analysis.task0258_v2_read_isolation import (
+    MAXIMUM_POLICY_BYTES,
+    MAXIMUM_READ_EVENT_BYTES,
+    MAXIMUM_READ_EVENT_ROWS,
+    READ_EVENT_PROJECTION_PROTOCOL,
+    READ_ISOLATION_ATTESTATION_SCHEMA,
+    READ_ISOLATION_POLICY_SCHEMA,
 )
 from app.analysis.task0258_v2_registry import seal_run_consumption_claim, seal_run_consumption_completed
 
@@ -107,6 +117,124 @@ def _payload_receipt(payload):
 
 def _file_hashes(path, payload):
     return payload["artifact_sha256"], hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _read_isolation_fixture(tmp_path):
+    observed_file = tmp_path / "runtime-contract.json"
+    observed_file.write_text("{}\n")
+    observed_stat = observed_file.stat()
+    policy = {
+        "schema_version": READ_ISOLATION_POLICY_SCHEMA,
+        "module_id": MODULE_ID,
+        "provider_receipt": _receipt(),
+        "run_identity_receipt": _receipt(),
+        "worker_role": "verification-worker",
+        "child_nonce": "1" * 64,
+        "output_root_identity": {
+            "absolute_path": str(tmp_path),
+            "device": tmp_path.stat().st_dev,
+            "inode": tmp_path.stat().st_ino,
+        },
+        "runtime_snapshot_contract_input": {
+            "runtime_root_absolute_path": str(tmp_path),
+            "runtime_root_device": tmp_path.stat().st_dev,
+            "runtime_root_inode": tmp_path.stat().st_ino,
+            "runtime_contract_absolute_path": str(observed_file),
+            "runtime_contract_size_bytes": observed_stat.st_size,
+            "runtime_contract_receipt": _receipt(),
+            "runtime_manifest_absolute_path": str(observed_file),
+            "runtime_manifest_size_bytes": observed_stat.st_size,
+            "runtime_manifest_receipt": _receipt(),
+            "runtime_tree_projection_sha256": "2" * 64,
+        },
+        "ordered_allowed_read_rows": [
+            {
+                "locator_kind": "path",
+                "path_role": "runtime_contract",
+                "absolute_path": str(observed_file),
+                "fd_number": None,
+                "match_kind": "exact_regular",
+                "entry_kind": "regular",
+                "expected_device": observed_stat.st_dev,
+                "expected_inode": observed_stat.st_ino,
+                "expected_size_bytes": observed_stat.st_size,
+                "expected_file_sha256": hashlib.sha256(observed_file.read_bytes()).hexdigest(),
+                "expected_symlink_target_text": None,
+                "expected_code_signature": None,
+                "ordered_allowed_operations": ["open", "read"],
+            }
+        ],
+        "ordered_denied_read_rows": [],
+        "read_event_projection_protocol": READ_EVENT_PROJECTION_PROTOCOL,
+        "maximum_read_event_rows": MAXIMUM_READ_EVENT_ROWS,
+        "maximum_read_event_bytes": MAXIMUM_READ_EVENT_BYTES,
+        "maximum_policy_bytes": MAXIMUM_POLICY_BYTES,
+    }
+    policy["artifact_sha256"] = canonical_artifact_sha256(policy)
+    event = {
+        "ordinal": 1,
+        "operation": "open",
+        "path_role": "runtime_contract",
+        "locator_kind": "path",
+        "normalized_path": str(observed_file),
+        "fd_number": None,
+        "opened_fd_number": 9,
+        "follow_symlinks": False,
+        "access_mode": 0,
+        "access_granted": True,
+        "xattr_name": None,
+        "result_state": "success",
+        "errno": None,
+        "entry_kind": "regular",
+        "mode_bits": observed_stat.st_mode,
+        "device": observed_stat.st_dev,
+        "inode": observed_stat.st_ino,
+        "size_bytes": observed_stat.st_size,
+        "file_sha256": hashlib.sha256(observed_file.read_bytes()).hexdigest(),
+        "symlink_target_text": None,
+        "ordered_child_names": None,
+        "xattr_value_sha256": None,
+    }
+    event_projection = hashlib.sha256(compact_canonical_json([event]).encode()).hexdigest()
+    attestation = {
+        "schema_version": READ_ISOLATION_ATTESTATION_SCHEMA,
+        "module_id": MODULE_ID,
+        "policy_artifact_sha256": policy["artifact_sha256"],
+        "provider_receipt": policy["provider_receipt"],
+        "run_identity_receipt": policy["run_identity_receipt"],
+        "worker_role": policy["worker_role"],
+        "child_pid": 1234,
+        "ordered_observed_process_ids": [1234],
+        "provider_process_instance_id": "3" * 64,
+        "child_nonce": policy["child_nonce"],
+        "prepare_artifact_sha256": "4" * 64,
+        "prepared_artifact_sha256": "5" * 64,
+        "child_started_artifact_sha256": "6" * 64,
+        "permit_artifact_sha256": "7" * 64,
+        "finalize_artifact_sha256": "8" * 64,
+        "audit_started_before_spawn": True,
+        "audit_ended_after_child_exit": True,
+        "audit_overflow": False,
+        "ordered_observed_read_events": [event],
+        "read_event_projection_sha256": event_projection,
+        "denied_read_attempt_count": 0,
+        "unknown_read_attempt_count": 0,
+    }
+    attestation["artifact_sha256"] = canonical_artifact_sha256(attestation)
+    policy_path = tmp_path / "read-isolation-policy.json"
+    attestation_path = tmp_path / "read-isolation-attestation.json"
+    policy_raw = (compact_canonical_json(policy) + "\n").encode()
+    attestation_raw = (compact_canonical_json(attestation) + "\n").encode()
+    policy_path.write_bytes(policy_raw)
+    attestation_path.write_bytes(attestation_raw)
+    return {
+        "policy": policy,
+        "attestation": attestation,
+        "policy_path": policy_path,
+        "attestation_path": attestation_path,
+        "policy_file_sha": hashlib.sha256(policy_raw).hexdigest(),
+        "attestation_file_sha": hashlib.sha256(attestation_raw).hexdigest(),
+    }
 
 
 def _bound_gate(admission, history):
@@ -324,6 +452,8 @@ def test_review_contexts_are_opaque_and_distinct():
         VerifiedReviewDiscoveryContext()
     with pytest.raises(TypeError):
         VerifiedImplementationReviewSandboxContext()
+    with pytest.raises(TypeError):
+        VerifiedReviewReadIsolationBinding()
     discovery = bind_implementation_review_discovery_context(
         expected_check_name="focused_pytest", expected_command_sha256="0" * 64
     )
@@ -383,6 +513,81 @@ def test_discovery_manifest_rejects_symlinked_temp_parent(tmp_path):
             operation_input_manifest_path=symlinked_parent / manifest.name,
             expected_manifest_artifact_sha256=payload["artifact_sha256"],
             expected_manifest_file_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+
+
+def test_read_isolation_loader_binds_policy_and_attestation_for_review_only(tmp_path):
+    fixture = _read_isolation_fixture(tmp_path)
+    review = bind_implementation_review_sandbox_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+
+    loaded = load_verified_read_isolation_binding(
+        execution_context=review,
+        policy_path=fixture["policy_path"],
+        expected_policy_artifact_sha256=fixture["policy"]["artifact_sha256"],
+        expected_policy_file_sha256=fixture["policy_file_sha"],
+        attestation_path=fixture["attestation_path"],
+        expected_attestation_artifact_sha256=fixture["attestation"]["artifact_sha256"],
+        expected_attestation_file_sha256=fixture["attestation_file_sha"],
+    )
+
+    assert loaded.policy.payload["artifact_sha256"] == fixture["policy"]["artifact_sha256"]
+    assert loaded.attestation.payload["policy_artifact_sha256"] == fixture["policy"]["artifact_sha256"]
+    assert type(loaded).__name__ == "VerifiedReviewReadIsolationBinding"
+    with pytest.raises(PermissionError):
+        load_verified_read_isolation_binding(
+            execution_context=object(),
+            policy_path=fixture["policy_path"],
+            expected_policy_artifact_sha256=fixture["policy"]["artifact_sha256"],
+            expected_policy_file_sha256=fixture["policy_file_sha"],
+            attestation_path=fixture["attestation_path"],
+            expected_attestation_artifact_sha256=fixture["attestation"]["artifact_sha256"],
+            expected_attestation_file_sha256=fixture["attestation_file_sha"],
+        )
+
+
+def test_read_isolation_loader_rejects_cross_artifact_binding_drift(tmp_path):
+    fixture = _read_isolation_fixture(tmp_path)
+    drifted = dict(fixture["attestation"])
+    drifted["worker_role"] = "producer-worker"
+    drifted["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in drifted.items() if key != "artifact_sha256"}
+    )
+    raw = (compact_canonical_json(drifted) + "\n").encode()
+    fixture["attestation_path"].write_bytes(raw)
+
+    review = bind_implementation_review_sandbox_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+    with pytest.raises(ValueError, match="worker role"):
+        load_verified_read_isolation_binding(
+            execution_context=review,
+            policy_path=fixture["policy_path"],
+            expected_policy_artifact_sha256=fixture["policy"]["artifact_sha256"],
+            expected_policy_file_sha256=fixture["policy_file_sha"],
+            attestation_path=fixture["attestation_path"],
+            expected_attestation_artifact_sha256=drifted["artifact_sha256"],
+            expected_attestation_file_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+
+
+def test_read_isolation_loader_rejects_symlinked_parent(tmp_path):
+    fixture = _read_isolation_fixture(tmp_path)
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    review = bind_implementation_review_sandbox_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+    with pytest.raises(ValueError):
+        load_verified_read_isolation_binding(
+            execution_context=review,
+            policy_path=alias / fixture["policy_path"].name,
+            expected_policy_artifact_sha256=fixture["policy"]["artifact_sha256"],
+            expected_policy_file_sha256=fixture["policy_file_sha"],
+            attestation_path=fixture["attestation_path"],
+            expected_attestation_artifact_sha256=fixture["attestation"]["artifact_sha256"],
+            expected_attestation_file_sha256=fixture["attestation_file_sha"],
         )
 
 
