@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `238 passed` (including the local simulation command,
+- TASK-0258 focused suite: `240 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -15,8 +15,8 @@
   `Critical=7 / Required=5 / Optional=3`.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
-  isolation, authenticated bootstrap, or process-tree cleanup.
-- Latest full repository pytest: `2,106 passed, 5
+  isolation, authenticated bootstrap, or OS-enforced process-tree cleanup.
+- Latest full repository pytest: `2,108 passed, 5
   skipped, 15 warnings`.
 - The bounded fs_usage capture regression defers malformed stream input to
   `finish()` and records background iterator failures for the main caller;
@@ -25,7 +25,8 @@
   not finish within the bounded join window, preventing partial transcripts
   from reaching the parser.
 - The fs_usage audit entry point rejects malformed worker argv before spawn and
-  uses the shared sanitized environment and new-process-group contract.
+  uses the shared sanitized environment and new-process-group contract, then
+  kills/reaps the worker group on timeout.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
   canonical reopening of the standalone runtime contract through a

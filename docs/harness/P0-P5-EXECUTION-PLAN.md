@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 238 passed and
-      full suite is 2,106 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 240 passed and
+      full suite is 2,108 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -131,8 +131,9 @@ model execution or readiness transition.
       The worker subprocess runner now rejects non-list argv, embedded NULs,
       and non-positive/non-integer timeouts before spawning; environment
       isolation and process-group cleanup remain local evidence only. The
-      fs_usage audit entry point reuses the same argv validator, sanitized
-      environment, and new-process-group boundary before spawning its worker.
+      fs_usage audit entry point reuses the same launch validator, sanitized
+      environment, and new-process-group boundary, and kills/reaps the worker
+      group on timeout before parsing diagnostics.
       The fs_usage audit harness now drains diagnostic pipes while retaining
       at most the shared byte cap, propagates malformed-input and background
       iterator failures to the main caller, rejects unfinished drain threads,
