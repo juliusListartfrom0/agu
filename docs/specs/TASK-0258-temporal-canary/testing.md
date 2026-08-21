@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `213 passed` (including the local simulation command,
+- TASK-0258 focused suite: `214 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the review-only static-input authorization binding increment: `2,081 passed, 5
+- Full repository pytest after the review-only terminal static-input binding increment: `2,082 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -126,6 +126,9 @@
 - The review-only rerun-authorization wrapper now requires that per-use static
   replay before binding its exact three-hash static-input contract; it remains
   diagnostic-only and does not issue authorization.
+- The review-only terminal loader has the same static-input-bound entry point;
+  it replays the static graph, checks the admission contract, and only then
+  replays candidate/terminal receipts. It remains diagnostic-only.
 - `verify_verification_attempt` now invokes that binder as the attempt-level
   gate, so individually schema-valid but cross-boundary-drifting policy and
   attestation objects cannot enter a verification attempt.

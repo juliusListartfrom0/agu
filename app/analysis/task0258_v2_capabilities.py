@@ -3199,6 +3199,45 @@ def load_verified_terminal_artifact(
     return terminal
 
 
+def load_verified_terminal_artifact_bound_to_static_inputs(
+    *,
+    execution_context: object,
+    terminal_kind: str,
+    output_root: Path,
+    candidate_dir: Path,
+    candidate_bundle_path: Path,
+    expected_candidate_bundle_artifact_sha256: str,
+    expected_candidate_bundle_file_sha256: str,
+    run_admission: VerifiedReviewRunAdmission,
+    run_history: VerifiedRunHistoryLedger,
+    terminal_path: Path,
+    expected_terminal_artifact_sha256: str,
+    expected_terminal_file_sha256: str,
+    static_inputs: VerifiedModuleAStaticInputs,
+) -> VerifiedJsonArtifact:
+    """Replay a terminal artifact only after static inputs are revalidated."""
+    _require_verified_module_a_static_inputs(static_inputs)
+    replay_verified_module_a_static_inputs(static_inputs)
+    if type(run_admission) is not VerifiedReviewRunAdmission or run_admission._token is not _RUN_ADMISSION_TOKEN:
+        raise TypeError("terminal static-input binding requires a verified review admission")
+    if run_admission.admission.payload.get("static_input_contract") != dict(static_inputs.static_input_contract):
+        raise ValueError("terminal static-input contract is not bound to admission")
+    return load_verified_terminal_artifact(
+        execution_context=execution_context,
+        terminal_kind=terminal_kind,
+        output_root=output_root,
+        candidate_dir=candidate_dir,
+        candidate_bundle_path=candidate_bundle_path,
+        expected_candidate_bundle_artifact_sha256=expected_candidate_bundle_artifact_sha256,
+        expected_candidate_bundle_file_sha256=expected_candidate_bundle_file_sha256,
+        run_admission=run_admission,
+        run_history=run_history,
+        terminal_path=terminal_path,
+        expected_terminal_artifact_sha256=expected_terminal_artifact_sha256,
+        expected_terminal_file_sha256=expected_terminal_file_sha256,
+    )
+
+
 def load_verified_run_history_ledger(
     *, registry_directory: Path, authorization_sha256: str
 ) -> VerifiedRunHistoryLedger:
@@ -3253,5 +3292,6 @@ __all__ = [
     "load_verified_review_implementation_approval",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",
+    "load_verified_terminal_artifact_bound_to_static_inputs",
     "load_verified_run_history_ledger",
 ]
