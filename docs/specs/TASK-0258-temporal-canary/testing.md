@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `205 passed` (including the local simulation command,
+- TASK-0258 focused suite: `207 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the verification-attempt review loader increment: `2,073 passed, 5
+- Full repository pytest after the verification-attempt trust-spine binder increment: `2,075 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -78,6 +78,10 @@
   artifact, verifies its internal/file hashes, and invokes the existing
   attempt validator—including the nested read-isolation binder—before
   returning an opaque review-only artifact.
+- The review-only trust-spine binder now cross-binds that attempt to the
+  reopened admission, stable history identity/head, rerun authorization, and
+  output-root physical CAS. It remains diagnostic-only and cannot issue
+  production admission.
 - `verify_verification_attempt` now invokes that binder as the attempt-level
   gate, so individually schema-valid but cross-boundary-drifting policy and
   attestation objects cannot enter a verification attempt.
