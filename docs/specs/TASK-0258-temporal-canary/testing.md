@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `215 passed` (including the local simulation command,
+- TASK-0258 focused suite: `216 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,13 +16,18 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the review-only run-admission static-input binding increment: `2,083 passed, 5
+- Full repository pytest after the verified-bootstrap launcher integration increment: `2,084 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
   canonical reopening of the standalone runtime contract through a
   descriptor-relative directory-FD chain, including a symlink-ancestor case;
   it also rejects closed, aliased, and non-regular inherited descriptors.
+- A local subprocess regression now launches the actual bootstrap source with
+  `-P -S /dev/fd/203`, binds real request/source descriptors `202/203`, and
+  verifies the fixed target argv reaches the sealed runtime path. The launcher
+  uses a standard-library-only pre-import phase before importing the sealed
+  package; this is local integration evidence, not OS/kernel proof.
 - The review-only capability/loader tests prove temporary-ancestor identity
   re-open, canonical artifact/file hashes, context separation, and wrong-context
   rejection. JSON manifest/bundle reads use bounded descriptor-relative

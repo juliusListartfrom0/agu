@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 215 passed and
-      full suite is 2,083 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 216 passed and
+      full suite is 2,084 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -113,6 +113,11 @@ model execution or readiness transition.
       binding the exact three-hash contract. Matching run-admission and terminal
       review loaders now apply the same replay before accepting their
       static-input-bound receipt bytes.
+      The verified bootstrap launcher now performs a standard-library-only
+      pre-import validation, builds the fixed three-row runtime path, and only
+      then imports the sealed core; a local integration test exercises the real
+      `-P -S /dev/fd/203` and FD `202/203` path. This remains local evidence,
+      not an OS-enforced sandbox or kernel attestation.
       repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.

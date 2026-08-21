@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -227,3 +232,156 @@ def test_runtime_snapshot_receipt_reopens_the_bound_canonical_contract(tmp_path)
     linked_receipt["contract_absolute_path"] = str(linked_parent / contract_path.name)
     with pytest.raises(ValueError):
         load_runtime_snapshot_contract(linked_receipt)
+
+
+def test_verified_bootstrap_launcher_replays_fixed_fd_contract(tmp_path):
+    """Exercise the real ``-P -S /dev/fd/203`` launcher locally."""
+    repository_root = Path(__file__).resolve().parents[1]
+    runtime_root = tmp_path / "runtime"
+    base_runtime = runtime_root / "base_runtime"
+    stdlib_parent = base_runtime / "lib"
+    stdlib_parent.mkdir(parents=True)
+    stdlib = stdlib_parent / "python3.11"
+    stdlib.symlink_to(Path(os.__file__).resolve().parent, target_is_directory=True)
+    site_packages = runtime_root / "venv_site_packages"
+    for path in (site_packages,):
+        path.mkdir(parents=True)
+
+    fake_app = site_packages / "app"
+    (fake_app / "analysis").mkdir(parents=True)
+    for relative_path in (
+        "app/__init__.py",
+        "app/version.py",
+        "app/analysis/__init__.py",
+        "app/analysis/task0258_module_a_v2.py",
+        "app/analysis/task0258_v2_bootstrap.py",
+    ):
+        destination = site_packages / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repository_root / relative_path, destination)
+
+    marker_path = tmp_path / "launcher-marker.json"
+    fake_pytest = site_packages / "pytest"
+    fake_pytest.mkdir()
+    (fake_pytest / "__init__.py").write_text("", encoding="utf-8")
+    (fake_pytest / "__main__.py").write_text(
+        "import json, pathlib, sys\n"
+        f"pathlib.Path({str(marker_path)!r}).write_text(json.dumps(sys.argv), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    contract = {
+        "schema_version": "agu.task0258-runtime-snapshot-contract.v1",
+        "module_id": MODULE_ID,
+        "manifest_absolute_path": str(tmp_path / "manifest.json"),
+        "manifest_artifact_sha256": "1" * 64,
+        "manifest_file_sha256": "2" * 64,
+        "runtime_root_absolute_path": str(runtime_root),
+        "runtime_root_device": runtime_root.stat().st_dev,
+        "runtime_root_inode": runtime_root.stat().st_ino,
+        "ordered_mount_flags": ["nodev", "nosuid", "read_only"],
+        "ordered_origin_root_rows": [],
+        "ordered_python_sys_path_entries": [
+            {"ordinal": 1, "root_id": "base_runtime", "relative_path": "lib/python3.11", "purpose": "stdlib"},
+            {
+                "ordinal": 2,
+                "root_id": "base_runtime",
+                "relative_path": "lib/python3.11/lib-dynload",
+                "purpose": "dynload",
+            },
+            {"ordinal": 3, "root_id": "venv_site_packages", "relative_path": "", "purpose": "site_packages"},
+        ],
+        "python_snapshot_location": {},
+        "python_executable_copy_receipt": {},
+        "bootstrap_source_copy_receipt": {},
+        "ordered_venv_executable_symlink_receipts": [],
+        "ordered_tree_member_receipts": [],
+        "tree_projection_sha256": "3" * 64,
+        "ordered_subprocess_executable_receipts": [],
+        "review_heavy_execution_policy_receipt": {},
+        "os_system_runtime_receipt": {},
+        "build_resource_limits": {},
+        "build_prepublication_observation": {},
+    }
+    contract["artifact_sha256"] = canonical_artifact_sha256(contract)
+    contract_path = tmp_path / "runtime-contract.json"
+    contract_bytes = compact_canonical_json(contract).encode("utf-8")
+    contract_path.write_bytes(contract_bytes)
+    os.chmod(contract_path, 0o600)
+    runtime_receipt = {
+        "contract_absolute_path": str(contract_path),
+        "artifact_sha256": contract["artifact_sha256"],
+        "file_sha256": hashlib.sha256(contract_bytes).hexdigest(),
+        "postpublication_free_bytes": 1,
+    }
+
+    source_path = repository_root / "scripts/task0258_module_a_verified_bootstrap.py"
+    source_bytes = source_path.read_bytes()
+    request = {
+        "schema_version": "agu.task0258-review-driver-request.v1",
+        "module_id": MODULE_ID,
+        "review_execution_kind": "evidence",
+        "check_name": "focused_pytest",
+        "target_module": "pytest",
+        "target_argv": expected_review_target_argv("focused_pytest"),
+        "runtime_snapshot_receipt": runtime_receipt,
+        "namespace_provider_manifest_receipt": None,
+        "expected_runtime_read_receipts": None,
+        "review_bootstrap_source_size_bytes": len(source_bytes),
+        "review_bootstrap_source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+    }
+    request["artifact_sha256"] = canonical_artifact_sha256(request)
+    request_path = tmp_path / "request.json"
+    request_path.write_bytes((compact_canonical_json(request) + "\n").encode("utf-8"))
+
+    request_fd = os.open(request_path, os.O_RDONLY)
+    source_fd = os.open(source_path, os.O_RDONLY)
+    while request_fd in (202, 203):
+        duplicate = os.dup(request_fd)
+        os.close(request_fd)
+        request_fd = duplicate
+    while source_fd in (202, 203):
+        duplicate = os.dup(source_fd)
+        os.close(source_fd)
+        source_fd = duplicate
+    saved_fds: dict[int, int | None] = {}
+    try:
+        for target_fd in (202, 203):
+            try:
+                saved_fds[target_fd] = os.dup(target_fd)
+            except OSError:
+                saved_fds[target_fd] = None
+        os.dup2(request_fd, 202, inheritable=True)
+        os.dup2(source_fd, 203, inheritable=True)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-P",
+                "-S",
+                "/dev/fd/203",
+                "--task0258-review-request-fd",
+                "202",
+                "--task0258-source-fd",
+                "203",
+            ],
+            cwd=repository_root,
+            pass_fds=(202, 203),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    finally:
+        for target_fd in (203, 202):
+            saved_fd = saved_fds[target_fd]
+            if saved_fd is None:
+                os.close(target_fd)
+            else:
+                os.dup2(saved_fd, target_fd, inheritable=True)
+                os.close(saved_fd)
+        os.close(request_fd)
+        os.close(source_fd)
+
+    assert completed.returncode == 0, completed.stderr
+    observed_argv = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert observed_argv[1:] == request["target_argv"]
