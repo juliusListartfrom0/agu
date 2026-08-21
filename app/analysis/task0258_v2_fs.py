@@ -84,6 +84,18 @@ def _validate_member_path(relative_path: str) -> None:
         raise ValueError(f"generation member path escapes the generation root: {relative_path!r}")
 
 
+def _validate_fixed_stage_name(stage_name: str) -> None:
+    if (
+        not isinstance(stage_name, str)
+        or not stage_name
+        or stage_name in {".", ".."}
+        or "/" in stage_name
+        or "\\" in stage_name
+        or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for char in stage_name)
+    ):
+        raise ValueError("fixed generation stage name is invalid")
+
+
 def _rename_no_clobber_darwin(staged: Path, final: Path) -> None:
     """Atomic no-clobber rename via macOS ``renameatx_np(RENAME_EXCL)``.
 
@@ -176,13 +188,19 @@ def atomic_write_json(final: Path, payload: object, *, mode: int = 0o600) -> Non
     atomic_write_bytes(final, data, mode=mode)
 
 
-def build_generation_directory(parent: Path, members: dict[str, bytes]) -> Path:
+def build_generation_directory(
+    parent: Path,
+    members: dict[str, bytes],
+    *,
+    stage_name: str | None = None,
+) -> Path:
     """Create a private staging directory and write every member.
 
     ``members`` maps relative POSIX paths to exact bytes. The stage directory is
-    named ``.task0258-<nonce>`` under ``parent`` and is created with mode 0o700.
-    Every member is written with :func:`atomic_write_bytes` (mode 0o600). Returns
-    the stage directory path; the caller is responsible for publishing it.
+    named ``.task0258-<nonce>`` under ``parent`` unless ``stage_name`` supplies
+    a fixed transaction name, and is created with mode 0o700. Every member is
+    written with :func:`atomic_write_bytes` (mode 0o600). Returns the stage
+    directory path; the caller is responsible for publishing it.
     """
     _verify_no_symlink_ancestors(parent)
     parent.mkdir(parents=True, exist_ok=True)
@@ -191,7 +209,9 @@ def build_generation_directory(parent: Path, members: dict[str, bytes]) -> Path:
         _validate_member_path(relpath)
         if not isinstance(data, bytes):
             raise TypeError("generation member data must be bytes")
-    stage = parent / f".task0258-{secrets.token_hex(8)}"
+    if stage_name is not None:
+        _validate_fixed_stage_name(stage_name)
+    stage = parent / (stage_name or f".task0258-{secrets.token_hex(8)}")
     stage.mkdir(mode=0o700)
     try:
         for relpath, data in members.items():
@@ -270,13 +290,15 @@ def seal_generation_directory(
     expected_paths: tuple[str, ...],
     *,
     flock_path: Path,
+    stage_name: str | None = None,
 ) -> Path:
     """Validate exact member coverage and atomically publish a generation.
 
     ``members``' relative-path set must equal ``expected_paths`` (no missing,
     extra, renamed, or duplicate member). Then builds and publishes the
-    generation directory under ``parent`` as ``final_name``. Returns the final
-    path.
+    generation directory under ``parent`` as ``final_name``. When supplied,
+    ``stage_name`` is rejected if it already exists and is checked for absence
+    after publication. Returns the final path.
     """
     if not is_safe_slug(final_name):
         raise ValueError("generation final name must be a safe slug")
@@ -288,10 +310,12 @@ def seal_generation_directory(
         )
     for relpath in members:
         _validate_member_path(relpath)
-    staged = build_generation_directory(parent, members)
+    staged = build_generation_directory(parent, members, stage_name=stage_name)
     final = parent / final_name
     publish_generation_directory(staged, final, flock_path=flock_path)
     verify_generation_directory(final, expected_paths)
+    if stage_name is not None and (staged.exists() or staged.is_symlink()):
+        raise ValueError("fixed generation stage remained after publication")
     return final
 
 

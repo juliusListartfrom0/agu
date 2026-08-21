@@ -138,3 +138,30 @@ def test_generation_rejects_traversal_and_symlinked_parent(tmp_path):
     link.symlink_to(real, target_is_directory=True)
     with pytest.raises(ValueError):
         build_generation_directory(link, {"member.json": b"x"})
+
+
+def test_fixed_generation_stage_residue_is_rejected(tmp_path):
+    from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
+    from app.analysis.task0258_v2_fs import seal_generation_directory
+
+    root = tmp_path / "out"
+    root.mkdir()
+    lock = root / ".lock"
+    lock.write_text("")
+    stage_name = "." + "a" * 64 + ".verified-result-v2-stage"
+    stage = root / stage_name
+    stage.mkdir()
+    members = {path: b"x\n" for path in CANDIDATE_MEMBER_PATHS}
+
+    with pytest.raises(FileExistsError):
+        seal_generation_directory(
+            root,
+            "verified_result_v2",
+            members,
+            CANDIDATE_MEMBER_PATHS,
+            flock_path=lock,
+            stage_name=stage_name,
+        )
+
+    assert stage.is_dir()
+    assert not (root / "verified_result_v2").exists()

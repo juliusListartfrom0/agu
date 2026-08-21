@@ -4,16 +4,16 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `184 passed` (including the local simulation command,
+- TASK-0258 focused suite: `185 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
-  residue validation).
+  residue validation for bundle/result/failure publication).
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the candidate-bundle publication hardening: `2,052 passed, 5
+- Full repository pytest after the result/failure fixed-stage hardening: `2,053 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -36,6 +36,10 @@
   under those locks, rejects candidate drift and exact fixed-stage residue, and
   reopens the published bundle bytes. This is repository-local publication
   hardening, not a substitute for the external receipt issuer or OS sandbox.
+- `verified_result_v2` and `postverification_failure_v2` sealing now derive
+  deterministic stage-directory names from the rerun-authorization SHA, reject
+  pre-existing stage residue, publish no-clobber, and reopen exact member
+  coverage after rename. This also remains repository-local evidence.
 - The read-isolation audit tests prove that both raw `fs_usage` rows and direct
   Python `verified_event_rows` injection fail closed with no attestation; the
   external kernel-provider capability is still absent.

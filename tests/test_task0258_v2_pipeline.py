@@ -298,6 +298,10 @@ def test_seal_verified_result_and_postverification_failure(tmp_path):
     final = seal_verified_result(out, _result(True), flock_path=lock)
     assert final == out / "verified_result_v2"
     assert (final / "verification_registry.json").is_file()
+    assert not (
+        out
+        / f".{_result(True)['authorization_receipts']['rerun_authorization']['artifact_sha256']}.verified-result-v2-stage"
+    ).exists()
 
     # postverification failure: prefix + bundle slots
     slots = [
@@ -331,3 +335,4 @@ def test_seal_verified_result_and_postverification_failure(tmp_path):
     fail_dir = seal_postverification_failure(out, failure, flock_path=lock)
     assert fail_dir == out / "postverification_failure_v2"
     assert (fail_dir / "failure.json").is_file()
+    assert not (out / f".{slots[3]['receipt']['artifact_sha256']}.postverification-failure-v2-stage").exists()

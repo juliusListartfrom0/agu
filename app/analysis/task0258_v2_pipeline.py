@@ -303,6 +303,14 @@ def seal_verified_result(
     if not isinstance(registry_payload, Mapping):
         raise ValueError("verified result must be an object")
     verify_postpublication_verification(registry_payload)
+    authorization_receipts = registry_payload["authorization_receipts"]
+    if not isinstance(authorization_receipts, Mapping) or not isinstance(
+        authorization_receipts["rerun_authorization"], Mapping
+    ):
+        raise ValueError("verified result rerun authorization receipt is invalid")
+    authorization_sha256 = authorization_receipts["rerun_authorization"]["artifact_sha256"]
+    if not is_sha256(authorization_sha256):
+        raise ValueError("verified result rerun authorization SHA is invalid")
     registry_bytes = (compact_canonical_json(registry_payload) + "\n").encode("utf-8")
     return seal_generation_directory(
         output_root,
@@ -310,6 +318,7 @@ def seal_verified_result(
         {"verification_registry.json": registry_bytes},
         ("verification_registry.json",),
         flock_path=flock_path,
+        stage_name=f".{authorization_sha256}.verified-result-v2-stage",
     )
 
 
@@ -357,6 +366,21 @@ def seal_postverification_failure(
     if not isinstance(failure_payload, Mapping):
         raise ValueError("postverification failure must be an object")
     verify_postpublication_failure(failure_payload)
+    dependency_slots = failure_payload["dependency_provider_slots"]
+    if not isinstance(dependency_slots, (list, tuple)) or len(dependency_slots) < 4:
+        raise ValueError("postverification failure authorization slot is missing")
+    authorization_slot = dependency_slots[3]
+    if (
+        not isinstance(authorization_slot, Mapping)
+        or authorization_slot.get("provider") != "exact_v2_rerun_authorization"
+    ):
+        raise ValueError("postverification failure authorization slot is invalid")
+    authorization_receipt = authorization_slot.get("receipt")
+    if not isinstance(authorization_receipt, Mapping):
+        raise ValueError("postverification failure authorization receipt is invalid")
+    authorization_sha256 = authorization_receipt.get("artifact_sha256")
+    if not is_sha256(authorization_sha256):
+        raise ValueError("postverification failure authorization SHA is invalid")
 
     failure_bytes = (compact_canonical_json(failure_payload) + "\n").encode("utf-8")
     return seal_generation_directory(
@@ -365,6 +389,7 @@ def seal_postverification_failure(
         {"failure.json": failure_bytes},
         ("failure.json",),
         flock_path=flock_path,
+        stage_name=f".{authorization_sha256}.postverification-failure-v2-stage",
     )
 
 
