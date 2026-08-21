@@ -108,6 +108,12 @@
   reviewer governance observation plus Critical/Required `0/0`. It returns
   only an opaque diagnostic object; an independent review is not claimed for
   the current branch unless an external receipt supplies that artifact.
+- The review-only rerun-authorization loader now replays the exact v2
+  authorization field set and binds it to the loaded implementation approval,
+  amended review, static-input contract, fixed operation list, absent output /
+  candidate-bundle paths, and registry physical identity. It rejects Module B
+  authorization and returns `production_capability=false`; it does not consume
+  a run or issue production admission.
 - `verify_verification_attempt` now invokes that binder as the attempt-level
   gate, so individually schema-valid but cross-boundary-drifting policy and
   attestation objects cannot enter a verification attempt.

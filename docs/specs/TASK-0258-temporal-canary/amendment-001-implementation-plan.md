@@ -33,7 +33,8 @@ Implemented modules:
   terminal result/failure replay, and read-isolation policy/attestation
   cross-bound loading, complete verification-attempt replay, and implementation
   approval full parent/amendment/review/baseline receipt replay, plus amended
-  implementation-review/fresh-review receipt replay; these
+  implementation-review/fresh-review and review-only rerun-authorization
+  receipt replay; these
   contexts also bind the attempt to the loaded admission/history trust spine
   and provide a no-write preflight replay, but cannot authorize production
   publication.

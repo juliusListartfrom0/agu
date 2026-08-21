@@ -60,6 +60,7 @@ _PREFLIGHT_TOKEN = object()
 _IMPLEMENTATION_APPROVAL_TOKEN = object()
 _PARENT_SPEC_APPROVAL_TOKEN = object()
 _AMENDED_IMPLEMENTATION_REVIEW_TOKEN = object()
+_RERUN_AUTHORIZATION_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
 
@@ -209,6 +210,50 @@ _AMENDED_REVIEW_CHECK_FIELDS = frozenset(
         "output_file_sha256",
         "completed_at_utc",
     }
+)
+_RERUN_AUTHORIZATION_SCHEMA = "agu.task0258-module-a-v2-rerun-authorization.v1"
+_RERUN_AUTHORIZATION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "repository_root_absolute_path",
+        "repository_root_device",
+        "repository_root_inode",
+        "amendment_implementation_approval_receipt",
+        "implementation_review_receipt",
+        "approved_amendment_file_receipt",
+        "approved_code_receipts",
+        "approved_test_receipts",
+        "approved_runtime_dependency_receipts",
+        "approved_check_configuration_receipts",
+        "approved_check_input_receipt_sets",
+        "approved_check_receipts",
+        "approved_implementation_scope_baseline_receipt",
+        "approved_implementation_scope_delta",
+        "approved_bootstrap_launcher_receipt",
+        "approved_static_input_contract",
+        "allowed_operations",
+        "output_root_absolute_path",
+        "candidate_receipt_bundle_absolute_path",
+        "run_id",
+        "authorization_scope",
+        "maximum_run_count",
+        "run_admission_relative_path",
+        "run_consumption_registry_directory_absolute_path",
+        "run_consumption_registry_directory_identity",
+        "module_b_authorized",
+        "approval_statement_sha256",
+        "approved_at_utc",
+        "artifact_sha256",
+    }
+)
+_RERUN_ALLOWED_OPERATIONS = (
+    "preflight_and_publish_admission",
+    "recover_admission_completion",
+    "publish_candidate",
+    "seal_candidate_receipt_bundle",
+    "postpublication_verify",
+    "load_existing_terminal",
 )
 
 
@@ -457,6 +502,36 @@ class VerifiedReviewAmendedImplementationReview:
         self.fresh_review = kwargs["fresh_review"]
         self.implementation_approval = kwargs["implementation_approval"]
         self.repository_root_identity = kwargs["repository_root_identity"]
+        self.production_capability = False
+
+
+class VerifiedReviewRerunAuthorization:
+    """Review-only replay of the exact v2 rerun-authorization receipt."""
+
+    __slots__ = (
+        "_token",
+        "artifact",
+        "implementation_approval",
+        "implementation_review",
+        "repository_root_identity",
+        "output_root",
+        "candidate_bundle_path",
+        "production_capability",
+    )
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _RERUN_AUTHORIZATION_TOKEN:
+            raise TypeError("VerifiedReviewRerunAuthorization cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        self._token = token
+        self.artifact = kwargs["artifact"]
+        self.implementation_approval = kwargs["implementation_approval"]
+        self.implementation_review = kwargs["implementation_review"]
+        self.repository_root_identity = kwargs["repository_root_identity"]
+        self.output_root = kwargs["output_root"]
+        self.candidate_bundle_path = kwargs["candidate_bundle_path"]
         self.production_capability = False
 
 
@@ -1821,6 +1896,282 @@ def load_verified_amended_implementation_review(
     )
 
 
+def _verify_rerun_authorization_path_boundary(
+    *,
+    path: Path,
+    repository_root: Path,
+    output_root: Path,
+    registry_directory: Path,
+    description: str,
+    must_be_absent: bool,
+) -> None:
+    _verify_absolute_no_symlink_path(path)
+    if must_be_absent and path.exists():
+        raise ValueError(f"{description} must be absent")
+    try:
+        path.relative_to(repository_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"{description} must be outside the repository")
+    try:
+        path.relative_to(output_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"{description} must be outside the output root")
+    try:
+        path.relative_to(registry_directory)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"{description} must be outside the consumption registry")
+
+
+def _verify_rerun_authorization_payload(
+    payload: Mapping[str, object],
+    *,
+    repository_root: Path,
+    root_identity: Mapping[str, int],
+    implementation_approval: VerifiedReviewImplementationApproval,
+    implementation_review: VerifiedReviewAmendedImplementationReview,
+    expected_static_input_contract: Mapping[str, object],
+    output_root: Path,
+    candidate_bundle_path: Path,
+) -> None:
+    if set(payload) != _RERUN_AUTHORIZATION_FIELDS:
+        raise ValueError("rerun authorization field set is invalid")
+    if (
+        payload["schema_version"] != _RERUN_AUTHORIZATION_SCHEMA
+        or payload["module_id"] != "existing-45-temporal-retrospective"
+    ):
+        raise ValueError("rerun authorization identity is invalid")
+    payload_root = Path(payload["repository_root_absolute_path"])
+    _verify_absolute_no_symlink_path(payload_root)
+    if payload_root != repository_root:
+        raise ValueError("rerun authorization repository root path is not bound")
+    if (
+        payload["repository_root_device"] != root_identity["device"]
+        or payload["repository_root_inode"] != root_identity["inode"]
+    ):
+        raise ValueError("rerun authorization repository root identity drifted")
+    for field in ("repository_root_device", "repository_root_inode"):
+        _verify_nonnegative_integer(payload[field], f"rerun authorization {field}")
+
+    approval_receipt = _artifact_file_receipt(implementation_approval.artifact)
+    review_receipt = _artifact_file_receipt(implementation_review.artifact)
+    if payload["amendment_implementation_approval_receipt"] != approval_receipt:
+        raise ValueError("rerun authorization implementation approval is not bound")
+    if payload["implementation_review_receipt"] != review_receipt:
+        raise ValueError("rerun authorization implementation review is not bound")
+    if (
+        payload["approved_amendment_file_receipt"]
+        != implementation_approval.artifact.payload["approved_amendment_file_receipt"]
+    ):
+        raise ValueError("rerun authorization amendment receipt is not bound")
+    review_payload = implementation_review.artifact.payload
+    equality_fields = (
+        ("approved_code_receipts", "ordered_code_file_receipts"),
+        ("approved_test_receipts", "ordered_test_file_receipts"),
+        ("approved_runtime_dependency_receipts", "ordered_runtime_dependency_file_receipts"),
+        ("approved_check_configuration_receipts", "ordered_check_configuration_file_receipts"),
+        ("approved_check_input_receipt_sets", "ordered_check_input_receipt_sets"),
+        ("approved_check_receipts", "ordered_check_receipts"),
+        ("approved_implementation_scope_baseline_receipt", "implementation_scope_baseline_receipt"),
+        ("approved_implementation_scope_delta", "implementation_scope_delta"),
+        ("approved_bootstrap_launcher_receipt", "bootstrap_launcher_receipt"),
+    )
+    for authorization_field, review_field in equality_fields:
+        if payload[authorization_field] != review_payload[review_field]:
+            raise ValueError(f"rerun authorization {authorization_field} is not review-bound")
+    if (
+        payload["approved_implementation_scope_baseline_receipt"]
+        != implementation_approval.artifact.payload["implementation_scope_baseline_receipt"]
+    ):
+        raise ValueError("rerun authorization baseline is not approval-bound")
+    static_fields = {
+        "temporal_plan_artifact_sha256",
+        "temporal_plan_file_sha256",
+        "task0257_receipts_projection_sha256",
+    }
+    if set(payload["approved_static_input_contract"]) != static_fields or dict(
+        payload["approved_static_input_contract"]
+    ) != dict(expected_static_input_contract):
+        raise ValueError("rerun authorization static-input contract is invalid")
+    for field in static_fields:
+        _verify_sha(payload["approved_static_input_contract"][field], f"rerun authorization {field}")
+    if tuple(payload["allowed_operations"]) != _RERUN_ALLOWED_OPERATIONS:
+        raise ValueError("rerun authorization operation set is invalid")
+
+    payload_output_root = Path(payload["output_root_absolute_path"])
+    payload_bundle_path = Path(payload["candidate_receipt_bundle_absolute_path"])
+    if payload_output_root != output_root or payload_bundle_path != candidate_bundle_path:
+        raise ValueError("rerun authorization output paths are not caller-bound")
+    if payload_output_root.name != "vru_causal_temporal_retrospective_v2":
+        raise ValueError("rerun authorization output root basename is invalid")
+    _verify_absolute_no_symlink_path(payload_output_root)
+    if payload_output_root.exists():
+        raise ValueError("rerun authorization output root must be absent")
+    _verify_real_directory(payload_output_root.parent)
+
+    registry_directory = Path(payload["run_consumption_registry_directory_absolute_path"])
+    _verify_absolute_no_symlink_path(registry_directory)
+    registry_device, registry_inode = _verify_real_directory(registry_directory)
+    if payload["run_consumption_registry_directory_identity"] != {
+        "device": registry_device,
+        "inode": registry_inode,
+    }:
+        raise ValueError("rerun authorization registry identity drifted")
+    for field in ("device", "inode"):
+        _verify_nonnegative_integer(
+            payload["run_consumption_registry_directory_identity"][field], f"rerun authorization registry {field}"
+        )
+    try:
+        registry_directory.relative_to(repository_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("rerun authorization registry must be outside the repository")
+    try:
+        registry_directory.relative_to(payload_output_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("rerun authorization registry must be outside the output root")
+    _verify_rerun_authorization_path_boundary(
+        path=payload_bundle_path,
+        repository_root=repository_root,
+        output_root=payload_output_root,
+        registry_directory=registry_directory,
+        description="rerun authorization candidate bundle",
+        must_be_absent=True,
+    )
+    if not _verify_real_directory(payload_bundle_path.parent):
+        raise ValueError("rerun authorization candidate bundle parent is invalid")
+    if not is_safe_slug(payload["run_id"]):
+        raise ValueError("rerun authorization run id is invalid")
+    _verify_nonnegative_integer(payload["maximum_run_count"], "rerun authorization maximum run count")
+    if payload["authorization_scope"] != "one_module_a_v2_rerun" or payload["maximum_run_count"] != 1:
+        raise ValueError("rerun authorization scope or run count is invalid")
+    if payload["run_admission_relative_path"] != "run_admission.json":
+        raise ValueError("rerun authorization admission path is invalid")
+    if payload["module_b_authorized"] is not False:
+        raise ValueError("rerun authorization must not authorize Module B")
+    if not is_sha256(payload["approval_statement_sha256"]) or not is_rfc3339(payload["approved_at_utc"]):
+        raise ValueError("rerun authorization approval metadata is invalid")
+
+
+def load_verified_review_rerun_authorization(
+    *,
+    execution_context: object,
+    repository_root: Path,
+    authorization_path: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+    implementation_approval: VerifiedReviewImplementationApproval,
+    implementation_review: VerifiedReviewAmendedImplementationReview,
+    expected_static_input_contract: Mapping[str, object],
+    output_root: Path,
+    candidate_bundle_path: Path,
+) -> VerifiedReviewRerunAuthorization:
+    """Replay a rerun authorization without issuing production authority.
+
+    The production API will require a distinct externally authenticated
+    bootstrap context.  This local loader intentionally accepts only the
+    review sandbox context and returns an opaque diagnostic object so the
+    authorization graph can be tested before that platform boundary exists.
+    """
+    if (
+        type(execution_context) is not VerifiedImplementationReviewSandboxContext
+        or execution_context._token is not _SANDBOX_TOKEN
+    ):
+        raise PermissionError("rerun authorization loader requires a verified review context")
+    if (
+        type(implementation_approval) is not VerifiedReviewImplementationApproval
+        or implementation_approval.production_capability
+    ):
+        raise PermissionError("rerun authorization requires a review-only implementation approval")
+    if (
+        type(implementation_review) is not VerifiedReviewAmendedImplementationReview
+        or implementation_review.production_capability
+    ):
+        raise PermissionError("rerun authorization requires a review-only implementation review")
+    repository_root = Path(repository_root)
+    _verify_absolute_no_symlink_path(repository_root)
+    root_device, root_inode = _verify_real_directory(repository_root)
+    root_identity = {"device": root_device, "inode": root_inode}
+    artifact = _load_verified_json_artifact_under_root(
+        path=Path(authorization_path),
+        repository_root=Path(Path(authorization_path).anchor),
+        expected_artifact_sha256=expected_artifact_sha256,
+        expected_file_sha256=expected_file_sha256,
+        description="review rerun authorization",
+    )
+    current_review = _load_verified_json_artifact_under_root(
+        path=implementation_review.artifact.path,
+        repository_root=Path(Path(implementation_review.artifact.path).anchor),
+        expected_artifact_sha256=implementation_review.artifact.artifact_sha256,
+        expected_file_sha256=implementation_review.artifact.file_sha256,
+        description="bound amended implementation review",
+    )
+    current_fresh_review = _load_verified_json_artifact_under_root(
+        path=implementation_review.fresh_review.path,
+        repository_root=Path(Path(implementation_review.fresh_review.path).anchor),
+        expected_artifact_sha256=implementation_review.fresh_review.artifact_sha256,
+        expected_file_sha256=implementation_review.fresh_review.file_sha256,
+        description="bound fresh amended implementation review",
+    )
+    if (
+        current_review.payload != implementation_review.artifact.payload
+        or current_fresh_review.payload != implementation_review.fresh_review.payload
+    ):
+        raise ValueError("bound implementation review bytes changed")
+    baseline_payload = implementation_approval.implementation_scope_baseline.payload
+    check_output_directory = Path(baseline_payload["check_output_directory_absolute_path"])
+    _verify_amended_review_payload(
+        current_review.payload,
+        repository_root=repository_root,
+        root_identity=root_identity,
+        implementation_approval=implementation_approval,
+        check_output_directory=check_output_directory,
+        fresh_review_artifact_sha256=current_fresh_review.artifact_sha256,
+        fresh_review_path=current_fresh_review.path,
+        fresh_review_size=len(
+            _read_no_follow_file_under_root(
+                current_fresh_review.path,
+                allowed_root=Path(Path(current_fresh_review.path).anchor),
+                description="bound fresh amended implementation review",
+            )
+        ),
+    )
+    _verify_fresh_amended_review_payload(
+        current_fresh_review.payload,
+        repository_root=repository_root,
+        root_identity=root_identity,
+        implementation_approval=implementation_approval,
+        implementation_payload=current_review.payload,
+    )
+    _verify_rerun_authorization_payload(
+        artifact.payload,
+        repository_root=repository_root,
+        root_identity=root_identity,
+        implementation_approval=implementation_approval,
+        implementation_review=implementation_review,
+        expected_static_input_contract=expected_static_input_contract,
+        output_root=Path(output_root),
+        candidate_bundle_path=Path(candidate_bundle_path),
+    )
+    return VerifiedReviewRerunAuthorization(
+        _RERUN_AUTHORIZATION_TOKEN,
+        artifact=artifact,
+        implementation_approval=implementation_approval,
+        implementation_review=implementation_review,
+        repository_root_identity=root_identity,
+        output_root=Path(output_root),
+        candidate_bundle_path=Path(candidate_bundle_path),
+    )
+
+
 def load_verified_parent_module_a_spec_approval(
     *,
     execution_context: object,
@@ -2529,6 +2880,7 @@ __all__ = [
     "VerifiedReviewParentModuleASpecApproval",
     "VerifiedReviewImplementationApproval",
     "VerifiedReviewAmendedImplementationReview",
+    "VerifiedReviewRerunAuthorization",
     "VerifiedRunHistoryLedger",
     "VerifiedReviewRunAdmission",
     "bind_implementation_review_discovery_context",
@@ -2546,6 +2898,7 @@ __all__ = [
     "load_verified_parent_module_a_spec_approval",
     "load_verified_amendment_implementation_approval",
     "load_verified_amended_implementation_review",
+    "load_verified_review_rerun_authorization",
     "load_verified_review_implementation_approval",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",

@@ -24,6 +24,7 @@ from app.analysis.task0258_v2_capabilities import (
     VerifiedReviewNoWritePreflight,
     VerifiedReviewParentModuleASpecApproval,
     VerifiedReviewReadIsolationBinding,
+    VerifiedReviewRerunAuthorization,
     VerifiedReviewVerificationAttempt,
     VerifiedReviewVerificationAttemptRunSpine,
     bind_implementation_review_discovery_context,
@@ -39,6 +40,7 @@ from app.analysis.task0258_v2_capabilities import (
     load_verified_candidate_receipt_bundle,
     load_verified_parent_module_a_spec_approval,
     load_verified_read_isolation_binding,
+    load_verified_review_rerun_authorization,
     load_verified_run_admission,
     load_verified_run_history_ledger,
     load_verified_terminal_artifact,
@@ -541,6 +543,8 @@ def test_review_contexts_are_opaque_and_distinct():
         VerifiedReviewImplementationApproval()
     with pytest.raises(TypeError):
         VerifiedReviewAmendedImplementationReview()
+    with pytest.raises(TypeError):
+        VerifiedReviewRerunAuthorization()
     with pytest.raises(TypeError):
         VerifiedReviewVerificationAttempt()
     with pytest.raises(TypeError):
@@ -1048,6 +1052,105 @@ def test_amended_implementation_review_loader_replays_fresh_review_and_checks(tm
     assert loaded.production_capability is False
     assert loaded.implementation_approval is implementation_approval
     assert loaded.fresh_review.payload["critical_count"] == 0
+
+    registry_directory = tmp_path / "consumption-registry"
+    registry_directory.mkdir()
+    candidate_bundle_parent = tmp_path / "candidate-bundle-parent"
+    candidate_bundle_parent.mkdir()
+    candidate_bundle_path = candidate_bundle_parent / "candidate-receipt-bundle.json"
+    output_root = tmp_path / "vru_causal_temporal_retrospective_v2"
+    authorization_payload = {
+        "schema_version": "agu.task0258-module-a-v2-rerun-authorization.v1",
+        "module_id": "existing-45-temporal-retrospective",
+        "repository_root_absolute_path": str(repository_root),
+        "repository_root_device": repository_root.stat().st_dev,
+        "repository_root_inode": repository_root.stat().st_ino,
+        "amendment_implementation_approval_receipt": {
+            "artifact_sha256": implementation_approval.artifact.artifact_sha256,
+            "file_sha256": implementation_approval.artifact.file_sha256,
+        },
+        "implementation_review_receipt": {
+            "artifact_sha256": loaded.artifact.artifact_sha256,
+            "file_sha256": loaded.artifact.file_sha256,
+        },
+        "approved_amendment_file_receipt": approval_payload["approved_amendment_file_receipt"],
+        "approved_code_receipts": review_payload["ordered_code_file_receipts"],
+        "approved_test_receipts": review_payload["ordered_test_file_receipts"],
+        "approved_runtime_dependency_receipts": review_payload["ordered_runtime_dependency_file_receipts"],
+        "approved_check_configuration_receipts": review_payload["ordered_check_configuration_file_receipts"],
+        "approved_check_input_receipt_sets": review_payload["ordered_check_input_receipt_sets"],
+        "approved_check_receipts": review_payload["ordered_check_receipts"],
+        "approved_implementation_scope_baseline_receipt": review_payload["implementation_scope_baseline_receipt"],
+        "approved_implementation_scope_delta": review_payload["implementation_scope_delta"],
+        "approved_bootstrap_launcher_receipt": review_payload["bootstrap_launcher_receipt"],
+        "approved_static_input_contract": {
+            "temporal_plan_artifact_sha256": "a" * 64,
+            "temporal_plan_file_sha256": "b" * 64,
+            "task0257_receipts_projection_sha256": "c" * 64,
+        },
+        "allowed_operations": [
+            "preflight_and_publish_admission",
+            "recover_admission_completion",
+            "publish_candidate",
+            "seal_candidate_receipt_bundle",
+            "postpublication_verify",
+            "load_existing_terminal",
+        ],
+        "output_root_absolute_path": str(output_root),
+        "candidate_receipt_bundle_absolute_path": str(candidate_bundle_path),
+        "run_id": "local-review-rerun",
+        "authorization_scope": "one_module_a_v2_rerun",
+        "maximum_run_count": 1,
+        "run_admission_relative_path": "run_admission.json",
+        "run_consumption_registry_directory_absolute_path": str(registry_directory),
+        "run_consumption_registry_directory_identity": {
+            "device": registry_directory.stat().st_dev,
+            "inode": registry_directory.stat().st_ino,
+        },
+        "module_b_authorized": False,
+        "approval_statement_sha256": "d" * 64,
+        "approved_at_utc": "2026-08-22T00:00:03Z",
+    }
+    authorization_payload["artifact_sha256"] = canonical_artifact_sha256(authorization_payload)
+    authorization_raw = (compact_canonical_json(authorization_payload) + "\n").encode()
+    authorization_path = tmp_path / "rerun-authorization.json"
+    authorization_path.write_bytes(authorization_raw)
+    loaded_authorization = load_verified_review_rerun_authorization(
+        execution_context=review_context,
+        repository_root=repository_root,
+        authorization_path=authorization_path,
+        expected_artifact_sha256=authorization_payload["artifact_sha256"],
+        expected_file_sha256=hashlib.sha256(authorization_raw).hexdigest(),
+        implementation_approval=implementation_approval,
+        implementation_review=loaded,
+        expected_static_input_contract=authorization_payload["approved_static_input_contract"],
+        output_root=output_root,
+        candidate_bundle_path=candidate_bundle_path,
+    )
+    assert isinstance(loaded_authorization, VerifiedReviewRerunAuthorization)
+    assert loaded_authorization.production_capability is False
+    assert loaded_authorization.implementation_review is loaded
+
+    drifted_authorization = dict(authorization_payload)
+    drifted_authorization["module_b_authorized"] = True
+    drifted_authorization["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in drifted_authorization.items() if key != "artifact_sha256"}
+    )
+    drifted_raw = (compact_canonical_json(drifted_authorization) + "\n").encode()
+    authorization_path.write_bytes(drifted_raw)
+    with pytest.raises(ValueError, match="Module B"):
+        load_verified_review_rerun_authorization(
+            execution_context=review_context,
+            repository_root=repository_root,
+            authorization_path=authorization_path,
+            expected_artifact_sha256=drifted_authorization["artifact_sha256"],
+            expected_file_sha256=hashlib.sha256(drifted_raw).hexdigest(),
+            implementation_approval=implementation_approval,
+            implementation_review=loaded,
+            expected_static_input_contract=authorization_payload["approved_static_input_contract"],
+            output_root=output_root,
+            candidate_bundle_path=candidate_bundle_path,
+        )
 
 
 def test_discovery_manifest_rejects_symlinked_temp_parent(tmp_path):

@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 210 passed and
-      full suite is 2,078 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 211 passed and
+      full suite is 2,079 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -95,7 +95,14 @@ model execution or readiness transition.
       replays the parent approval and its three exact spec files, the amendment
       file, the Critical/Required 0/0 fresh review, and the implementation-scope
       baseline/root CAS, then returns only an opaque diagnostic artifact; it
-      does not issue rerun authorization. The
+      does not issue rerun authorization. The review-only amended-
+      implementation-review loader now binds the implementation-review and
+      fresh-review receipts, current closed review inputs/outputs, scope delta,
+      governance observation, and Critical/Required 0/0 without issuing
+      authority. The review-only rerun-authorization loader now binds that
+      review object, exact approval receipts, static-input contract, fixed
+      operation list, output-root/candidate-bundle absence, and registry
+      identity; it also remains diagnostic-only. The
       repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.
@@ -125,6 +132,8 @@ model execution or readiness transition.
 
 ### P3 — Explicit v2 run authorization
 
+- [x] Exercise local review-only replay of the exact authorization graph; it
+      returns `production_capability=false` and does not consume a run.
 - [ ] Issue a separate exact-SHA v2 rerun authorization.
 - [ ] Keep Module B, runtime, promotion, readiness, and blind inference false.
 
