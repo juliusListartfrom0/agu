@@ -148,7 +148,8 @@ model execution or readiness transition.
       notify-result serialization, and fail-closed `seq_num`/`global_seq_num`
       gap detection; successful transcript finalization also flushes and
       `fsync`s the descriptor before close; the Python side now has a strict,
-      bounded JSONL diagnostic parser that rejects duplicate fields, malformed
+      bounded JSONL diagnostic parser that requires a clean finalization row,
+      verifies event-row/byte counts, rejects duplicate fields, malformed
       result projections, invalid paths, retained-row sequence regressions, and
       rows over the C-aligned 512-byte single-row cap; it remains
       diagnostic-only and cannot mint an attestation. SDK

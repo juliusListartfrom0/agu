@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `252 passed` (including the local simulation command,
+- TASK-0258 focused suite: `253 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or OS-enforced process-tree cleanup.
-- Latest full repository pytest: `2,120 passed, 5
+- Latest full repository pytest: `2,121 passed, 5
   skipped, 15 warnings`.
 - The bounded fs_usage capture regression defers malformed stream input to
   `finish()` and records background iterator failures for the main caller;
@@ -41,8 +41,11 @@
   row projection, rejects duplicate JSON fields, malformed JSON/constants,
   non-absolute or NUL-containing paths, invalid process identifiers, and
   sequence regressions, while enforcing the shared row/byte caps and the C
-  client's 512-byte maximum row size. Parsed rows remain diagnostic events and
-  cannot mint a provider receipt or attestation.
+  client's 512-byte maximum row size. The C client now appends a finalization
+  row before flush/fsync; the parser requires a clean final row and verifies
+  its event-row/byte counts, rejecting truncated or failed diagnostic runs.
+  Parsed rows remain diagnostic events and cannot mint a provider receipt or
+  attestation.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
   canonical reopening of the standalone runtime contract through a
@@ -217,8 +220,10 @@ read-isolation attestation. The probe now accepts
   bounded fork/pidversion lineage, path-truncation rejection, JSON-safe path
   encoding, strict decimal PID/timeout parsing, and bounded target-exit/timeout
   shutdown, exact notify-result serialization, and fail-closed notification
-  sequence-gap detection. Successful transcript finalization also flushes and
-  `fsync`s the descriptor before close. Without that option it intentionally
+  sequence-gap detection. The C client appends a finalization row with clean
+  status and event-row/byte counts, then flushes and `fsync`s the descriptor
+  before close; the Python parser rejects missing, unclean, or mismatched
+  finalization. Without that option it intentionally
   reports the temporary
   ad-hoc compile and cannot observe an installed system extension.
 

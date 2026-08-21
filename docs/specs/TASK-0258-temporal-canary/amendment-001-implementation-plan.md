@@ -78,9 +78,11 @@ supplied "verified" rows. The current review-only
   PID/timeout parsing, bounded target-exit/timeout shutdown, exact
   notify-result serialization, and fail-closed notification-sequence gap
   detection; successful transcript finalization flushes and `fsync`s the
-  descriptor before close; the Python diagnostic boundary strictly parses the
-  resulting JSONL projection, rejects duplicate fields and sequence regression,
-  and enforces the shared row/byte caps; the
+  descriptor before close; the C client appends a finalization row containing
+  clean status and event-row/byte counts before that flush, while the Python
+  diagnostic boundary strictly parses the resulting JSONL projection, rejects
+  missing/unclean finalization, duplicate fields and sequence regression, and
+  enforces the shared row/byte caps; the
   full production proof boundary is not
   sealed. The pipeline CLI now refuses production execution unless a future
   external admission issuer is bound; its end-to-end tests require an explicit
