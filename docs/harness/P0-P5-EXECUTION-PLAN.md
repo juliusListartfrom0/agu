@@ -6,6 +6,19 @@ branch, verified before commit, pushed to `origin`, merged into `main`, and
 then verified and pushed again. A phase does not authorize the next phase's
 model execution or readiness transition.
 
+## Current operating decision (2026-08-21)
+
+- Continue repository-local implementation, review-only synthetic scenarios,
+  capability probing, pytest, and Harness verification while Apple Developer
+  Program access is unavailable.
+- Treat the no-sudo ad-hoc Endpoint Security probe and all synthetic contexts as
+  diagnostics only. They must not mint a kernel read-isolation attestation,
+  user-approval evidence, a v2 rerun authorization, or a product result.
+- Keep P1/P2 open where they require an OS-enforced review sandbox, a real
+  Endpoint Security entitlement, external approval, and authenticated kernel
+  observation. Keep P3/P4/P5 and readiness incomplete until those gates are
+  satisfied.
+
 ## Phase gates
 
 ### P0 — Working-tree and state convergence

@@ -27,6 +27,13 @@ Each phase must be verified on its own `codex/agu-pN` branch, pushed, merged
 into `main`, and re-verified after the merge. P0 does not authorize TASK-0258
 model execution, Module B, readiness, or blind inference.
 
+The 2026-08-21 operating decision is to continue repository-local code,
+review-only synthetic scenarios, capability probes, pytest, and Harness checks
+without Apple Developer Program access. The ad-hoc/no-sudo probe remains
+diagnostic only; it cannot supply Endpoint Security entitlement, user approval,
+kernel read-isolation evidence, rerun authorization, or P5 readiness. P1/P2
+external gates and P3–P5 therefore remain open.
+
 ## In Progress
 
 | Task ID | Task Name | Phase | Owner | Blockers | Docs | Last Updated |
