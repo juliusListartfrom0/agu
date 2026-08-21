@@ -38,3 +38,8 @@ coverage. A different fresh-context reviewer must then review the resulting
 implementation and seal `Critical=0 / Required=0`. The v1 terminal generation
 is immutable and cannot be retried in place; the user must explicitly authorize
 any new versioned execution boundary after the passing review.
+
+The exact current-review handoff is recorded in
+`fresh-context-review-handoff-2026-08-22.md`. It fixes the target commit,
+baseline, diff digest, verification commands, and required 0/0 receipt fields
+without asserting that such a receipt exists.

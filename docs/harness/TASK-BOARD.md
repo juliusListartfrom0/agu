@@ -42,6 +42,13 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > returning only `valid_diagnostic_transcript`; it cannot create authorization,
 > kernel evidence, or P5 readiness.
 
+> Current P1 review handoff (2026-08-22):
+> `docs/specs/TASK-0258-temporal-canary/fresh-context-review-handoff-2026-08-22.md`
+> fixes the exact target `codex/agu-p2@e8b4077`, baseline `c5157f2`, 43-file
+> diff SHA, reproducible commands, and required independent `Critical=0 /
+> Required=0` receipt fields. It is a handoff only; it does not claim a passing
+> review or authorize P2/P3/P4/P5.
+
 > Follow-up verification (2026-08-22): the amended-implementation-review, static-input, authorization-binding, run-admission-binding, terminal-binding, real bootstrap-launcher integration, bounded `fs_usage` diagnostic parser/capture, worker launch-input validation, synthetic no-follow context hardening, and local Endpoint Security client/probe hardening are local, review-only evidence; current totals are 262 TASK-0258 tests and 2,130 full-suite tests. The independent fresh-context review still must be externally issued/repeated; Apple Developer access remains optional for this local work and external for the real Endpoint Security gate.
 
 > Local audit/worker hardening (2026-08-22): `parse_fsusage_transcript()` and the
@@ -66,9 +73,14 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > TASK-0258 latest local remediation note (2026-08-22): branch `codex/agu-p2`; repository-local receipt, replay, path, bootstrap, worker, review-only, and Endpoint Security probe/client hardening remains diagnostic-only, including bounded UTF-8/row-count `fs_usage` parsing, bounded diagnostic pipe capture with main-thread error propagation and unfinished-drain rejection, shared worker argv/environment/process-group hardening, worker-group timeout kill/reap, fail-closed worker argv/timeout validation, observer/worker process-group cleanup on observer-start, drain-cleanup, and timeout failures, strict signed-artifact status handling, canonical artifact path binding, no-follow/exclusive C transcript output, bounded fork/pidversion lineage, JSON-safe path encoding, strict decimal PID/timeout parsing, bounded target-exit/timeout client shutdown, exact notify-result serialization, fail-closed `seq_num`/`global_seq_num` gap detection, finalization-row count/byte checks before flush/fsync, strict bounded Python JSONL parsing of the C projection with duplicate-field, result-shape, path, identifier, sequence-order, and C-aligned 512-byte row-cap rejection, and local simulation coverage of the C-shaped clean finalization path. Verification is 260 focused TASK-0258 tests and 2,128 full-suite tests; `main` remains at `c5157f2` because P1/P2 external and independent-review gates are still open. No Apple platform proof, P5 readiness, or v2 terminal/result artifact is claimed.
 
 > TASK-0258 row-count correction (2026-08-22): the historical numeric summary
-> in the active row below is superseded by the latest verified totals of 260
-> focused TASK-0258 tests and 2,128 full-suite tests. The row's gate conclusion
+> in the active row below is superseded by the latest verified totals of 262
+> focused TASK-0258 tests and 2,130 full-suite tests. The row's gate conclusion
 > is unchanged: P1/P2 remain open and no production evidence is claimed.
+
+> Latest verification supersession (2026-08-22): after the synthetic context
+> no-follow hardening and macOS temporary-path canonicalization, the current
+> totals are 262 focused TASK-0258 tests and 2,130 full-suite tests. This
+> supersedes the older 260/2,128 figures in the historical remediation notes.
 
 | Task ID | Task Name | Phase | Owner | Blockers | Docs | Last Updated |
 | --- | --- | --- | --- | --- | --- | --- |
