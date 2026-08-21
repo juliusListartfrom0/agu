@@ -9,7 +9,7 @@ review Critical/Required 0/0, exact-SHA approval sealed 2026-08-17; see
 The schema/validation/grammar/persistence layer is partially implemented and
 being hardened after the independent fresh-context review failed with
 `Critical=7 / Required=5 / Optional=3` (see
-`fresh-context-review-2026-08-20.md`). The remediation slice now has 199
+`fresh-context-review-2026-08-20.md`). The remediation slice now has 200
 focused tests passing and keeps unauthorized v2 publication fail-closed; it is
 not a passing implementation-review seal.
 Implemented modules:
@@ -20,7 +20,7 @@ Implemented modules:
 - `app/analysis/task0258_v2_artifacts.py` — candidate/failure/bundle/result/failure artifact schemas + membership.
 - `app/analysis/task0258_v2_fs.py` — atomic publication primitives.
 - `app/analysis/task0258_v2_registry.py` — registry durable write path + `create_run_history_registry`.
-- `app/analysis/task0258_v2_verification.py` — verification embedding/attempt/resource schemas, float32 projection, embedding builder.
+- `app/analysis/task0258_v2_verification.py` — verification embedding/attempt/resource schemas, float32 projection, embedding builder, and attempt-level read-isolation binding.
 - `app/analysis/task0258_v2_verification_extract.py` — empty-state extraction wiring (parent reuse).
 - `app/analysis/task0258_v2_read_isolation.py` — read-isolation policy/attestation schemas and local policy binding.
 - `app/analysis/task0258_v2_bootstrap.py` + `scripts/task0258_module_a_verified_bootstrap.py` — authorized pre-import bootstrap core + FD entry.
@@ -34,8 +34,8 @@ Implemented modules:
   production publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 199 TASK-0258 tests pass and the AGU Harness
-structural gate passes. The full repository suite reports 2,067 passed, 5
+Current working-tree verification: 200 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The full repository suite reports 2,068 passed, 5
 skipped, and 15 warnings. Scoped Ruff/format checks are clean after the P0 and
 P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45
