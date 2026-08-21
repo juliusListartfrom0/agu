@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `240 passed` (including the local simulation command,
+- TASK-0258 focused suite: `243 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or OS-enforced process-tree cleanup.
-- Latest full repository pytest: `2,108 passed, 5
+- Latest full repository pytest: `2,111 passed, 5
   skipped, 15 warnings`.
 - The bounded fs_usage capture regression defers malformed stream input to
   `finish()` and records background iterator failures for the main caller;
@@ -194,9 +194,13 @@ signature `adhoc`, required entitlement absent,
 read-isolation attestation. The probe now accepts
 `--signed-artifact <path> --json` to inspect the actual signed executable or
 `.systemextension`; it first requires strict `codesign --verify` success and
-parses the entitlement plist, accepting the entitlement only when its value is
-the boolean `true`. Without that option it intentionally reports the temporary
-ad-hoc compile and cannot observe an installed system extension.
+  parses the entitlement plist, accepting the entitlement only when its value is
+  the boolean `true`; entitlement on an adhoc/unknown signature remains
+  blocked. The selected artifact is canonicalized before inspection, and the
+  C client passes strict warning compilation with no-follow/exclusive output,
+  bounded fork/pidversion lineage, path-truncation rejection, and JSON-safe
+  path encoding. Without that option it intentionally reports the temporary
+  ad-hoc compile and cannot observe an installed system extension.
 
 ## Repository-local simulation
 

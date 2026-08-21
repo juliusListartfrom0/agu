@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 240 passed and
-      full suite is 2,108 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 243 passed and
+      full suite is 2,111 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -139,6 +139,12 @@ model execution or readiness transition.
       iterator failures to the main caller, rejects unfinished drain threads,
       and fails closed on overflow; this remains a diagnostic resource bound,
       not kernel evidence.
+      The Endpoint Security capability probe now rejects entitlement claims
+      from adhoc/unknown signatures and canonicalizes the selected artifact
+      before strict codesign inspection. Its C client uses strict PID parsing,
+      no-follow/exclusive output creation, bounded fork/pidversion lineage,
+      path-truncation rejection, and JSON escaping; SDK compilation remains
+      local evidence only.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
 
@@ -146,7 +152,8 @@ model execution or readiness transition.
 
 - [x] Run the no-sudo Endpoint Security capability probe: SDK/build available,
       but the temporary client is only ad-hoc signed and lacks the required
-      entitlement; the probe correctly remains fail-closed. Once a signed
+      entitlement; the probe correctly remains fail-closed. The client also
+      passes strict `clang -Wall -Wextra -Werror` syntax compilation. Once a signed
       executable or `.systemextension` exists, pass it explicitly with
       `scripts/task0258_endpoint_security_capability.py --signed-artifact
       <path> --json`; the default probe intentionally continues to inspect its
