@@ -27,6 +27,12 @@ CONTRACT_ENV: dict[str, str] = {
 }
 
 
+def validate_worker_argv(argv: object) -> None:
+    """Reject malformed worker argv before any subprocess boundary is crossed."""
+    if not isinstance(argv, list) or not argv or any(not isinstance(arg, str) or "\x00" in arg for arg in argv):
+        raise ValueError("worker argv is invalid")
+
+
 @dataclass(frozen=True)
 class WorkerResult:
     exit_code: int
@@ -68,12 +74,7 @@ def run_worker_subprocess(
     On timeout the process group is hard-killed and ``WorkerTimeoutError`` is
     raised with the captured output.
     """
-    if (
-        not isinstance(argv, list)
-        or not argv
-        or any(not isinstance(arg, str) or "\x00" in arg for arg in argv)
-    ):
-        raise ValueError("worker argv is invalid")
+    validate_worker_argv(argv)
     if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
         raise ValueError("worker timeout must be a positive integer")
     expected_env = sanitized_worker_env()
@@ -104,5 +105,6 @@ __all__ = [
     "WorkerResult",
     "WorkerTimeoutError",
     "sanitized_worker_env",
+    "validate_worker_argv",
     "run_worker_subprocess",
 ]

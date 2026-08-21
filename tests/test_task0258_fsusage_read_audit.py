@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
+from app.analysis.task0258_v2_worker_runner import sanitized_worker_env
 from scripts.run_fsusage_read_audit import (
     _BoundedTextCapture,
     _drain_text_stream,
     _join_diagnostic_drains,
+    run_read_audit,
 )
 
 
@@ -59,6 +63,30 @@ def test_join_diagnostic_drains_rejects_a_stream_that_did_not_finish():
 
     with pytest.raises(RuntimeError, match="did not finish"):
         _join_diagnostic_drains([HangingThread()], timeout_seconds=0.25)
+
+
+def test_run_read_audit_rejects_invalid_worker_argv_before_spawn(monkeypatch):
+    def fail_popen(*args, **kwargs):
+        pytest.fail("invalid worker argv reached Popen")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_popen)
+    with pytest.raises(ValueError, match="worker argv"):
+        run_read_audit(worker_argv="not-a-list", policy_payload={}, attestation_inputs={})  # type: ignore[arg-type]
+
+
+def test_run_read_audit_uses_sanitized_worker_process_group(monkeypatch):
+    calls = []
+
+    def stop_after_worker_spawn(argv, **kwargs):
+        calls.append((argv, kwargs))
+        raise RuntimeError("stop after worker spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", stop_after_worker_spawn)
+    with pytest.raises(RuntimeError, match="stop after worker spawn"):
+        run_read_audit(worker_argv=["worker"], policy_payload={}, attestation_inputs={})
+
+    assert calls[0][1]["env"] == sanitized_worker_env()
+    assert calls[0][1]["start_new_session"] is True
 
 
 @pytest.mark.parametrize("maximum_bytes", [0, -1, True, 1.0])

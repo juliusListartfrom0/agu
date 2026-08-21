@@ -26,6 +26,7 @@ from app.analysis.task0258_v2_audit import (
     build_read_isolation_attestation,
     parse_fsusage_transcript,
 )
+from app.analysis.task0258_v2_worker_runner import sanitized_worker_env, validate_worker_argv
 
 _MAXIMUM_DIAGNOSTIC_TRANSCRIPT_BYTES = MAXIMUM_READ_EVENT_BYTES
 
@@ -105,7 +106,15 @@ def run_read_audit(
     import io
     import threading
 
-    proc = subprocess.Popen(worker_argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+    validate_worker_argv(worker_argv)
+    proc = subprocess.Popen(
+        worker_argv,
+        env=sanitized_worker_env(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
     attestation_inputs = {
         **attestation_inputs,
         "child_pid": proc.pid,
