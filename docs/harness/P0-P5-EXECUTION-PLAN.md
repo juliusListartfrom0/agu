@@ -92,10 +92,10 @@ model execution or readiness transition.
       plan; it cannot issue production authorization. The
       review-only implementation-approval loader now reopens the sealed
       amendment approval through the bounded canonical/no-follow JSON boundary,
-      validates its exact schema, approval scope, false execution flags,
-      reviewed file-receipt shapes, and repository-root device/inode identity,
-      and returns only an opaque diagnostic artifact; it does not replay the
-      referenced specification files or issue rerun authorization. The
+      replays the parent approval and its three exact spec files, the amendment
+      file, the Critical/Required 0/0 fresh review, and the implementation-scope
+      baseline/root CAS, then returns only an opaque diagnostic artifact; it
+      does not issue rerun authorization. The
       repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.

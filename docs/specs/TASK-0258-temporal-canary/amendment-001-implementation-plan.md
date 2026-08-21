@@ -32,7 +32,7 @@ Implemented modules:
   claim/admission/completion replay, candidate-gate schema/trust-spine replay,
   terminal result/failure replay, and read-isolation policy/attestation
   cross-bound loading, complete verification-attempt replay, and implementation
-  approval shape/root-identity replay; these
+  approval full parent/amendment/review/baseline receipt replay; these
   contexts also bind the attempt to the loaded admission/history trust spine
   and provide a no-write preflight replay, but cannot authorize production
   publication.

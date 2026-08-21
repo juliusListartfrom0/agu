@@ -12,10 +12,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import tempfile
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from app.analysis.task0258_module_a_v2 import (
     AUTHORIZATION_PROVIDER_ORDER,
@@ -57,6 +58,7 @@ _VERIFICATION_ATTEMPT_TOKEN = object()
 _ATTEMPT_SPINE_TOKEN = object()
 _PREFLIGHT_TOKEN = object()
 _IMPLEMENTATION_APPROVAL_TOKEN = object()
+_PARENT_SPEC_APPROVAL_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
 
@@ -80,6 +82,35 @@ _IMPLEMENTATION_APPROVAL_FIELDS = frozenset(
         "module_b_authorized",
         "approval_statement_sha256",
         "approved_at_utc",
+        "artifact_sha256",
+    }
+)
+_PARENT_SPEC_APPROVAL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "approved_files",
+        "fresh_review_receipt",
+        "approval_scope",
+        "approval_statement_sha256",
+        "approved_at_utc",
+        "artifact_sha256",
+    }
+)
+_IMPLEMENTATION_SCOPE_BASELINE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "repository_root_absolute_path",
+        "repository_root_device",
+        "repository_root_inode",
+        "ordered_root_paths",
+        "check_output_directory_absolute_path",
+        "check_output_directory_device",
+        "check_output_directory_inode",
+        "ordered_entry_receipts",
+        "ordered_repository_executable_receipts",
+        "captured_at_utc",
         "artifact_sha256",
     }
 )
@@ -254,10 +285,36 @@ class VerifiedReviewNoWritePreflight:
         self.production_capability = False
 
 
+class VerifiedReviewParentModuleASpecApproval:
+    """Review-only replay of the exact parent Module-A specification approval."""
+
+    __slots__ = ("_token", "artifact", "approved_files", "production_capability")
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _PARENT_SPEC_APPROVAL_TOKEN:
+            raise TypeError("VerifiedReviewParentModuleASpecApproval cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        self._token = token
+        self.artifact = kwargs["artifact"]
+        self.approved_files = tuple(kwargs["approved_files"])
+        self.production_capability = False
+
+
 class VerifiedReviewImplementationApproval:
     """Review-only replay of the sealed amendment implementation approval."""
 
-    __slots__ = ("_token", "artifact", "repository_root_identity", "production_capability")
+    __slots__ = (
+        "_token",
+        "artifact",
+        "parent_approval",
+        "amendment",
+        "amendment_review",
+        "implementation_scope_baseline",
+        "repository_root_identity",
+        "production_capability",
+    )
 
     def __new__(cls, token: object = None, **kwargs: object):
         if token is not _IMPLEMENTATION_APPROVAL_TOKEN:
@@ -267,6 +324,10 @@ class VerifiedReviewImplementationApproval:
     def __init__(self, token: object = None, **kwargs: object) -> None:
         self._token = token
         self.artifact = kwargs["artifact"]
+        self.parent_approval = kwargs.get("parent_approval")
+        self.amendment = kwargs.get("amendment")
+        self.amendment_review = kwargs.get("amendment_review")
+        self.implementation_scope_baseline = kwargs.get("implementation_scope_baseline")
         self.repository_root_identity = kwargs["repository_root_identity"]
         self.production_capability = False
 
@@ -403,6 +464,57 @@ def _read_no_follow_temp_file(path: Path, *, description: str) -> bytes:
         raise ValueError(f"{description} must be under the OS temporary directory") from exc
     _verify_no_symlink_ancestors(path, allowed_prefix=lexical_temp_root)
 
+    components = canonical_path.parts[1:]
+    if not components or any(not component for component in components):
+        raise ValueError(f"{description} contains an empty path component")
+    common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    directory_flags = common_flags | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = common_flags | getattr(os, "O_NOFOLLOW", 0)
+    parent_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        parent_fd = os.open("/", directory_flags)
+        for component in components[:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        file_fd = os.open(components[-1], file_flags, dir_fd=parent_fd)
+        file_stat = os.fstat(file_fd)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size > _MAX_VERIFIED_FILE_BYTES:
+            raise ValueError(f"{description} is not a bounded regular file")
+        remaining = file_stat.st_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(file_fd, min(1 << 20, remaining))
+            if not chunk:
+                raise ValueError(f"{description} ended before its recorded size")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+    except OSError as exc:
+        raise ValueError(f"{description} cannot be opened without following links") from exc
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
+def _read_no_follow_file_under_root(path: Path, *, allowed_root: Path, description: str) -> bytes:
+    """Read one bounded regular file below a caller-bound real repository root."""
+    path = Path(path)
+    allowed_root = Path(allowed_root)
+    _verify_absolute_no_symlink_path(allowed_root)
+    _verify_real_directory(allowed_root)
+    if not path.is_absolute() or os.path.normpath(os.fspath(path)) != os.fspath(path):
+        raise ValueError(f"{description} must be an absolute canonical path")
+    try:
+        canonical_root = allowed_root.resolve(strict=True)
+        canonical_path = path.resolve(strict=True)
+        canonical_path.relative_to(canonical_root)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise ValueError(f"{description} must be below the repository root") from exc
+    _verify_no_symlink_ancestors(path, allowed_prefix=allowed_root)
     components = canonical_path.parts[1:]
     if not components or any(not component for component in components):
         raise ValueError(f"{description} contains an empty path component")
@@ -637,6 +749,44 @@ def _load_verified_json_artifact(
     )
 
 
+def _load_verified_json_artifact_under_root(
+    *,
+    path: Path,
+    repository_root: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+    description: str,
+) -> VerifiedJsonArtifact:
+    path = Path(path)
+    raw = _read_no_follow_file_under_root(path, allowed_root=repository_root, description=description)
+    if hashlib.sha256(raw).hexdigest() != _verify_sha(expected_file_sha256, f"{description} file hash"):
+        raise ValueError(f"{description} file hash does not match")
+    if not raw.endswith(b"\n"):
+        raise ValueError(f"{description} must end with LF")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{description} is not JSON") from exc
+    if not isinstance(payload, Mapping) or raw != (compact_canonical_json(payload) + "\n").encode("utf-8"):
+        raise ValueError(f"{description} is not canonical JSON")
+    payload = dict(payload)
+    authorization_receipts = payload.get("authorization_receipts")
+    if isinstance(authorization_receipts, Mapping) and set(authorization_receipts) == set(AUTHORIZATION_PROVIDER_ORDER):
+        payload["authorization_receipts"] = {
+            provider: authorization_receipts[provider] for provider in AUTHORIZATION_PROVIDER_ORDER
+        }
+    verify_internal_artifact_hash(payload)
+    if payload["artifact_sha256"] != _verify_sha(expected_artifact_sha256, f"{description} artifact hash"):
+        raise ValueError(f"{description} artifact hash does not match")
+    return VerifiedJsonArtifact(
+        _JSON_ARTIFACT_TOKEN,
+        path=path,
+        payload=dict(payload),
+        artifact_sha256=expected_artifact_sha256,
+        file_sha256=expected_file_sha256,
+    )
+
+
 def _verify_reviewed_file_receipt(value: object, *, basename_only: bool = False) -> None:
     expected_fields = (
         {"filename", "size_bytes", "file_sha256"}
@@ -662,6 +812,206 @@ def _verify_reviewed_file_receipt(value: object, *, basename_only: bool = False)
     size = value["size_bytes"]
     if not isinstance(size, int) or isinstance(size, bool) or size < 0:
         raise ValueError("reviewed file receipt size is invalid")
+
+
+def _verify_file_receipt_against_path(
+    receipt: Mapping[str, object], *, path: Path, repository_root: Path, basename_only: bool
+) -> bytes:
+    _verify_reviewed_file_receipt(receipt, basename_only=basename_only)
+    path = Path(path)
+    _verify_absolute_no_symlink_path(path.parent)
+    if basename_only:
+        if path.name != receipt["filename"]:
+            raise ValueError("reviewed file receipt filename does not match supplied path")
+    else:
+        relative = path.relative_to(repository_root).as_posix()
+        if relative != receipt["path"]:
+            raise ValueError("reviewed file receipt path does not match supplied path")
+    raw = _read_no_follow_file_under_root(path, allowed_root=repository_root, description="reviewed file")
+    if len(raw) != receipt["size_bytes"]:
+        raise ValueError("reviewed file receipt size does not match")
+    if hashlib.sha256(raw).hexdigest() != receipt["file_sha256"]:
+        raise ValueError("reviewed file receipt hash does not match")
+    return raw
+
+
+def _verify_parent_spec_approval_artifact(
+    payload: Mapping[str, object],
+    *,
+    approved_spec_paths: Mapping[str, Path],
+    expected_fresh_review_internal_sha256: str,
+    expected_fresh_review_file_sha256: str,
+    expected_approval_statement_sha256: str,
+) -> tuple[dict[str, object], ...]:
+    if set(payload) != _PARENT_SPEC_APPROVAL_FIELDS:
+        raise ValueError("parent spec approval field set is invalid")
+    if (
+        payload["schema_version"] != "agu.module-a-spec-approval.v1"
+        or payload["module_id"] != "existing-45-temporal-retrospective"
+    ):
+        raise ValueError("parent spec approval identity is invalid")
+    if payload["approval_scope"] != "module_a_implementation_only":
+        raise ValueError("parent spec approval scope is invalid")
+    if payload["approval_statement_sha256"] != _verify_sha(
+        expected_approval_statement_sha256, "parent approval statement hash"
+    ):
+        raise ValueError("parent approval statement hash does not match")
+    if not is_rfc3339(payload["approved_at_utc"]):
+        raise ValueError("parent spec approval timestamp is invalid")
+    fresh_review = payload["fresh_review_receipt"]
+    if not isinstance(fresh_review, Mapping) or set(fresh_review) != {"internal_sha256", "file_sha256"}:
+        raise ValueError("parent spec approval fresh review receipt is invalid")
+    if fresh_review["internal_sha256"] != _verify_sha(
+        expected_fresh_review_internal_sha256, "parent fresh review internal hash"
+    ) or fresh_review["file_sha256"] != _verify_sha(expected_fresh_review_file_sha256, "parent fresh review file hash"):
+        raise ValueError("parent fresh review receipt does not match")
+    approved_files = payload["approved_files"]
+    if not isinstance(approved_files, list) or len(approved_files) != 3:
+        raise ValueError("parent spec approval files are invalid")
+    if tuple(approved_spec_paths) != tuple(
+        receipt.get("filename") for receipt in approved_files if isinstance(receipt, Mapping)
+    ):
+        raise ValueError("parent spec approval file order is invalid")
+    for receipt in approved_files:
+        _verify_reviewed_file_receipt(receipt, basename_only=True)
+    for receipt in approved_files:
+        path = Path(approved_spec_paths[receipt["filename"]])
+        _verify_file_receipt_against_path(receipt, path=path, repository_root=Path(path.anchor), basename_only=True)
+    return tuple(dict(receipt) for receipt in approved_files)
+
+
+def _verify_implementation_scope_baseline_artifact(
+    payload: Mapping[str, object], *, repository_root: Path, root_identity: Mapping[str, int]
+) -> None:
+    if set(payload) != _IMPLEMENTATION_SCOPE_BASELINE_FIELDS:
+        raise ValueError("implementation scope baseline field set is invalid")
+    if (
+        payload["schema_version"] != "agu.task0258-module-a-implementation-scope-baseline.v1"
+        or payload["module_id"] != "existing-45-temporal-retrospective"
+    ):
+        raise ValueError("implementation scope baseline identity is invalid")
+    if payload["repository_root_absolute_path"] != str(repository_root):
+        raise ValueError("implementation scope baseline repository root is invalid")
+    if (
+        payload["repository_root_device"] != root_identity["device"]
+        or payload["repository_root_inode"] != root_identity["inode"]
+    ):
+        raise ValueError("implementation scope baseline repository root identity drifted")
+    if payload["ordered_root_paths"] != ["."]:
+        raise ValueError("implementation scope baseline root path order is invalid")
+    for field in (
+        "repository_root_device",
+        "repository_root_inode",
+        "check_output_directory_device",
+        "check_output_directory_inode",
+    ):
+        value = payload[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"implementation scope baseline {field} is invalid")
+    check_output = Path(payload["check_output_directory_absolute_path"])
+    _verify_absolute_no_symlink_path(check_output)
+    entries = payload["ordered_entry_receipts"]
+    executables = payload["ordered_repository_executable_receipts"]
+    if not isinstance(entries, list) or not isinstance(executables, list) or not entries:
+        raise ValueError("implementation scope baseline receipt arrays are invalid")
+    entry_fields = {
+        "path",
+        "entry_kind",
+        "mode_bits",
+        "link_count",
+        "size_bytes",
+        "file_sha256",
+        "symlink_target_text",
+        "hardlink_group_sha256",
+        "ordered_child_names",
+    }
+    entry_paths: set[str] = set()
+    entry_casefold_paths: set[str] = set()
+    previous_path: str | None = None
+    for entry in entries:
+        if not isinstance(entry, Mapping) or set(entry) != entry_fields:
+            raise ValueError("implementation scope baseline entry receipt shape is invalid")
+        path = entry["path"]
+        if not isinstance(path, str) or "\\" in path or path == "" or PurePosixPath(path).is_absolute():
+            raise ValueError("implementation scope baseline entry path is invalid")
+        if any(part in {"", ".", ".."} for part in PurePosixPath(path).parts) and path != ".":
+            raise ValueError("implementation scope baseline entry path escapes root")
+        if path in entry_paths or path.casefold() in entry_casefold_paths:
+            raise ValueError("implementation scope baseline entry paths are not unique")
+        if previous_path is not None and path <= previous_path:
+            raise ValueError("implementation scope baseline entry paths are not ordered")
+        previous_path = path
+        entry_paths.add(path)
+        entry_casefold_paths.add(path.casefold())
+        kind = entry["entry_kind"]
+        if kind not in {"absent", "directory", "excluded_directory", "regular", "symlink"}:
+            raise ValueError("implementation scope baseline entry kind is invalid")
+        mode = entry["mode_bits"]
+        if mode is not None and (not isinstance(mode, int) or isinstance(mode, bool) or mode < 0):
+            raise ValueError("implementation scope baseline mode is invalid")
+        if kind == "excluded_directory":
+            if path not in {".git", ".venv"} or mode is None:
+                raise ValueError("implementation scope baseline excluded directory is invalid")
+        elif path in {".git", ".venv"}:
+            raise ValueError("implementation scope baseline excluded directory kind is missing")
+        if kind in {"absent", "directory", "excluded_directory", "symlink"}:
+            if entry["link_count"] is not None or entry["size_bytes"] is not None or entry["file_sha256"] is not None:
+                raise ValueError("implementation scope baseline conditional file fields are invalid")
+            if entry["hardlink_group_sha256"] is not None:
+                raise ValueError("implementation scope baseline hardlink field is invalid")
+        if kind in {"absent", "excluded_directory", "symlink"} and entry["ordered_child_names"] is not None:
+            raise ValueError("implementation scope baseline child names are invalid")
+        if kind == "directory":
+            children = entry["ordered_child_names"]
+            if (
+                not isinstance(children, list)
+                or any(not isinstance(child, str) or not child or "/" in child or "\\" in child for child in children)
+                or children != sorted(children)
+                or len(children) != len(set(children))
+            ):
+                raise ValueError("implementation scope baseline directory children are invalid")
+        if kind == "regular":
+            if (
+                mode is None
+                or entry["link_count"] != 1
+                or not isinstance(entry["size_bytes"], int)
+                or isinstance(entry["size_bytes"], bool)
+                or entry["size_bytes"] < 0
+                or not is_sha256(entry["file_sha256"])
+                or not is_sha256(entry["hardlink_group_sha256"])
+                or entry["symlink_target_text"] is not None
+                or entry["ordered_child_names"] is not None
+            ):
+                raise ValueError("implementation scope baseline regular entry is invalid")
+        if kind == "symlink" and (
+            not isinstance(entry["symlink_target_text"], str) or not entry["symlink_target_text"]
+        ):
+            raise ValueError("implementation scope baseline symlink entry is invalid")
+    if entries[0]["path"] != "." or entries[0]["entry_kind"] != "directory":
+        raise ValueError("implementation scope baseline root entry is invalid")
+    executable_fields = {"path", "size_bytes", "file_sha256", "mode_bits", "link_count"}
+    previous_path = None
+    for receipt in executables:
+        if not isinstance(receipt, Mapping) or set(receipt) != executable_fields:
+            raise ValueError("implementation scope baseline executable receipt shape is invalid")
+        path = receipt["path"]
+        if (
+            not isinstance(path, str)
+            or path not in entry_paths
+            or path <= (previous_path or "")
+            or not isinstance(receipt["size_bytes"], int)
+            or isinstance(receipt["size_bytes"], bool)
+            or receipt["size_bytes"] < 0
+            or not is_sha256(receipt["file_sha256"])
+            or not isinstance(receipt["mode_bits"], int)
+            or isinstance(receipt["mode_bits"], bool)
+            or receipt["mode_bits"] < 0
+            or receipt["link_count"] != 1
+        ):
+            raise ValueError("implementation scope baseline executable receipt is invalid")
+        previous_path = path
+    if not is_rfc3339(payload["captured_at_utc"]):
+        raise ValueError("implementation scope baseline timestamp is invalid")
 
 
 def _verify_implementation_approval_artifact(payload: Mapping[str, object]) -> tuple[Path, dict[str, int]]:
@@ -704,32 +1054,157 @@ def _verify_implementation_approval_artifact(payload: Mapping[str, object]) -> t
     return root, {"device": root_device, "inode": root_inode}
 
 
-def load_verified_review_implementation_approval(
+def load_verified_parent_module_a_spec_approval(
     *,
     execution_context: object,
     approval_path: Path,
     expected_artifact_sha256: str,
     expected_file_sha256: str,
-) -> VerifiedReviewImplementationApproval:
-    """Load the amendment approval as an opaque review-only artifact.
-
-    This validates the approval's closed local shape and repository-root CAS.
-    It does not replay the referenced specification files, issue a rerun
-    authorization, or provide a production admission capability.
-    """
-    if type(execution_context) is not VerifiedImplementationReviewSandboxContext:
-        raise PermissionError("implementation approval loader requires a verified review context")
-    artifact = _load_verified_json_artifact(
+    approved_spec_paths: Mapping[str, Path],
+    expected_fresh_review_internal_sha256: str,
+    expected_fresh_review_file_sha256: str,
+    expected_approval_statement_sha256: str,
+) -> VerifiedReviewParentModuleASpecApproval:
+    """Replay the parent specification approval and all three approved files."""
+    if (
+        type(execution_context) is not VerifiedImplementationReviewSandboxContext
+        or execution_context._token is not _SANDBOX_TOKEN
+    ):
+        raise PermissionError("parent spec approval loader requires a verified review context")
+    if tuple(approved_spec_paths) != ("requirement.md", "solution.md", "gate-review.md"):
+        raise ValueError("parent spec approval paths must use the frozen order")
+    artifact = _load_verified_json_artifact_under_root(
         path=approval_path,
+        repository_root=Path(Path(approval_path).anchor),
         expected_artifact_sha256=expected_artifact_sha256,
         expected_file_sha256=expected_file_sha256,
+        description="parent spec approval",
     )
-    root, root_identity = _verify_implementation_approval_artifact(artifact.payload)
+    approved_files = _verify_parent_spec_approval_artifact(
+        artifact.payload,
+        approved_spec_paths=approved_spec_paths,
+        expected_fresh_review_internal_sha256=expected_fresh_review_internal_sha256,
+        expected_fresh_review_file_sha256=expected_fresh_review_file_sha256,
+        expected_approval_statement_sha256=expected_approval_statement_sha256,
+    )
+    return VerifiedReviewParentModuleASpecApproval(
+        _PARENT_SPEC_APPROVAL_TOKEN,
+        artifact=artifact,
+        approved_files=approved_files,
+    )
+
+
+def load_verified_amendment_implementation_approval(
+    *,
+    execution_context: object,
+    repository_root: Path,
+    approval_path: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+    parent_approval: VerifiedReviewParentModuleASpecApproval,
+    amendment_path: Path,
+    expected_amendment_file_sha256: str,
+    amendment_review_path: Path,
+    expected_amendment_review_artifact_sha256: str,
+    expected_amendment_review_file_sha256: str,
+    implementation_scope_baseline_path: Path,
+    expected_implementation_scope_baseline_artifact_sha256: str,
+    expected_implementation_scope_baseline_file_sha256: str,
+) -> VerifiedReviewImplementationApproval:
+    """Replay every local receipt edge of the amendment implementation approval.
+
+    The returned object remains review-only.  This function does not issue a
+    rerun authorization, admit a producer, or provide a production capability.
+    """
+    if (
+        type(execution_context) is not VerifiedImplementationReviewSandboxContext
+        or execution_context._token is not _SANDBOX_TOKEN
+    ):
+        raise PermissionError("implementation approval loader requires a verified review context")
+    if type(parent_approval) is not VerifiedReviewParentModuleASpecApproval:
+        raise PermissionError("implementation approval requires a verified parent spec approval")
+    repository_root = Path(repository_root)
+    _verify_absolute_no_symlink_path(repository_root)
+    root_device, root_inode = _verify_real_directory(repository_root)
+    root_identity = {"device": root_device, "inode": root_inode}
+    artifact = _load_verified_json_artifact_under_root(
+        path=approval_path,
+        repository_root=Path(Path(approval_path).anchor),
+        expected_artifact_sha256=expected_artifact_sha256,
+        expected_file_sha256=expected_file_sha256,
+        description="implementation approval",
+    )
+    root, payload_identity = _verify_implementation_approval_artifact(artifact.payload)
+    if root != repository_root or payload_identity != root_identity:
+        raise ValueError("implementation approval repository root does not match the bound root")
+    payload = artifact.payload
+    parent_receipt = payload["parent_spec_approval_receipt"]
+    if parent_receipt != {
+        "artifact_sha256": parent_approval.artifact.artifact_sha256,
+        "file_sha256": parent_approval.artifact.file_sha256,
+    }:
+        raise ValueError("implementation approval parent receipt is not bound")
+    if tuple(payload["approved_parent_file_receipts"]) != parent_approval.approved_files:
+        raise ValueError("implementation approval parent file receipts are not bound")
+
+    amendment_receipt = payload["approved_amendment_file_receipt"]
+    amendment_path = Path(amendment_path)
+    amendment_raw = _verify_file_receipt_against_path(
+        amendment_receipt, path=amendment_path, repository_root=repository_root, basename_only=False
+    )
+    if hashlib.sha256(amendment_raw).hexdigest() != _verify_sha(expected_amendment_file_sha256, "amendment file hash"):
+        raise ValueError("amendment expected file hash does not match")
+
+    review_raw = _read_no_follow_file_under_root(
+        Path(amendment_review_path), allowed_root=repository_root, description="amendment fresh review"
+    )
+    review_file_sha256 = hashlib.sha256(review_raw).hexdigest()
+    if review_file_sha256 != _verify_sha(expected_amendment_review_file_sha256, "amendment review file hash"):
+        raise ValueError("amendment fresh review file hash does not match")
+    review_artifact_sha256 = _verify_sha(expected_amendment_review_artifact_sha256, "amendment review artifact hash")
+    if payload["amendment_fresh_review_receipt"] != {
+        "artifact_sha256": review_artifact_sha256,
+        "file_sha256": review_file_sha256,
+    }:
+        raise ValueError("amendment fresh review receipt hashes are invalid")
+    review_text = review_raw.decode("utf-8")
+    if not re.search(r"^reviewer_context:\s+independent-fresh-context$", review_text, re.MULTILINE):
+        raise ValueError("amendment fresh review context is not independent")
+    reviewed_hash = re.search(r"^reviewed_file_sha256:\s+([0-9a-f]{64})$", review_text, re.MULTILINE)
+    if reviewed_hash is None or reviewed_hash.group(1) != hashlib.sha256(amendment_raw).hexdigest():
+        raise ValueError("amendment fresh review does not cover the amendment bytes")
+    if not re.search(r"^critical_count:\s+0$", review_text, re.MULTILINE) or not re.search(
+        r"^required_count:\s+0$", review_text, re.MULTILINE
+    ):
+        raise ValueError("amendment fresh review is not Critical/Required 0/0")
+
+    baseline = _load_verified_json_artifact_under_root(
+        path=implementation_scope_baseline_path,
+        repository_root=Path(Path(implementation_scope_baseline_path).anchor),
+        expected_artifact_sha256=expected_implementation_scope_baseline_artifact_sha256,
+        expected_file_sha256=expected_implementation_scope_baseline_file_sha256,
+        description="implementation scope baseline",
+    )
+    _verify_implementation_scope_baseline_artifact(
+        baseline.payload, repository_root=repository_root, root_identity=root_identity
+    )
+    if payload["implementation_scope_baseline_receipt"] != {
+        "artifact_sha256": baseline.artifact_sha256,
+        "file_sha256": baseline.file_sha256,
+    }:
+        raise ValueError("implementation approval baseline receipt is not bound")
     return VerifiedReviewImplementationApproval(
         _IMPLEMENTATION_APPROVAL_TOKEN,
         artifact=artifact,
+        parent_approval=parent_approval,
+        amendment=amendment_raw,
+        amendment_review=review_raw,
+        implementation_scope_baseline=baseline,
         repository_root_identity=root_identity,
     )
+
+
+load_verified_review_implementation_approval = load_verified_amendment_implementation_approval
 
 
 def load_verified_read_isolation_binding(
@@ -1284,6 +1759,7 @@ __all__ = [
     "VerifiedReviewVerificationAttempt",
     "VerifiedReviewVerificationAttemptRunSpine",
     "VerifiedReviewNoWritePreflight",
+    "VerifiedReviewParentModuleASpecApproval",
     "VerifiedReviewImplementationApproval",
     "VerifiedRunHistoryLedger",
     "VerifiedReviewRunAdmission",
@@ -1299,6 +1775,8 @@ __all__ = [
     "load_verified_verification_attempt",
     "bind_verified_review_attempt_to_run_spine",
     "bind_verified_review_no_write_preflight",
+    "load_verified_parent_module_a_spec_approval",
+    "load_verified_amendment_implementation_approval",
     "load_verified_review_implementation_approval",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",

@@ -97,10 +97,10 @@
   production authorization.
 - The review-only implementation-approval loader now reopens the sealed
   amendment approval through the bounded canonical/no-follow JSON boundary,
-  validates its exact schema, approval scope, false execution flags, reviewed
-  file-receipt shapes, and repository-root device/inode identity, and returns an
-  opaque diagnostic artifact. It does not replay referenced specification
-  files, issue rerun authorization, or provide production admission.
+  replays the parent approval and its three exact spec files, the amendment
+  file, the Critical/Required 0/0 fresh review, and the implementation-scope
+  baseline/root CAS, and returns an opaque diagnostic artifact. It does not
+  issue rerun authorization or provide production admission.
 - `verify_verification_attempt` now invokes that binder as the attempt-level
   gate, so individually schema-valid but cross-boundary-drifting policy and
   attestation objects cannot enter a verification attempt.

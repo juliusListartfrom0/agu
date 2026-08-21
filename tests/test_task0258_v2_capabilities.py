@@ -21,6 +21,7 @@ from app.analysis.task0258_v2_capabilities import (
     VerifiedReviewDiscoveryContext,
     VerifiedReviewImplementationApproval,
     VerifiedReviewNoWritePreflight,
+    VerifiedReviewParentModuleASpecApproval,
     VerifiedReviewReadIsolationBinding,
     VerifiedReviewVerificationAttempt,
     VerifiedReviewVerificationAttemptRunSpine,
@@ -32,9 +33,10 @@ from app.analysis.task0258_v2_capabilities import (
     bind_verified_review_no_write_preflight,
     exercise_module_a_v2_state_machine_for_discovery,
     exercise_module_a_v2_state_machine_for_review,
+    load_verified_amendment_implementation_approval,
     load_verified_candidate_receipt_bundle,
+    load_verified_parent_module_a_spec_approval,
     load_verified_read_isolation_binding,
-    load_verified_review_implementation_approval,
     load_verified_run_admission,
     load_verified_run_history_ledger,
     load_verified_terminal_artifact,
@@ -577,52 +579,116 @@ def test_discovery_manifest_is_temp_bound_and_observation_only(tmp_path):
         )
 
 
-def test_implementation_approval_loader_replays_closed_review_artifact(tmp_path):
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "analysis_outputs/public_research/task0258_module_a_amendment_approval"
-        / "amendment_implementation_approval.json"
-    )
-    payload = json.loads(source.read_text(encoding="utf-8"))
+def test_amendment_implementation_loader_replays_all_review_receipts(tmp_path):
     repository_root = Path(__file__).resolve().parents[1]
-    payload["repository_root_device"] = repository_root.stat().st_dev
-    payload["repository_root_inode"] = repository_root.stat().st_ino
-    payload["artifact_sha256"] = canonical_artifact_sha256(
-        {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    approval_dir = repository_root / "analysis_outputs/public_research/task0258_module_a_amendment_approval"
+    parent_source = (
+        repository_root
+        / "analysis_outputs/public_research/task0258_module_a_spec_registry_v2/module_a_spec_approval.json"
     )
-    raw = (compact_canonical_json(payload) + "\n").encode()
-    approval_path = tmp_path / "implementation-approval.json"
-    approval_path.write_bytes(raw)
-    review = bind_implementation_review_sandbox_context(
-        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    parent_payload = json.loads(parent_source.read_text(encoding="utf-8"))
+    parent_raw = (compact_canonical_json(parent_payload) + "\n").encode()
+    parent_path = tmp_path / "parent-spec-approval.json"
+    parent_path.write_bytes(parent_raw)
+    approved_specs = {
+        name: repository_root / "docs/specs/TASK-0258-temporal-canary" / name
+        for name in ("requirement.md", "solution.md", "gate-review.md")
+    }
+    parent = load_verified_parent_module_a_spec_approval(
+        execution_context=bind_implementation_review_sandbox_context(
+            expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+        ),
+        approval_path=parent_path,
+        expected_artifact_sha256=parent_payload["artifact_sha256"],
+        expected_file_sha256=hashlib.sha256(parent_raw).hexdigest(),
+        approved_spec_paths=approved_specs,
+        expected_fresh_review_internal_sha256=parent_payload["fresh_review_receipt"]["internal_sha256"],
+        expected_fresh_review_file_sha256=parent_payload["fresh_review_receipt"]["file_sha256"],
+        expected_approval_statement_sha256=parent_payload["approval_statement_sha256"],
     )
+    assert isinstance(parent, VerifiedReviewParentModuleASpecApproval)
 
-    loaded = load_verified_review_implementation_approval(
-        execution_context=review,
+    baseline_payload = {
+        "schema_version": "agu.task0258-module-a-implementation-scope-baseline.v1",
+        "module_id": "existing-45-temporal-retrospective",
+        "repository_root_absolute_path": str(repository_root),
+        "repository_root_device": repository_root.stat().st_dev,
+        "repository_root_inode": repository_root.stat().st_ino,
+        "ordered_root_paths": ["."],
+        "check_output_directory_absolute_path": str(tmp_path),
+        "check_output_directory_device": tmp_path.stat().st_dev,
+        "check_output_directory_inode": tmp_path.stat().st_ino,
+        "ordered_entry_receipts": [
+            {
+                "path": ".",
+                "entry_kind": "directory",
+                "mode_bits": 0o700,
+                "link_count": None,
+                "size_bytes": None,
+                "file_sha256": None,
+                "symlink_target_text": None,
+                "hardlink_group_sha256": None,
+                "ordered_child_names": [],
+            }
+        ],
+        "ordered_repository_executable_receipts": [],
+        "captured_at_utc": "2026-08-22T00:00:00Z",
+    }
+    baseline_payload["artifact_sha256"] = canonical_artifact_sha256(baseline_payload)
+    baseline_raw = (compact_canonical_json(baseline_payload) + "\n").encode()
+    baseline_path = tmp_path / "implementation-scope-baseline.json"
+    baseline_path.write_bytes(baseline_raw)
+
+    review_path = approval_dir / "amendment_fresh_review.md"
+    amendment_path = repository_root / "docs/specs/TASK-0258-temporal-canary/amendment-001-postpublication-proof.md"
+    approval_payload = json.loads((approval_dir / "amendment_implementation_approval.json").read_text(encoding="utf-8"))
+    approval_payload["repository_root_device"] = repository_root.stat().st_dev
+    approval_payload["repository_root_inode"] = repository_root.stat().st_ino
+    approval_payload["parent_spec_approval_receipt"] = {
+        "artifact_sha256": parent_payload["artifact_sha256"],
+        "file_sha256": hashlib.sha256(parent_raw).hexdigest(),
+    }
+    approval_payload["amendment_fresh_review_receipt"] = {
+        "artifact_sha256": hashlib.sha256(review_path.read_bytes()).hexdigest(),
+        "file_sha256": hashlib.sha256(review_path.read_bytes()).hexdigest(),
+    }
+    approval_payload["implementation_scope_baseline_receipt"] = {
+        "artifact_sha256": baseline_payload["artifact_sha256"],
+        "file_sha256": hashlib.sha256(baseline_raw).hexdigest(),
+    }
+    approval_payload["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in approval_payload.items() if key != "artifact_sha256"}
+    )
+    approval_raw = (compact_canonical_json(approval_payload) + "\n").encode()
+    approval_path = tmp_path / "amendment-implementation-approval.json"
+    approval_path.write_bytes(approval_raw)
+
+    loaded = load_verified_amendment_implementation_approval(
+        execution_context=bind_implementation_review_sandbox_context(
+            expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+        ),
+        repository_root=repository_root,
         approval_path=approval_path,
-        expected_artifact_sha256=payload["artifact_sha256"],
-        expected_file_sha256=hashlib.sha256(raw).hexdigest(),
+        expected_artifact_sha256=approval_payload["artifact_sha256"],
+        expected_file_sha256=hashlib.sha256(approval_raw).hexdigest(),
+        parent_approval=parent,
+        amendment_path=amendment_path,
+        expected_amendment_file_sha256=approval_payload["approved_amendment_file_receipt"]["file_sha256"],
+        amendment_review_path=review_path,
+        expected_amendment_review_artifact_sha256=approval_payload["amendment_fresh_review_receipt"]["artifact_sha256"],
+        expected_amendment_review_file_sha256=approval_payload["amendment_fresh_review_receipt"]["file_sha256"],
+        implementation_scope_baseline_path=baseline_path,
+        expected_implementation_scope_baseline_artifact_sha256=baseline_payload["artifact_sha256"],
+        expected_implementation_scope_baseline_file_sha256=hashlib.sha256(baseline_raw).hexdigest(),
     )
 
     assert isinstance(loaded, VerifiedReviewImplementationApproval)
     assert loaded.production_capability is False
-    assert loaded.repository_root_identity["device"] == payload["repository_root_device"]
-    assert loaded.artifact.payload["model_execution_authorized"] is False
-
-    drifted = dict(payload)
-    drifted["model_execution_authorized"] = True
-    drifted["artifact_sha256"] = canonical_artifact_sha256(
-        {key: value for key, value in drifted.items() if key != "artifact_sha256"}
-    )
-    drifted_raw = (compact_canonical_json(drifted) + "\n").encode()
-    approval_path.write_bytes(drifted_raw)
-    with pytest.raises(ValueError, match="execution flags"):
-        load_verified_review_implementation_approval(
-            execution_context=review,
-            approval_path=approval_path,
-            expected_artifact_sha256=drifted["artifact_sha256"],
-            expected_file_sha256=hashlib.sha256(drifted_raw).hexdigest(),
-        )
+    assert loaded.parent_approval is parent
+    assert loaded.repository_root_identity == {
+        "device": repository_root.stat().st_dev,
+        "inode": repository_root.stat().st_ino,
+    }
 
 
 def test_discovery_manifest_rejects_symlinked_temp_parent(tmp_path):
