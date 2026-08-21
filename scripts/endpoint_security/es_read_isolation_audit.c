@@ -560,7 +560,10 @@ int main(int argc, char **argv) {
     }
     alarm(0);
     es_delete_client(client);
-    if (fflush(g_out) != 0 || fclose(g_out) != 0) {
+    int flush_result = fflush(g_out);
+    int sync_result = flush_result == 0 ? fsync(fileno(g_out)) : -1;
+    int close_result = fclose(g_out);
+    if (flush_result != 0 || sync_result != 0 || close_result != 0) {
         fprintf(stderr, "transcript finalize failed\n");
         return 1;
     }

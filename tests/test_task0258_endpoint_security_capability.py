@@ -148,5 +148,6 @@ def test_endpoint_security_source_bounds_output_and_process_lineage():
     assert "sequence_gap" in source
     assert '"result":"notify"' not in source
     assert "return 5" in source
+    assert "fsync(fileno(g_out))" in source
     assert "append_json_escaped" in source
     assert "path_truncated" in source
