@@ -15,7 +15,7 @@
 // `com.apple.developer.endpoint-security.client` entitlement and user approval
 // in System Settings -> Privacy & Security -> Endpoint Security.
 //
-// Usage: es_read_isolation_audit --pid <worker-pid> --out <absolute-transcript.jsonl>
+// Usage: es_read_isolation_audit --pid <worker-pid> --out <absolute-transcript.jsonl> [--timeout-seconds <n>]
 
 #include <EndpointSecurity/EndpointSecurity.h>
 #include <bsm/libbsm.h>
@@ -37,14 +37,17 @@
 #define MAX_TRACKED_PROCESSES 1024
 
 static volatile sig_atomic_t g_stop = 0;
-
-static void on_signal(int sig) { (void)sig; g_stop = 1; }
-
 static int g_target_pid = -1;
 static FILE *g_out = NULL;
 static uint64_t g_row_count = 0;
 static uint64_t g_row_bytes = 0;
 static int g_overflow = 0;
+static int g_timed_out = 0;
+static unsigned g_timeout_seconds = 120;
+static int g_target_pidversion = -1;
+
+static void on_signal(int sig) { (void)sig; g_stop = 1; }
+static void on_timeout(int sig) { (void)sig; g_timed_out = 1; g_stop = 1; }
 
 typedef struct {
     pid_t pid;
@@ -110,6 +113,9 @@ static int track_process(audit_token_t token) {
         g_overflow = 1;
         g_stop = 1;
         return 0;
+    }
+    if (g_tracked_process_count == 0 && pid == g_target_pid) {
+        g_target_pidversion = pidversion;
     }
     g_tracked_processes[g_tracked_process_count++] = (tracked_process_t){pid, pidversion};
     return 1;
@@ -248,6 +254,15 @@ static void handler(es_client_t *client, const es_message_t *msg) {
     if (g_stop) {
         return;
     }
+    if (msg->event_type == ES_EVENT_TYPE_NOTIFY_EXIT) {
+        if (process_is_tracked(msg) &&
+            audit_token_to_pid(msg->process->audit_token) == g_target_pid &&
+            audit_token_to_pidversion(msg->process->audit_token) == g_target_pidversion) {
+            alarm(0);
+            g_stop = 1;
+        }
+        return;
+    }
     if (msg->event_type == ES_EVENT_TYPE_NOTIFY_FORK) {
         if (process_is_tracked(msg)) {
             track_process(msg->event.fork.child->audit_token);
@@ -265,20 +280,46 @@ static void handler(es_client_t *client, const es_message_t *msg) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: es_read_isolation_audit --pid <worker-pid> --out <absolute-transcript.jsonl>\n");
+    fprintf(stderr, "usage: es_read_isolation_audit --pid <worker-pid> --out <absolute-transcript.jsonl> [--timeout-seconds <n>]\n");
 }
 
-static int parse_pid(const char *text, pid_t *result) {
+static int parse_positive_decimal(const char *text, unsigned long maximum, unsigned long *result) {
     if (text == NULL || *text == '\0') {
         return 0;
     }
-    errno = 0;
-    char *end = NULL;
-    long parsed = strtol(text, &end, 10);
-    if (errno == ERANGE || end == text || *end != '\0' || parsed <= 0 || parsed > INT_MAX) {
+    unsigned long parsed = 0;
+    for (const unsigned char *cursor = (const unsigned char *)text; *cursor != '\0'; cursor++) {
+        if (*cursor < '0' || *cursor > '9') {
+            return 0;
+        }
+        unsigned long digit = (unsigned long)(*cursor - '0');
+        if (parsed > (maximum - digit) / 10) {
+            return 0;
+        }
+        parsed = parsed * 10 + digit;
+    }
+    if (parsed == 0) {
+        return 0;
+    }
+    *result = parsed;
+    return 1;
+}
+
+static int parse_pid(const char *text, pid_t *result) {
+    unsigned long parsed = 0;
+    if (!parse_positive_decimal(text, (unsigned long)INT_MAX, &parsed)) {
         return 0;
     }
     *result = (pid_t)parsed;
+    return 1;
+}
+
+static int parse_timeout(const char *text, unsigned *result) {
+    unsigned long parsed = 0;
+    if (!parse_positive_decimal(text, (unsigned long)UINT_MAX, &parsed)) {
+        return 0;
+    }
+    *result = (unsigned)parsed;
     return 1;
 }
 
@@ -346,6 +387,11 @@ int main(int argc, char **argv) {
             }
         } else if (strcmp(argv[i], "--out") == 0 && i + 1 < argc) {
             out_path = argv[++i];
+        } else if (strcmp(argv[i], "--timeout-seconds") == 0 && i + 1 < argc) {
+            if (!parse_timeout(argv[++i], &g_timeout_seconds)) {
+                usage();
+                return 2;
+            }
         } else {
             usage();
             return 2;
@@ -367,6 +413,7 @@ int main(int argc, char **argv) {
     }
     signal(SIGTERM, on_signal);
     signal(SIGINT, on_signal);
+    signal(SIGALRM, on_timeout);
 
     es_client_t *client = NULL;
         es_new_client_result_t rc = es_new_client(
@@ -390,6 +437,7 @@ int main(int argc, char **argv) {
         ES_EVENT_TYPE_NOTIFY_GETEXTATTR,
         ES_EVENT_TYPE_NOTIFY_SETEXTATTR,
         ES_EVENT_TYPE_NOTIFY_FORK,
+        ES_EVENT_TYPE_NOTIFY_EXIT,
     };
     es_return_t sub = es_subscribe(client, subscribed,
                                    sizeof(subscribed) / sizeof(subscribed[0]));
@@ -399,9 +447,11 @@ int main(int argc, char **argv) {
         fclose(g_out);
         return 1;
     }
+    alarm(g_timeout_seconds);
     while (!g_stop) {
         pause();
     }
+    alarm(0);
     es_delete_client(client);
     if (fflush(g_out) != 0 || fclose(g_out) != 0) {
         fprintf(stderr, "transcript finalize failed\n");
@@ -410,5 +460,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "rows=%llu bytes=%llu overflow=%d\n",
             (unsigned long long)g_row_count, (unsigned long long)g_row_bytes,
             g_overflow);
-    return g_overflow ? 3 : 0;
+    if (g_overflow) {
+        return 3;
+    }
+    return g_timed_out ? 4 : 0;
 }

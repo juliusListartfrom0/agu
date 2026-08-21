@@ -138,5 +138,8 @@ def test_endpoint_security_source_bounds_output_and_process_lineage():
     assert "openat" in source
     assert "audit_token_to_pidversion" in source
     assert "ES_EVENT_TYPE_NOTIFY_FORK" in source
+    assert "ES_EVENT_TYPE_NOTIFY_EXIT" in source
+    assert "--timeout-seconds" in source
+    assert "alarm(" in source
     assert "append_json_escaped" in source
     assert "path_truncated" in source
