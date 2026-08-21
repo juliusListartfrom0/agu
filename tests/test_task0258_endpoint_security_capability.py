@@ -141,5 +141,12 @@ def test_endpoint_security_source_bounds_output_and_process_lineage():
     assert "ES_EVENT_TYPE_NOTIFY_EXIT" in source
     assert "--timeout-seconds" in source
     assert "alarm(" in source
+    assert "msg->action.notify" in source
+    assert "global_seq_num" in source
+    assert "seq_num" in source
+    assert "ES_ACTION_TYPE_NOTIFY" in source
+    assert "sequence_gap" in source
+    assert '"result":"notify"' not in source
+    assert "return 5" in source
     assert "append_json_escaped" in source
     assert "path_truncated" in source
