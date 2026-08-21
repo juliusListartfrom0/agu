@@ -51,6 +51,7 @@ _SYNTHETIC_REVIEW_TOKEN = object()
 _JSON_ARTIFACT_TOKEN = object()
 _READ_ISOLATION_TOKEN = object()
 _VERIFICATION_ATTEMPT_TOKEN = object()
+_ATTEMPT_SPINE_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
 
@@ -170,6 +171,23 @@ class VerifiedReviewVerificationAttempt:
     def __init__(self, token: object = None, **kwargs: object) -> None:
         self._token = token
         self.artifact = kwargs["artifact"]
+
+
+class VerifiedReviewVerificationAttemptRunSpine:
+    """Review-only binding of one attempt to its loaded run trust spine."""
+
+    __slots__ = ("_token", "attempt", "run_admission", "run_history")
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _ATTEMPT_SPINE_TOKEN:
+            raise TypeError("VerifiedReviewVerificationAttemptRunSpine cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        self._token = token
+        self.attempt = kwargs["attempt"]
+        self.run_admission = kwargs["run_admission"]
+        self.run_history = kwargs["run_history"]
 
 
 class VerifiedRunHistoryLedger:
@@ -633,6 +651,65 @@ def _history_contract(ledger: VerifiedRunHistoryLedger) -> dict[str, object]:
     }
 
 
+def bind_verified_review_attempt_to_run_spine(
+    *,
+    attempt: VerifiedReviewVerificationAttempt,
+    run_admission: VerifiedReviewRunAdmission,
+    run_history: VerifiedRunHistoryLedger,
+) -> VerifiedReviewVerificationAttemptRunSpine:
+    """Bind a verified attempt to one loaded admission/history trust spine.
+
+    This is a review-only cross-artifact check. It proves that the attempt's
+    run-admission, stable run identity, history head, rerun authorization, and
+    read-isolation output-root tuple describe the same local replay. It does
+    not issue production admission or external kernel evidence.
+    """
+    if type(attempt) is not VerifiedReviewVerificationAttempt or attempt._token is not _VERIFICATION_ATTEMPT_TOKEN:
+        raise TypeError("attempt is not a verified review artifact")
+    if type(run_admission) is not VerifiedReviewRunAdmission or run_admission._token is not _RUN_ADMISSION_TOKEN:
+        raise TypeError("run admission is not a verified review artifact")
+    if type(run_history) is not VerifiedRunHistoryLedger or run_history._token is not _RUN_HISTORY_TOKEN:
+        raise TypeError("run history is not a verified review ledger")
+
+    payload = attempt.artifact.payload
+    admission_payload = run_admission.admission.payload
+    history_contract = _history_contract(run_history)
+    authorization_receipts = payload["authorization_receipts"]
+    if not isinstance(authorization_receipts, Mapping):
+        raise ValueError("attempt authorization receipts are invalid")
+    if payload["run_admission_receipt"] != _artifact_file_receipt(run_admission.admission):
+        raise ValueError("attempt admission receipt is not bound to admission")
+    if payload["run_identity_receipt"] != history_contract["run_identity_receipt"]:
+        raise ValueError("attempt run identity receipt is not bound to history")
+    if payload["history_head_receipt"] != history_contract["head_receipt"]:
+        raise ValueError("attempt history head receipt is not bound to history")
+    if authorization_receipts["rerun_authorization"] != admission_payload["authorization_receipt"]:
+        raise ValueError("attempt rerun authorization is not bound to admission")
+    if run_history.authorization_sha256 != admission_payload["authorization_receipt"]["artifact_sha256"]:
+        raise ValueError("run history authorization is not bound to admission")
+
+    policy = payload["read_isolation_policy"]
+    attestation = payload["read_isolation_attestation"]
+    if policy["run_identity_receipt"] != payload["run_identity_receipt"]:
+        raise ValueError("attempt read-isolation policy identity is not bound to attempt")
+    if attestation["run_identity_receipt"] != payload["run_identity_receipt"]:
+        raise ValueError("attempt read-isolation attestation identity is not bound to attempt")
+    policy_root = policy["output_root_identity"]
+    if policy_root["absolute_path"] != admission_payload["output_root_absolute_path"]:
+        raise ValueError("attempt read-isolation root is not bound to admission")
+    if policy_root["device"] != run_admission.completion.payload["root_identity"]["device"]:
+        raise ValueError("attempt read-isolation root device is not bound to completion")
+    if policy_root["inode"] != run_admission.completion.payload["root_identity"]["inode"]:
+        raise ValueError("attempt read-isolation root inode is not bound to completion")
+
+    return VerifiedReviewVerificationAttemptRunSpine(
+        _ATTEMPT_SPINE_TOKEN,
+        attempt=attempt,
+        run_admission=run_admission,
+        run_history=run_history,
+    )
+
+
 def _load_candidate_gate_artifact(
     *, candidate_dir: Path, member_receipts: list[dict[str, object]]
 ) -> VerifiedJsonArtifact:
@@ -940,6 +1017,7 @@ __all__ = [
     "VerifiedJsonArtifact",
     "VerifiedReviewReadIsolationBinding",
     "VerifiedReviewVerificationAttempt",
+    "VerifiedReviewVerificationAttemptRunSpine",
     "VerifiedRunHistoryLedger",
     "VerifiedReviewRunAdmission",
     "bind_implementation_review_discovery_context",
@@ -952,6 +1030,7 @@ __all__ = [
     "load_verified_run_admission",
     "load_verified_read_isolation_binding",
     "load_verified_verification_attempt",
+    "bind_verified_review_attempt_to_run_spine",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",
     "load_verified_run_history_ledger",

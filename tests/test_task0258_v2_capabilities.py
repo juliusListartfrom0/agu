@@ -20,10 +20,12 @@ from app.analysis.task0258_v2_capabilities import (
     VerifiedReviewDiscoveryContext,
     VerifiedReviewReadIsolationBinding,
     VerifiedReviewVerificationAttempt,
+    VerifiedReviewVerificationAttemptRunSpine,
     bind_implementation_review_discovery_context,
     bind_implementation_review_sandbox_context,
     bind_synthetic_module_a_discovery_context,
     bind_synthetic_module_a_transaction_context,
+    bind_verified_review_attempt_to_run_spine,
     exercise_module_a_v2_state_machine_for_discovery,
     exercise_module_a_v2_state_machine_for_review,
     load_verified_candidate_receipt_bundle,
@@ -524,6 +526,10 @@ def test_review_contexts_are_opaque_and_distinct():
         VerifiedImplementationReviewSandboxContext()
     with pytest.raises(TypeError):
         VerifiedReviewReadIsolationBinding()
+    with pytest.raises(TypeError):
+        VerifiedReviewVerificationAttempt()
+    with pytest.raises(TypeError):
+        VerifiedReviewVerificationAttemptRunSpine()
     discovery = bind_implementation_review_discovery_context(
         expected_check_name="focused_pytest", expected_command_sha256="0" * 64
     )
@@ -699,6 +705,84 @@ def test_verification_attempt_loader_rejects_nested_read_isolation_drift(tmp_pat
             attempt_path=fixture["attempt_path"],
             expected_artifact_sha256=drifted["artifact_sha256"],
             expected_file_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+
+
+def test_verification_attempt_binds_to_run_admission_and_history_spine(tmp_path):
+    admission_fixture = _admission_fixture(tmp_path)
+    attempt_fixture = _verification_attempt_fixture(admission_fixture["root"])
+    attempt = dict(attempt_fixture["attempt"])
+    history = admission_fixture["history"]
+    admission = admission_fixture["admission"].admission
+    history_contract = {
+        "run_identity_receipt": _payload_receipt(history.payloads[1]),
+        "head_receipt": _payload_receipt(history.payloads[-1]),
+        "marker_count": len(history.payloads) - 2,
+    }
+    attempt["authorization_receipts"] = {
+        **attempt["authorization_receipts"],
+        "rerun_authorization": admission.payload["authorization_receipt"],
+    }
+    attempt["run_identity_receipt"] = history_contract["run_identity_receipt"]
+    attempt["history_head_receipt"] = history_contract["head_receipt"]
+    attempt["run_admission_receipt"] = _payload_receipt(admission.payload)
+    policy = dict(attempt["read_isolation_policy"])
+    policy["run_identity_receipt"] = attempt["run_identity_receipt"]
+    policy["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in policy.items() if key != "artifact_sha256"}
+    )
+    attestation = dict(attempt["read_isolation_attestation"])
+    attestation["policy_artifact_sha256"] = policy["artifact_sha256"]
+    attestation["run_identity_receipt"] = attempt["run_identity_receipt"]
+    attestation["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in attestation.items() if key != "artifact_sha256"}
+    )
+    attempt["read_isolation_policy"] = policy
+    attempt["read_isolation_attestation"] = attestation
+    attempt["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in attempt.items() if key != "artifact_sha256"}
+    )
+    raw = (compact_canonical_json(attempt) + "\n").encode()
+    attempt_fixture["attempt_path"].write_bytes(raw)
+    loaded_attempt = load_verified_verification_attempt(
+        execution_context=attempt_fixture["review"],
+        attempt_path=attempt_fixture["attempt_path"],
+        expected_artifact_sha256=attempt["artifact_sha256"],
+        expected_file_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    bound = bind_verified_review_attempt_to_run_spine(
+        attempt=loaded_attempt,
+        run_admission=admission_fixture["admission"],
+        run_history=history,
+    )
+
+    assert isinstance(bound, VerifiedReviewVerificationAttemptRunSpine)
+    assert bound.attempt is loaded_attempt
+
+
+def test_verification_attempt_rejects_run_admission_receipt_drift(tmp_path):
+    admission_fixture = _admission_fixture(tmp_path)
+    attempt_fixture = _verification_attempt_fixture(admission_fixture["root"])
+    loaded_attempt = attempt_fixture["attempt"]
+    loaded_attempt["run_admission_receipt"] = _receipt()
+    loaded_attempt["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in loaded_attempt.items() if key != "artifact_sha256"}
+    )
+    raw = (compact_canonical_json(loaded_attempt) + "\n").encode()
+    attempt_fixture["attempt_path"].write_bytes(raw)
+    attempt = load_verified_verification_attempt(
+        execution_context=attempt_fixture["review"],
+        attempt_path=attempt_fixture["attempt_path"],
+        expected_artifact_sha256=loaded_attempt["artifact_sha256"],
+        expected_file_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    with pytest.raises(ValueError, match="admission receipt"):
+        bind_verified_review_attempt_to_run_spine(
+            attempt=attempt,
+            run_admission=admission_fixture["admission"],
+            run_history=admission_fixture["history"],
         )
 
 
