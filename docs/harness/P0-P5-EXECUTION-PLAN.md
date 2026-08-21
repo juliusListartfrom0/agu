@@ -122,6 +122,9 @@ model execution or readiness transition.
       repository-local simulation command now passes the synthetic discovery
       and review state machine, parses a C-shaped Endpoint Security event stream
       with clean finalization, and explicitly returns `p5_ready=false`.
+      The read-only `inspect_endpoint_security_transcript.py` handoff command
+      validates a real transcript's finalization and reports only
+      `valid_diagnostic_transcript`; it cannot create P2/P5 evidence.
       The pipeline now reopens the published candidate bundle under its distinct
       bundle lock through a bounded regular-file/no-follow descriptor before
       binding its file receipt into the result.

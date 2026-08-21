@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `253 passed` (including the local simulation command,
+- TASK-0258 focused suite: `256 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or OS-enforced process-tree cleanup.
-- Latest full repository pytest: `2,121 passed, 5
+- Latest full repository pytest: `2,124 passed, 5
   skipped, 15 warnings`.
 - The bounded fs_usage capture regression defers malformed stream input to
   `finish()` and records background iterator failures for the main caller;
@@ -242,6 +242,11 @@ The simulation now also parses two C-shaped Endpoint Security diagnostic rows
 and their clean finalization record, reporting the result as
 `evidence_class=diagnostic_only` with `production_capability=false`; this does
 not represent an actual kernel observation.
+
+The read-only `inspect_endpoint_security_transcript.py` handoff command accepts
+only an absolute regular non-symlink file, validates the same finalization and
+count rules, and reports `valid_diagnostic_transcript` without creating an
+attestation.
 The platform portion remained `blocked_external_authorization` with ad-hoc
 signing, no Endpoint Security entitlement, no user approval, and no kernel
 read-isolation attestation. This command is deliberately not a substitute for

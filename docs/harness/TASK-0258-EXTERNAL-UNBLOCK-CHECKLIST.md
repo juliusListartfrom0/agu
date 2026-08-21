@@ -74,6 +74,20 @@ The last command must report at least:
 This is still only the capability/signing stage. It does not prove user
 approval or kernel read isolation.
 
+After the C client exits and produces its transcript, validate the bounded
+diagnostic projection without upgrading it to an attestation:
+
+```bash
+.venv/bin/python scripts/inspect_endpoint_security_transcript.py \
+  --transcript /absolute/path/to/audit.jsonl --json
+```
+
+The expected local result is `status=valid_diagnostic_transcript` with
+`finalization_verified=true`, `evidence_class=diagnostic_only`,
+`production_capability=false`, and `p5_ready=false`. A missing/unclean
+finalization record, truncated row, symlinked file, or count mismatch must
+return `invalid_diagnostic_transcript` and a nonzero exit code.
+
 ## Install and collect approval evidence
 
 1. Copy the signed host application to `/Applications`.
