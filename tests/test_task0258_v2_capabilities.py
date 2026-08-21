@@ -48,6 +48,7 @@ from app.analysis.task0258_v2_capabilities import (
     load_verified_review_rerun_authorization,
     load_verified_review_rerun_authorization_bound_to_static_inputs,
     load_verified_run_admission,
+    load_verified_run_admission_bound_to_static_inputs,
     load_verified_run_history_ledger,
     load_verified_terminal_artifact,
     load_verified_terminal_artifact_bound_to_static_inputs,
@@ -1712,6 +1713,62 @@ def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_pat
             candidate_dir=Path("/private/etc/candidate_v2"),
             expected_artifact_sha256=bundle["artifact_sha256"],
             expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
+        )
+
+
+def test_run_admission_loader_can_bind_to_replayed_static_input_contract(tmp_path, monkeypatch):
+    fixture = _admission_fixture(tmp_path)
+    contract = fixture["admission"].admission.payload["static_input_contract"]
+    plan_path = tmp_path / "static-plan.json"
+    plan_path.write_bytes(b"plan\n")
+    static_inputs = VerifiedModuleAStaticInputs(
+        capabilities_module._STATIC_INPUTS_TOKEN,
+        temporal_plan_artifact_sha256=contract["temporal_plan_artifact_sha256"],
+        temporal_plan_file_sha256=contract["temporal_plan_file_sha256"],
+        temporal_plan_path=plan_path,
+        temporal_plan_snapshot=b"plan-snapshot",
+        task0257_input_paths_snapshot=b"paths-snapshot",
+        task0257_receipts_projection_sha256=contract["task0257_receipts_projection_sha256"],
+        task0257_receipts_snapshot=b"receipts-snapshot",
+    )
+    capabilities_module._REGISTERED_STATIC_INPUTS_CAPABILITIES[id(static_inputs)] = (
+        static_inputs,
+        capabilities_module._static_inputs_fingerprint(static_inputs),
+    )
+    monkeypatch.setattr(
+        "app.analysis.task0258_v2_capabilities.replay_verified_module_a_static_inputs",
+        lambda _value: None,
+    )
+    loaded = load_verified_run_admission_bound_to_static_inputs(
+        execution_context=fixture["review"],
+        claim_path=fixture["admission"].claim.path,
+        admission_path=fixture["admission"].admission.path,
+        completion_path=fixture["admission"].completion.path,
+        expected_authorization_sha256=fixture["auth"],
+        expected_claim_artifact_sha256=fixture["admission"].claim.artifact_sha256,
+        expected_claim_file_sha256=fixture["admission"].claim.file_sha256,
+        expected_admission_artifact_sha256=fixture["admission"].admission.artifact_sha256,
+        expected_admission_file_sha256=fixture["admission"].admission.file_sha256,
+        expected_completion_artifact_sha256=fixture["admission"].completion.artifact_sha256,
+        expected_completion_file_sha256=fixture["admission"].completion.file_sha256,
+        static_inputs=static_inputs,
+    )
+    assert loaded.admission.payload["static_input_contract"] == contract
+    static_inputs._task0257_receipts_projection_sha256 = "0" * 64
+    with pytest.raises(ValueError, match="mutated"):
+        load_verified_run_admission_bound_to_static_inputs(
+            execution_context=fixture["review"],
+            claim_path=fixture["admission"].claim.path,
+            admission_path=fixture["admission"].admission.path,
+            completion_path=fixture["admission"].completion.path,
+            expected_authorization_sha256=fixture["auth"],
+            expected_claim_artifact_sha256=fixture["admission"].claim.artifact_sha256,
+            expected_claim_file_sha256=fixture["admission"].claim.file_sha256,
+            expected_admission_artifact_sha256=fixture["admission"].admission.artifact_sha256,
+            expected_admission_file_sha256=fixture["admission"].admission.file_sha256,
+            expected_completion_artifact_sha256=fixture["admission"].completion.artifact_sha256,
+            expected_completion_file_sha256=fixture["admission"].completion.file_sha256,
+            static_inputs=static_inputs,
         )
 
 

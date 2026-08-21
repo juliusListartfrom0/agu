@@ -9,7 +9,7 @@ review Critical/Required 0/0, exact-SHA approval sealed 2026-08-17; see
 The schema/validation/grammar/persistence layer is partially implemented and
 being hardened after the independent fresh-context review failed with
 `Critical=7 / Required=5 / Optional=3` (see
-`fresh-context-review-2026-08-20.md`). The remediation slice now has 211
+`fresh-context-review-2026-08-20.md`). The remediation slice now has 215
 focused tests passing and keeps unauthorized v2 publication fail-closed; it is
 not a passing implementation-review seal.
 Implemented modules:
@@ -35,15 +35,16 @@ Implemented modules:
   approval full parent/amendment/review/baseline receipt replay, plus amended
   implementation-review/fresh-review and review-only rerun-authorization
   receipt replay and complete review-only static-input receipt-graph replay,
-  including per-use reopen/replay, authorization binding, and terminal binding;
+  including per-use reopen/replay, authorization, run-admission, and terminal
+  static-input binding;
   these
   contexts also bind the attempt to the loaded admission/history trust spine
   and provide a no-write preflight replay, but cannot authorize production
   publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 211 TASK-0258 tests pass and the AGU Harness
-structural gate passes. The full repository suite reports 2,079 passed, 5
+Current working-tree verification: 215 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The full repository suite reports 2,083 passed, 5
 skipped, and 15 warnings. Scoped Ruff/format checks are clean after the P0 and
 P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45

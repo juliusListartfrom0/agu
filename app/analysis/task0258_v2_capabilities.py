@@ -3035,6 +3035,42 @@ def load_verified_run_admission(
     )
 
 
+def load_verified_run_admission_bound_to_static_inputs(
+    *,
+    execution_context: object,
+    claim_path: Path,
+    admission_path: Path,
+    completion_path: Path,
+    expected_authorization_sha256: str,
+    expected_claim_artifact_sha256: str,
+    expected_claim_file_sha256: str,
+    expected_admission_artifact_sha256: str,
+    expected_admission_file_sha256: str,
+    expected_completion_artifact_sha256: str,
+    expected_completion_file_sha256: str,
+    static_inputs: VerifiedModuleAStaticInputs,
+) -> VerifiedReviewRunAdmission:
+    """Replay run admission only after per-use static-input replay."""
+    _require_verified_module_a_static_inputs(static_inputs)
+    replay_verified_module_a_static_inputs(static_inputs)
+    loaded = load_verified_run_admission(
+        execution_context=execution_context,
+        claim_path=claim_path,
+        admission_path=admission_path,
+        completion_path=completion_path,
+        expected_authorization_sha256=expected_authorization_sha256,
+        expected_claim_artifact_sha256=expected_claim_artifact_sha256,
+        expected_claim_file_sha256=expected_claim_file_sha256,
+        expected_admission_artifact_sha256=expected_admission_artifact_sha256,
+        expected_admission_file_sha256=expected_admission_file_sha256,
+        expected_completion_artifact_sha256=expected_completion_artifact_sha256,
+        expected_completion_file_sha256=expected_completion_file_sha256,
+    )
+    if loaded.admission.payload.get("static_input_contract") != dict(static_inputs.static_input_contract):
+        raise ValueError("run admission static-input contract is not bound")
+    return loaded
+
+
 def load_verified_candidate_receipt_bundle(
     *,
     execution_context: object,
@@ -3278,6 +3314,7 @@ __all__ = [
     "exercise_module_a_v2_state_machine_for_discovery",
     "exercise_module_a_v2_state_machine_for_review",
     "load_verified_run_admission",
+    "load_verified_run_admission_bound_to_static_inputs",
     "load_verified_read_isolation_binding",
     "load_verified_verification_attempt",
     "bind_verified_review_attempt_to_run_spine",
