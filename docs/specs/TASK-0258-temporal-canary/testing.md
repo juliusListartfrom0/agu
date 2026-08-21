@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `219 passed` (including the local simulation command,
+- TASK-0258 focused suite: `227 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the verified-bootstrap launcher integration increment: `2,087 passed, 5
+- Full repository pytest after the verified-bootstrap launcher integration increment: `2,095 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -161,6 +161,10 @@
   local policy↔attestation binder rejects tuple drift, unknown/denied events,
   and ambiguous policy matches; the external kernel-provider capability is
   still absent.
+- The worker subprocess runner rejects non-list argv, embedded NULs, and
+  non-positive/non-integer timeouts before spawn; this complements its
+  sanitized environment and process-group cleanup but remains local evidence,
+  not OS-enforced sandbox proof.
 
 - Module-A focused tests: `67 passed`.
 - Adjacent TASK-0257 export/probe/backbone/causal regression: `523 passed, 3 skipped`.
