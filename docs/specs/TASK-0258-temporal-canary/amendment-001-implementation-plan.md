@@ -9,7 +9,7 @@ review Critical/Required 0/0, exact-SHA approval sealed 2026-08-17; see
 The schema/validation/grammar/persistence layer is partially implemented and
 being hardened after the independent fresh-context review failed with
 `Critical=7 / Required=5 / Optional=3` (see
-`fresh-context-review-2026-08-20.md`). The remediation slice now has 236
+`fresh-context-review-2026-08-20.md`). The remediation slice now has 238
 focused tests passing and keeps unauthorized v2 publication fail-closed; it is
 not a passing implementation-review seal.
 Implemented modules:
@@ -43,8 +43,8 @@ Implemented modules:
   publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 236 TASK-0258 tests pass and the AGU Harness
-structural gate passes. The full repository suite reports 2,104 passed, 5
+Current working-tree verification: 238 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The full repository suite reports 2,106 passed, 5
 skipped, and 15 warnings. Scoped Ruff/format checks are clean after the P0 and
 P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45
@@ -68,8 +68,9 @@ supplied "verified" rows. The current review-only
   kills the group on timeout, and rejects non-list argv, embedded NULs, and
   invalid timeouts before spawn. The fs_usage harness bounds diagnostic pipe
   capture before parsing, propagates malformed/iterator failures to the main
-  caller, and rejects unfinished drain threads, but the full production proof
-  boundary is not
+  caller, and rejects unfinished drain threads. The fs_usage audit entry point
+  also reuses the worker argv validator, sanitized environment, and
+  new-process-group boundary; the full production proof boundary is not
   sealed. The pipeline CLI now refuses production execution unless a future
   external admission issuer is bound; its end-to-end tests require an explicit
   synthetic-only flag. Module B and the v2 rerun remain unauthorized.
