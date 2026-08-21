@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `200 passed` (including the local simulation command,
+- TASK-0258 focused suite: `203 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the admission/terminal-loader hardening: `2,068 passed, 5
+- Full repository pytest after the read-isolation review loader increment: `2,071 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -69,6 +69,11 @@
   file identity. It validates an externally produced attestation only; it
   never creates kernel evidence, and raw `fs_usage`/Python-row paths remain
   fail-closed.
+- The review-only capability loader now reopens both policy and attestation
+  artifacts through the bounded descriptor-relative no-follow JSON boundary,
+  checks their exact file/internal hashes, and returns an opaque cross-bound
+  pair. It remains diagnostic-only and cannot mint a kernel attestation or
+  production admission.
 - `verify_verification_attempt` now invokes that binder as the attempt-level
   gate, so individually schema-valid but cross-boundary-drifting policy and
   attestation objects cannot enter a verification attempt.
