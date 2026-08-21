@@ -5,6 +5,15 @@ macOS platform gate. A local ad-hoc compile, synthetic review context, or raw
 `fs_usage` transcript is not an Endpoint Security or kernel read-isolation
 attestation.
 
+## Scope boundary
+
+Apple Developer Program access is **not** a prerequisite for AGU repository
+development, local pytest/Harness verification, FastAPI smoke tests, or the
+review-only synthetic simulation. This checklist is only the handoff for the
+real macOS P2 platform gate. Without an authorized team, the platform result
+must remain `blocked_external_authorization`; local work may continue, but P2,
+P3, P4, and P5 must not be marked complete.
+
 ## Preconditions
 
 1. Enroll an Apple Account in the Apple Developer Program as an individual, or
