@@ -119,8 +119,10 @@
   declared path cardinalities, no-symlink absolute paths, all ordered JPEG /
   source-video / checkpoint receipts, and the caller-frozen compact-canonical
   projection hash before returning `VerifiedModuleAStaticInputs` with
-  `production_capability=false`; the parent verifier capability is discarded
-  and no model/video run is started.
+  `production_capability=false`; the parent verifier capability is discarded.
+  `replay_verified_module_a_static_inputs()` reopens the stored plan and
+  reconstructs/replays the complete parent graph on each use, rejecting
+  in-memory snapshot mutation; no model/video run is started.
 - `verify_verification_attempt` now invokes that binder as the attempt-level
   gate, so individually schema-valid but cross-boundary-drifting policy and
   attestation objects cannot enter a verification attempt.

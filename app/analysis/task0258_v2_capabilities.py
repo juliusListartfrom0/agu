@@ -50,6 +50,8 @@ from app.analysis.task0258_v2_pipeline import build_member_receipts
 from app.analysis.task0258_v2_read_isolation import verify_read_isolation_binding
 from app.analysis.task0258_v2_verification import verify_verification_attempt
 from app.analysis.vru_causal_temporal_retrospective import (
+    FileReceipt,
+    StoredArtifactReceipt,
     Task0257ExpectedReceipts,
     Task0257InputPaths,
     VerifiedTemporalFeaturePlan,
@@ -275,6 +277,11 @@ _TASK0257_PATH_SEQUENCE_LENGTHS = {
     "source_videos": 4,
     "checkpoints": 2,
 }
+_TASK0257_STORED_SEQUENCE_FIELDS = frozenset({"parent_candidate_children", "old_embedding_files"})
+_TASK0257_FILE_SEQUENCE_FIELDS = frozenset(
+    {"parent_label_children", "parent_review_jpegs", "harwood_review_jpegs", "source_videos", "checkpoints"}
+)
+_TASK0257_FILE_SCALAR_FIELDS = frozenset({"parent_source_manifest", "v2_label_child", "harwood_source_manifest"})
 _TASK0257_RECEIPT_PROJECTION_FIELDS = frozenset(Task0257ExpectedReceipts.__dataclass_fields__)
 _REGISTERED_STATIC_INPUTS_CAPABILITIES: dict[int, tuple[object, str]] = {}
 
@@ -570,6 +577,7 @@ class VerifiedModuleAStaticInputs:
         "_token",
         "_temporal_plan_artifact_sha256",
         "_temporal_plan_file_sha256",
+        "_temporal_plan_path",
         "_temporal_plan_snapshot",
         "_task0257_input_paths_snapshot",
         "_task0257_receipts_projection_sha256",
@@ -588,6 +596,7 @@ class VerifiedModuleAStaticInputs:
         self._token = token
         self._temporal_plan_artifact_sha256 = kwargs["temporal_plan_artifact_sha256"]
         self._temporal_plan_file_sha256 = kwargs["temporal_plan_file_sha256"]
+        self._temporal_plan_path = kwargs["temporal_plan_path"]
         self._temporal_plan_snapshot = kwargs["temporal_plan_snapshot"]
         self._task0257_input_paths_snapshot = kwargs["task0257_input_paths_snapshot"]
         self._task0257_receipts_projection_sha256 = kwargs["task0257_receipts_projection_sha256"]
@@ -2202,6 +2211,7 @@ def _static_inputs_fingerprint(capability: VerifiedModuleAStaticInputs) -> str:
     for value in (
         capability._temporal_plan_artifact_sha256.encode("ascii"),
         capability._temporal_plan_file_sha256.encode("ascii"),
+        str(capability._temporal_plan_path).encode("utf-8"),
         capability._task0257_receipts_projection_sha256.encode("ascii"),
         capability._temporal_plan_snapshot,
         capability._task0257_input_paths_snapshot,
@@ -2226,6 +2236,81 @@ def _require_verified_module_a_static_inputs(capability: VerifiedModuleAStaticIn
         raise TypeError("a registered Module-A static-input capability is required")
     if registered[1] != _static_inputs_fingerprint(capability):
         raise ValueError("verified Module-A static inputs were mutated")
+
+
+def _task0257_paths_from_snapshot(snapshot: bytes) -> Task0257InputPaths:
+    try:
+        payload = json.loads(snapshot.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("stored TASK-0257 path snapshot is invalid") from error
+    if not isinstance(payload, dict) or set(payload) != set(Task0257InputPaths.__dataclass_fields__):
+        raise ValueError("stored TASK-0257 path snapshot fields are invalid")
+    values: dict[str, object] = {}
+    for field in Task0257InputPaths.__dataclass_fields__:
+        value = payload[field]
+        if field in _TASK0257_PATH_SEQUENCE_LENGTHS:
+            if not isinstance(value, list) or len(value) != _TASK0257_PATH_SEQUENCE_LENGTHS[field]:
+                raise ValueError("stored TASK-0257 path snapshot cardinality is invalid")
+            values[field] = tuple(Path(item) for item in value)
+        else:
+            values[field] = Path(value)
+    return Task0257InputPaths(**values)
+
+
+def _task0257_receipts_from_snapshot(snapshot: bytes) -> Task0257ExpectedReceipts:
+    try:
+        payload = json.loads(snapshot.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("stored TASK-0257 receipt snapshot is invalid") from error
+    if not isinstance(payload, dict) or set(payload) != _TASK0257_RECEIPT_PROJECTION_FIELDS:
+        raise ValueError("stored TASK-0257 receipt snapshot fields are invalid")
+    values: dict[str, object] = {}
+    for field in Task0257ExpectedReceipts.__dataclass_fields__:
+        value = payload[field]
+        if field in _TASK0257_STORED_SEQUENCE_FIELDS:
+            if not isinstance(value, list):
+                raise ValueError("stored TASK-0257 receipt sequence is invalid")
+            values[field] = tuple(StoredArtifactReceipt(**row) for row in value)
+        elif field in _TASK0257_FILE_SEQUENCE_FIELDS:
+            if not isinstance(value, list):
+                raise ValueError("stored TASK-0257 file receipt sequence is invalid")
+            values[field] = tuple(FileReceipt(**row) for row in value)
+        elif field in _TASK0257_FILE_SCALAR_FIELDS:
+            values[field] = FileReceipt(**value)
+        else:
+            values[field] = StoredArtifactReceipt(**value)
+    receipts = Task0257ExpectedReceipts(**values)
+    _task0257_receipt_projection(receipts)
+    return receipts
+
+
+def replay_verified_module_a_static_inputs(capability: VerifiedModuleAStaticInputs) -> None:
+    """Reopen and replay a previously loaded static-input graph.
+
+    The registry/fingerprint check detects in-memory mutation first.  The
+    exact plan path and parent dataclasses are then reconstructed from the
+    immutable snapshots and passed through the public parent loaders again.
+    This remains review-only and returns no execution capability.
+    """
+    _require_verified_module_a_static_inputs(capability)
+    plan_path = _verify_static_input_path(capability._temporal_plan_path, description="stored temporal plan")
+    paths = _task0257_paths_from_snapshot(capability._task0257_input_paths_snapshot)
+    receipts = _task0257_receipts_from_snapshot(capability._task0257_receipts_snapshot)
+    _mapping, projection, projection_sha256 = _task0257_receipt_projection(receipts)
+    if projection_sha256 != capability._task0257_receipts_projection_sha256:
+        raise ValueError("stored TASK-0257 receipt projection drifted")
+    verified_plan = load_verified_temporal_feature_plan(
+        plan_path=plan_path,
+        expected_artifact_sha256=capability._temporal_plan_artifact_sha256,
+        expected_file_sha256=capability._temporal_plan_file_sha256,
+    )
+    if type(verified_plan) is not VerifiedTemporalFeaturePlan:
+        raise TypeError("temporal plan loader returned an invalid capability")
+    if _canonical_json_with_lf(verified_plan._payload) != capability._temporal_plan_snapshot:
+        raise ValueError("stored temporal plan bytes drifted")
+    if verified_plan._payload.get("task0257_receipts") != _mapping:
+        raise ValueError("stored temporal plan receipt projection drifted")
+    verify_task0257_temporal_inputs(paths=paths, expected_receipts=receipts)
 
 
 def load_verified_module_a_static_inputs(
@@ -2283,6 +2368,7 @@ def load_verified_module_a_static_inputs(
         _STATIC_INPUTS_TOKEN,
         temporal_plan_artifact_sha256=expected_temporal_plan_artifact_sha256,
         temporal_plan_file_sha256=expected_temporal_plan_file_sha256,
+        temporal_plan_path=plan_path,
         temporal_plan_snapshot=plan_snapshot,
         task0257_input_paths_snapshot=_canonical_json_with_lf(paths_snapshot),
         task0257_receipts_projection_sha256=expected_task0257_receipts_projection_sha256,
@@ -3132,6 +3218,7 @@ __all__ = [
     "load_verified_amended_implementation_review",
     "load_verified_review_rerun_authorization",
     "load_verified_module_a_static_inputs",
+    "replay_verified_module_a_static_inputs",
     "load_verified_review_implementation_approval",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",

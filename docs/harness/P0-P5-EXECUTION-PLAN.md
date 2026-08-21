@@ -106,7 +106,9 @@ model execution or readiness transition.
       review-only static-input loader now replays the complete parent plan and
       TASK-0257 receipt graph, including all ordered JPEG/source-video/checkpoint
       receipts, computes the caller-frozen projection, and returns an opaque
-      `production_capability=false` wrapper; it does not authorize a run.
+      `production_capability=false` wrapper. Its review-only replay entry point
+      reopens the plan and replays the full parent graph again on every use; it
+      does not authorize a run.
       repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.

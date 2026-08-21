@@ -50,6 +50,7 @@ from app.analysis.task0258_v2_capabilities import (
     load_verified_terminal_artifact,
     load_verified_verification_attempt,
     replay_module_a_read_traversal_for_discovery,
+    replay_verified_module_a_static_inputs,
 )
 from app.analysis.task0258_v2_pipeline import (
     build_candidate_gate_payload,
@@ -1233,7 +1234,14 @@ def test_static_input_loader_replays_complete_parent_graph_as_review_only(tmp_pa
         "task0257_receipts_projection_sha256": hashlib.sha256(projection).hexdigest(),
     }
     assert capability.task0257_receipts_snapshot == projection
-    assert calls == [{"paths": paths, "expected_receipts": receipts}]
+    replay_verified_module_a_static_inputs(capability)
+    assert calls == [
+        {"paths": paths, "expected_receipts": receipts},
+        {"paths": paths, "expected_receipts": receipts},
+    ]
+    capability._task0257_receipts_snapshot = b"drift"
+    with pytest.raises(ValueError, match="mutated"):
+        replay_verified_module_a_static_inputs(capability)
     with pytest.raises(TypeError):
         VerifiedModuleAStaticInputs()
 

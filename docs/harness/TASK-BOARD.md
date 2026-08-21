@@ -41,7 +41,7 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 > Local P3 preparation (2026-08-22): the review-only rerun-authorization replay now binds the exact approval/review/static-input receipts, fixed operation list, absent output and candidate-bundle paths, registry identity, and `module_b_authorized=false`. It returns no production capability and consumes no run; the actual exact-SHA authorization remains an external/user-issued gate.
 
-> Local static-input preparation (2026-08-22): `VerifiedModuleAStaticInputs` now replays the complete explicit temporal-plan/TASK-0257 graph, including all ordered JPEG, source-video, and checkpoint receipts, computes the caller-frozen projection, and returns only `production_capability=false`. It uses the repository's parent public verifier and does not authorize model execution or P5.
+> Local static-input preparation (2026-08-22): `VerifiedModuleAStaticInputs` now replays the complete explicit temporal-plan/TASK-0257 graph, including all ordered JPEG, source-video, and checkpoint receipts, computes the caller-frozen projection, and returns only `production_capability=false`. Its review-only replay entry point reopens the stored plan and replays the parent graph on each use, including in-memory snapshot mutation rejection. It uses the repository's parent public verifier and does not authorize model execution or P5.
 
 > Latest push (2026-08-22): `codex/agu-p2` is at `420b3e7` with the local static-input replay slice; `main` remains at `c5157f2` because the independent review and external platform gates are still open.
 

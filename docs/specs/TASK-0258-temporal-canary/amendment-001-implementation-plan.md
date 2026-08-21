@@ -34,7 +34,8 @@ Implemented modules:
   cross-bound loading, complete verification-attempt replay, and implementation
   approval full parent/amendment/review/baseline receipt replay, plus amended
   implementation-review/fresh-review and review-only rerun-authorization
-  receipt replay and complete review-only static-input receipt-graph replay;
+  receipt replay and complete review-only static-input receipt-graph replay,
+  including per-use reopen/replay;
   these
   contexts also bind the attempt to the loaded admission/history trust spine
   and provide a no-write preflight replay, but cannot authorize production
