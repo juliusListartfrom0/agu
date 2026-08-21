@@ -61,6 +61,20 @@ def test_parse_fsusage_transcript():
     assert events[1].errno == 2
 
 
+def test_parse_fsusage_transcript_enforces_event_row_cap():
+    text = (
+        "06:02:18.189632  open  private/tmp/one.txt\n"
+        "06:02:18.189633  stat  private/tmp/two.txt\n"
+    )
+    with pytest.raises(ValueError, match="event-row cap"):
+        parse_fsusage_transcript(io.StringIO(text), maximum_rows=1)
+
+
+def test_parse_fsusage_transcript_enforces_byte_cap():
+    with pytest.raises(ValueError, match="byte cap"):
+        parse_fsusage_transcript(io.StringIO("diagnostic header\n"), maximum_bytes=8)
+
+
 def test_attestation_allowed_only():
     events = [ReadEvent("open", "/allowed/data.json", None), ReadEvent("stat", "/allowed/data.json", None)]
     with pytest.raises(ValueError):

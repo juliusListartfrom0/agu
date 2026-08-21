@@ -12,6 +12,11 @@ import re
 from dataclasses import dataclass
 from typing import IO
 
+from app.analysis.task0258_v2_read_isolation import (
+    MAXIMUM_READ_EVENT_BYTES,
+    MAXIMUM_READ_EVENT_ROWS,
+)
+
 
 class ExternalKernelAuditUnavailable(PermissionError):
     """Raised until an externally authenticated kernel-audit provider is bound."""
@@ -78,12 +83,35 @@ def parse_fsusage_line(line: str) -> ReadEvent | None:
     return ReadEvent(operation=operation, path=path, errno=errno)
 
 
-def parse_fsusage_transcript(stream: IO[str]) -> list[ReadEvent]:
-    """Parse a complete fs_usage transcript into ordered read events."""
+def parse_fsusage_transcript(
+    stream: IO[str],
+    *,
+    maximum_rows: int = MAXIMUM_READ_EVENT_ROWS,
+    maximum_bytes: int = MAXIMUM_READ_EVENT_BYTES,
+) -> list[ReadEvent]:
+    """Parse a bounded fs_usage transcript into ordered diagnostic events.
+
+    The limits protect this diagnostic-only parser from unbounded input. They
+    do not turn parsed text into authenticated kernel evidence.
+    """
+    if isinstance(maximum_rows, bool) or not isinstance(maximum_rows, int) or maximum_rows <= 0:
+        raise ValueError("maximum_rows must be a positive integer")
+    if isinstance(maximum_bytes, bool) or not isinstance(maximum_bytes, int) or maximum_bytes <= 0:
+        raise ValueError("maximum_bytes must be a positive integer")
+
     events: list[ReadEvent] = []
+    total_bytes = 0
     for line in stream:
+        try:
+            total_bytes += len(line.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("fs_usage transcript must contain UTF-8 text") from exc
+        if total_bytes > maximum_bytes:
+            raise ValueError("fs_usage transcript exceeds byte cap")
         event = parse_fsusage_line(line)
         if event is not None:
+            if len(events) >= maximum_rows:
+                raise ValueError("fs_usage transcript exceeds event-row cap")
             events.append(event)
     return events
 
@@ -176,6 +204,8 @@ def build_verified_read_isolation_attestation(
 __all__ = [
     "ReadEvent",
     "ExternalKernelAuditUnavailable",
+    "MAXIMUM_READ_EVENT_BYTES",
+    "MAXIMUM_READ_EVENT_ROWS",
     "parse_fsusage_line",
     "parse_fsusage_transcript",
     "build_read_isolation_attestation",
