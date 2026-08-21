@@ -85,6 +85,30 @@ def test_discovery_manifest_is_temp_bound_and_observation_only(tmp_path):
         )
 
 
+def test_discovery_manifest_rejects_symlinked_temp_parent(tmp_path):
+    discovery = bind_implementation_review_discovery_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    symlinked_parent = tmp_path / "symlinked-parent"
+    symlinked_parent.symlink_to(real_parent, target_is_directory=True)
+    payload = {"schema_version": "agu.test"}
+    payload["artifact_sha256"] = canonical_artifact_sha256(payload)
+    raw = (compact_canonical_json(payload) + "\n").encode()
+    manifest = real_parent / "manifest.json"
+    manifest.write_bytes(raw)
+
+    with pytest.raises(ValueError):
+        replay_module_a_read_traversal_for_discovery(
+            discovery_context=discovery,
+            operation="manifest_replay",
+            operation_input_manifest_path=symlinked_parent / manifest.name,
+            expected_manifest_artifact_sha256=payload["artifact_sha256"],
+            expected_manifest_file_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+
+
 def test_synthetic_context_reopens_and_rejects_identity_drift(tmp_path):
     discovery = bind_implementation_review_discovery_context(
         expected_check_name="focused_pytest", expected_command_sha256="0" * 64
@@ -134,7 +158,9 @@ def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_pat
         candidate_dir=candidate,
         observed_at_utc="2026-08-17T00:00:00Z",
     )
-    bundle_path = tmp_path / "bundle.json"
+    bundle_parent = tmp_path / "bundle-parent"
+    bundle_parent.mkdir()
+    bundle_path = bundle_parent / "bundle.json"
     bundle_raw = (compact_canonical_json(bundle) + "\n").encode()
     bundle_path.write_bytes(bundle_raw)
     review = bind_implementation_review_sandbox_context(
@@ -151,6 +177,15 @@ def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_pat
         load_verified_candidate_receipt_bundle(
             execution_context=object(),
             bundle_path=bundle_path,
+            expected_artifact_sha256=bundle["artifact_sha256"],
+            expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
+        )
+    symlinked_parent = tmp_path / "bundle-alias"
+    symlinked_parent.symlink_to(bundle_parent, target_is_directory=True)
+    with pytest.raises(ValueError):
+        load_verified_candidate_receipt_bundle(
+            execution_context=review,
+            bundle_path=symlinked_parent / bundle_path.name,
             expected_artifact_sha256=bundle["artifact_sha256"],
             expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
         )

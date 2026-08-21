@@ -4,14 +4,14 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `179 passed` (including the local simulation command
-  and its fail-closed P5 boundary tests).
+- TASK-0258 focused suite: `180 passed` (including the local simulation command,
+  its fail-closed P5 boundary tests, and symlinked-parent rejection tests).
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the local simulation increment: `2,047 passed, 5
+- Full repository pytest after the no-follow loader hardening: `2,048 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -20,7 +20,9 @@
   it also rejects closed, aliased, and non-regular inherited descriptors.
 - The review-only capability/loader tests prove temporary-ancestor identity
   re-open, canonical artifact/file hashes, context separation, and wrong-context
-  rejection; they do not provide kernel-audit or production admission evidence.
+  rejection. JSON manifest/bundle reads use bounded descriptor-relative
+  no-follow traversal and reject symlinked temporary parents; they do not
+  provide kernel-audit or production admission evidence.
 - The read-isolation audit tests prove that both raw `fs_usage` rows and direct
   Python `verified_event_rows` injection fail closed with no attestation; the
   external kernel-provider capability is still absent.

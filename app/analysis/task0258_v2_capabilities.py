@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 import tempfile
 from collections.abc import Mapping
@@ -33,6 +34,7 @@ _JSON_ARTIFACT_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 
 _REVIEW_CHECKS = frozenset({"focused_pytest", "full_pytest"})
+_MAX_VERIFIED_FILE_BYTES = 67_108_864
 
 
 class VerifiedReviewDiscoveryContext:
@@ -153,6 +155,79 @@ def _verify_temp_ancestor(path: Path) -> tuple[int, int]:
     return identity
 
 
+def _verify_no_symlink_ancestors(path: Path, *, allowed_prefix: Path) -> None:
+    """Reject symlinked components before descriptor-relative file opening."""
+    if not path.is_absolute() or "\x00" in os.fspath(path):
+        raise ValueError("path must be an absolute path without NUL bytes")
+    try:
+        relative_parts = path.relative_to(allowed_prefix).parts
+    except ValueError as exc:
+        raise ValueError("path is outside its allowed prefix") from exc
+    current = allowed_prefix
+    for part in relative_parts:
+        current /= part
+        try:
+            if current.is_symlink():
+                raise ValueError(f"path contains a symlinked component: {current}")
+        except OSError as exc:
+            raise ValueError(f"cannot inspect path component: {current}") from exc
+
+
+def _read_no_follow_temp_file(path: Path, *, description: str) -> bytes:
+    """Read one bounded temporary regular file through no-follow descriptors."""
+    path = Path(path)
+    if not path.is_absolute() or os.path.normpath(os.fspath(path)) != os.fspath(path):
+        raise ValueError(f"{description} must be an absolute canonical path")
+    raw_temp_root = Path(tempfile.gettempdir())
+    temp_root = raw_temp_root.resolve()
+    lexical_temp_root = raw_temp_root
+    try:
+        path.relative_to(raw_temp_root)
+    except ValueError:
+        lexical_temp_root = temp_root
+    try:
+        canonical_path = path.resolve(strict=True)
+        canonical_path.relative_to(temp_root)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise ValueError(f"{description} must be under the OS temporary directory") from exc
+    _verify_no_symlink_ancestors(path, allowed_prefix=lexical_temp_root)
+
+    components = canonical_path.parts[1:]
+    if not components or any(not component for component in components):
+        raise ValueError(f"{description} contains an empty path component")
+    common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    directory_flags = common_flags | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = common_flags | getattr(os, "O_NOFOLLOW", 0)
+    parent_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        parent_fd = os.open("/", directory_flags)
+        for component in components[:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        file_fd = os.open(components[-1], file_flags, dir_fd=parent_fd)
+        file_stat = os.fstat(file_fd)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size > _MAX_VERIFIED_FILE_BYTES:
+            raise ValueError(f"{description} is not a bounded regular file")
+        remaining = file_stat.st_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(file_fd, min(1 << 20, remaining))
+            if not chunk:
+                raise ValueError(f"{description} ended before its recorded size")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+    except OSError as exc:
+        raise ValueError(f"{description} cannot be opened without following links") from exc
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
 def _reopen_temp_context(context: object) -> Path:
     if not isinstance(
         context,
@@ -220,7 +295,7 @@ def replay_module_a_read_traversal_for_discovery(
         path.resolve().relative_to(temp_root)
     except ValueError as exc:
         raise ValueError("discovery manifest must be under the OS temporary directory") from exc
-    raw = path.read_bytes()
+    raw = _read_no_follow_temp_file(path, description="discovery manifest")
     if hashlib.sha256(raw).hexdigest() != _verify_sha(expected_manifest_file_sha256, "manifest file hash"):
         raise ValueError("discovery manifest file hash does not match")
     if not raw.endswith(b"\n"):
@@ -320,7 +395,7 @@ def _load_verified_json_artifact(
     path = Path(path)
     if not path.is_absolute() or path.is_symlink() or not path.is_file():
         raise ValueError("verified artifact must be an absolute regular file")
-    raw = path.read_bytes()
+    raw = _read_no_follow_temp_file(path, description="verified artifact")
     if hashlib.sha256(raw).hexdigest() != _verify_sha(expected_file_sha256, "artifact file hash"):
         raise ValueError("verified artifact file hash does not match")
     if not raw.endswith(b"\n"):
