@@ -27,6 +27,11 @@
 - The fs_usage audit entry point rejects malformed worker argv before spawn and
   uses the shared sanitized environment and new-process-group contract, then
   kills/reaps the worker group on timeout.
+- The Endpoint Security diagnostic client accepts only strict positive decimal
+  PID/timeout values, subscribes to the target EXIT event, and uses a bounded
+  default 120-second lifetime with timeout exit code `4`; this prevents an
+  unbounded local observer but remains unsigned diagnostic code, not platform
+  authorization or kernel evidence.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
   canonical reopening of the standalone runtime contract through a
@@ -198,8 +203,9 @@ read-isolation attestation. The probe now accepts
   the boolean `true`; entitlement on an adhoc/unknown signature remains
   blocked. The selected artifact is canonicalized before inspection, and the
   C client passes strict warning compilation with no-follow/exclusive output,
-  bounded fork/pidversion lineage, path-truncation rejection, and JSON-safe
-  path encoding. Without that option it intentionally reports the temporary
+  bounded fork/pidversion lineage, path-truncation rejection, JSON-safe path
+  encoding, strict decimal PID/timeout parsing, and bounded target-exit/timeout
+  shutdown. Without that option it intentionally reports the temporary
   ad-hoc compile and cannot observe an installed system extension.
 
 ## Repository-local simulation

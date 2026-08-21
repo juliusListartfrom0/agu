@@ -74,7 +74,8 @@ supplied "verified" rows. The current review-only
   Endpoint Security capability probe now requires a non-adhoc signed artifact
   before recognizing the entitlement, and the C client applies no-follow/
   exclusive transcript output, bounded fork/pidversion lineage,
-  path-truncation rejection, and JSON-safe path encoding; the
+  path-truncation rejection, JSON-safe path encoding, strict decimal
+  PID/timeout parsing, and bounded target-exit/timeout shutdown; the
   full production proof boundary is not
   sealed. The pipeline CLI now refuses production execution unless a future
   external admission issuer is bound; its end-to-end tests require an explicit
