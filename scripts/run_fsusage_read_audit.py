@@ -22,9 +22,46 @@ import subprocess
 from pathlib import Path
 
 from app.analysis.task0258_v2_audit import (
+    MAXIMUM_READ_EVENT_BYTES,
     build_read_isolation_attestation,
     parse_fsusage_transcript,
 )
+
+_MAXIMUM_DIAGNOSTIC_TRANSCRIPT_BYTES = MAXIMUM_READ_EVENT_BYTES
+
+
+class _BoundedTextCapture:
+    """Drain a text pipe while retaining at most a bounded UTF-8 payload."""
+
+    def __init__(self, *, maximum_bytes: int) -> None:
+        if isinstance(maximum_bytes, bool) or not isinstance(maximum_bytes, int) or maximum_bytes <= 0:
+            raise ValueError("maximum_bytes must be a positive integer")
+        self._maximum_bytes = maximum_bytes
+        self._total_bytes = 0
+        self._lines: list[str] = []
+        self._exceeded = False
+
+    def append(self, line: str) -> None:
+        """Retain a line only while the complete stream remains under the cap."""
+        if not isinstance(line, str):
+            raise ValueError("diagnostic stream must contain text")
+        if self._exceeded:
+            return
+        try:
+            line_bytes = len(line.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("diagnostic stream must contain UTF-8 text") from exc
+        if self._total_bytes + line_bytes > self._maximum_bytes:
+            self._exceeded = True
+            return
+        self._lines.append(line)
+        self._total_bytes += line_bytes
+
+    def finish(self) -> str:
+        """Return retained text or fail closed after an over-limit stream."""
+        if self._exceeded:
+            raise ValueError("diagnostic transcript exceeds byte cap")
+        return "".join(self._lines)
 
 
 def run_read_audit(
@@ -46,7 +83,7 @@ def run_read_audit(
     import io
     import threading
 
-    proc = subprocess.Popen(worker_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(worker_argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
     attestation_inputs = {
         **attestation_inputs,
         "child_pid": proc.pid,
@@ -67,26 +104,26 @@ def run_read_audit(
         fs.stdin.write(sudo_password + "\n")
         fs.stdin.flush()
         fs.stdin.close()
-    out_lines: list[str] = []
-    err_lines: list[str] = []
+    out_capture = _BoundedTextCapture(maximum_bytes=_MAXIMUM_DIAGNOSTIC_TRANSCRIPT_BYTES)
+    err_capture = _BoundedTextCapture(maximum_bytes=_MAXIMUM_DIAGNOSTIC_TRANSCRIPT_BYTES)
 
     def _drain(stream, sink):
         for line in stream:
             sink.append(line)
 
-    t1 = threading.Thread(target=_drain, args=(fs.stdout, out_lines), daemon=True)
-    t2 = threading.Thread(target=_drain, args=(fs.stderr, err_lines), daemon=True)
+    t1 = threading.Thread(target=_drain, args=(fs.stdout, out_capture), daemon=True)
+    t2 = threading.Thread(target=_drain, args=(fs.stderr, err_capture), daemon=True)
     t1.start()
     t2.start()
-    stdout, stderr = proc.communicate()
+    proc.wait()
     try:
         fs.terminate()
     except ProcessLookupError:
         pass
     t1.join(timeout=5)
     t2.join(timeout=5)
-    fs_out = "".join(out_lines)
-    fs_err = "".join(err_lines)
+    fs_out = out_capture.finish()
+    fs_err = err_capture.finish()
     if fs.returncode not in (0, -15, None) and not fs_out and fs_err:
         raise RuntimeError(f"fs_usage failed: {fs_err.strip()}")
     events = parse_fsusage_transcript(io.StringIO(fs_out))

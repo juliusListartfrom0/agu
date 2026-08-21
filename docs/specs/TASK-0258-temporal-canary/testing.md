@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `227 passed` (including the local simulation command,
+- TASK-0258 focused suite: `233 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the verified-bootstrap launcher integration increment: `2,095 passed, 5
+- Latest full repository pytest: `2,101 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
