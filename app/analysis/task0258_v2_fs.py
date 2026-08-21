@@ -65,6 +65,36 @@ def verify_absent(path: Path) -> None:
         raise FileExistsError(f"target already exists: {path}")
 
 
+def read_regular_file_no_follow(path: Path, *, maximum_bytes: int = 16_777_216) -> bytes:
+    """Read one bounded regular file through an ``O_NOFOLLOW`` descriptor."""
+    path = Path(path)
+    if not isinstance(maximum_bytes, int) or isinstance(maximum_bytes, bool) or maximum_bytes < 0:
+        raise ValueError("maximum_bytes is invalid")
+    _verify_no_symlink_ancestors(path.parent)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(os.fspath(path), flags)
+    except OSError as exc:
+        raise ValueError(f"regular file cannot be opened without following links: {path}") from exc
+    try:
+        file_stat = os.fstat(fd)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size > maximum_bytes:
+            raise ValueError(f"file is not a bounded regular file: {path}")
+        remaining = file_stat.st_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(fd, min(1 << 20, remaining))
+            if not chunk:
+                raise ValueError(f"file ended before its recorded size: {path}")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+    except OSError as exc:
+        raise ValueError(f"regular file cannot be read: {path}") from exc
+    finally:
+        os.close(fd)
+
+
 def _verify_no_symlink_ancestors(path: Path) -> None:
     """Reject symlinked path components before a publication transaction."""
     current = Path(path.anchor) if path.is_absolute() else Path()
@@ -350,6 +380,7 @@ __all__ = [
     "fsync_dir",
     "exclusive_flock",
     "verify_absent",
+    "read_regular_file_no_follow",
     "publish_no_clobber",
     "atomic_write_bytes",
     "atomic_write_json",

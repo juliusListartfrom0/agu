@@ -32,6 +32,7 @@ from app.analysis.task0258_v2_artifacts import (
 )
 from app.analysis.task0258_v2_pipeline import (
     build_member_receipts,
+    read_published_candidate_receipt_bundle,
     seal_candidate_receipt_bundle,
     seal_candidate_v2,
     seal_verified_result,
@@ -167,7 +168,7 @@ def run_v2_pipeline(
         candidate_dir=candidate,
         output_flock_path=flock_path,
     )
-    bundle_bytes = bundle_path.read_bytes()
+    bundle_bytes = read_published_candidate_receipt_bundle(bundle_path, expected_payload=bundle_payload)
     bound_result = dict(result_payload)
     bound_result["candidate_receipt_bundle_receipt"] = {
         "artifact_sha256": bundle_payload["artifact_sha256"],

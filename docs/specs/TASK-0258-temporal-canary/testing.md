@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `218 passed` (including the local simulation command,
+- TASK-0258 focused suite: `219 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the verified-bootstrap launcher integration increment: `2,086 passed, 5
+- Full repository pytest after the verified-bootstrap launcher integration increment: `2,087 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -52,6 +52,10 @@
   under those locks, rejects candidate drift and exact fixed-stage residue, and
   reopens the published bundle bytes. This is repository-local publication
   hardening, not a substitute for the external receipt issuer or OS sandbox.
+- The pipeline's post-seal bundle read now reopens the published bundle under
+  the bundle lock through a bounded regular-file/no-follow descriptor and
+  requires exact canonical payload equality before binding the bundle file
+  receipt into the result; regressions cover payload drift and a symlinked leaf.
 - The public pipeline preflight now cross-binds the candidate gate's
   authorization, admission, and run-identity receipts to the actual admission
   and completion bytes, then requires the bundle and result to share the same

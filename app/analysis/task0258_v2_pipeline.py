@@ -36,6 +36,7 @@ from app.analysis.task0258_v2_artifacts import (
 from app.analysis.task0258_v2_fs import (
     atomic_write_bytes,
     exclusive_flock,
+    read_regular_file_no_follow,
     seal_generation_directory,
     verify_absent,
     verify_generation_directory,
@@ -262,12 +263,36 @@ def seal_candidate_receipt_bundle(
             verify_absent(bundle_path)
             verify_absent(stage_path)
             atomic_write_bytes(bundle_path, bundle_bytes, mode=0o600, stage_path=stage_path)
-            reopened = bundle_path.read_bytes()
+            reopened = read_regular_file_no_follow(bundle_path)
             if reopened != bundle_bytes:
                 raise ValueError("candidate receipt bundle changed during publication")
             if stage_path.exists() or stage_path.is_symlink():
                 raise ValueError("candidate receipt bundle stage remained after publication")
     return bundle_path
+
+
+def read_published_candidate_receipt_bundle(
+    bundle_path: Path,
+    *,
+    expected_payload: Mapping[str, object] | None = None,
+) -> bytes:
+    """Reopen a published bundle under its lock and replay its canonical bytes."""
+    bundle_path = Path(bundle_path)
+    if not bundle_path.is_absolute() or bundle_path.name != "candidate-receipt-bundle.json":
+        raise ValueError("candidate receipt bundle path is not authorized")
+    lock_path = bundle_path.parent / ".candidate-receipt-bundle.lock"
+    with exclusive_flock(lock_path):
+        bundle_bytes = read_regular_file_no_follow(bundle_path)
+        try:
+            payload = json.loads(bundle_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("published candidate receipt bundle is not canonical JSON") from exc
+        if not isinstance(payload, Mapping) or bundle_bytes != (compact_canonical_json(payload) + "\n").encode("utf-8"):
+            raise ValueError("published candidate receipt bundle bytes are not canonical")
+        verify_candidate_receipt_bundle(payload)
+        if expected_payload is not None and payload != expected_payload:
+            raise ValueError("published candidate receipt bundle does not match the expected payload")
+        return bundle_bytes
 
 
 def build_postpublication_verification_payload(
@@ -471,6 +496,7 @@ __all__ = [
     "build_candidate_gate_payload",
     "seal_candidate_v2",
     "build_member_receipts",
+    "read_published_candidate_receipt_bundle",
     "build_candidate_receipt_bundle_payload",
     "seal_candidate_receipt_bundle",
     "build_postpublication_verification_payload",

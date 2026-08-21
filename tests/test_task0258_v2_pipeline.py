@@ -6,12 +6,13 @@ import json
 
 import pytest
 
-from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256
+from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256, compact_canonical_json
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_pipeline import (
     build_candidate_gate_payload,
     build_candidate_receipt_bundle_payload,
     build_member_receipts,
+    read_published_candidate_receipt_bundle,
     seal_candidate_receipt_bundle,
     seal_candidate_v2,
 )
@@ -205,10 +206,54 @@ def test_candidate_receipt_bundle(tmp_path):
     )
     assert bundle_path.is_file()
     assert json.loads(bundle_path.read_text())["candidate_generation_name"] == "candidate_v2"
+    assert (
+        read_published_candidate_receipt_bundle(bundle_path, expected_payload=bundle)
+        == (compact_canonical_json(bundle) + "\n").encode()
+    )
     stage_path = (
         tmp_path / f".{bundle['authorization_receipt']['artifact_sha256']}.{bundle_path.name}.task0258-bundle-stage"
     )
     assert not stage_path.exists()
+
+
+def test_published_candidate_receipt_bundle_rejects_path_and_payload_drift(tmp_path):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / ".lock"
+    lock.write_text("")
+    final = seal_candidate_v2(out, members, flock_path=lock)
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=final,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    bundle_path = tmp_path / "candidate-receipt-bundle.json"
+    seal_candidate_receipt_bundle(bundle_path, bundle, candidate_dir=final, output_flock_path=lock)
+
+    drifted = dict(bundle)
+    drifted["observed_at_utc"] = "2026-08-17T00:00:01Z"
+    drifted["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in drifted.items() if key != "artifact_sha256"}
+    )
+    bundle_path.write_bytes((compact_canonical_json(drifted) + "\n").encode())
+    with pytest.raises(ValueError, match="does not match the expected payload"):
+        read_published_candidate_receipt_bundle(bundle_path, expected_payload=bundle)
+
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes((compact_canonical_json(bundle) + "\n").encode())
+    bundle_path.unlink()
+    bundle_path.symlink_to(replacement)
+    with pytest.raises(ValueError, match="without following links"):
+        read_published_candidate_receipt_bundle(bundle_path, expected_payload=bundle)
 
 
 def test_candidate_receipt_bundle_rejects_locked_candidate_drift(tmp_path):
