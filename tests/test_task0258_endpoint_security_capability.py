@@ -18,8 +18,25 @@ def test_endpoint_security_capability_statuses():
         == "blocked_external_authorization"
     )
     assert (
-        derive_status(sdk_available=True, compile_ok=True, entitlement_present=True)
+        derive_status(
+            sdk_available=True,
+            compile_ok=True,
+            entitlement_present=True,
+            signature_kind="signed",
+        )
         == "requires_external_user_approval"
+    )
+
+
+def test_endpoint_security_capability_rejects_entitlement_on_adhoc_artifact():
+    assert (
+        derive_status(
+            sdk_available=True,
+            compile_ok=True,
+            entitlement_present=True,
+            signature_kind="adhoc",
+        )
+        == "blocked_external_authorization"
     )
 
 
@@ -87,6 +104,16 @@ def test_inspect_signed_artifact_rejects_missing_path(tmp_path: Path):
         capability.inspect_signed_artifact(tmp_path / "missing.systemextension")
 
 
+def test_inspect_signed_artifact_rejects_symlinked_leaf(tmp_path: Path):
+    artifact = tmp_path / "real-audit.systemextension"
+    artifact.mkdir()
+    symlink_artifact = tmp_path / "audit.systemextension"
+    symlink_artifact.symlink_to(artifact, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        capability.inspect_signed_artifact(symlink_artifact)
+
+
 def test_main_passes_signed_artifact_to_report_builder(monkeypatch, capsys, tmp_path: Path):
     signed_artifact = tmp_path / "audit.systemextension"
     signed_artifact.mkdir()
@@ -101,3 +128,15 @@ def test_main_passes_signed_artifact_to_report_builder(monkeypatch, capsys, tmp_
     assert capability.main() == 0
     assert captured["path"] == signed_artifact
     assert '"status":"requires_external_user_approval"' in capsys.readouterr().out
+
+
+def test_endpoint_security_source_bounds_output_and_process_lineage():
+    source = capability.SOURCE.read_text(encoding="utf-8")
+
+    assert "O_NOFOLLOW" in source
+    assert "O_EXCL" in source
+    assert "openat" in source
+    assert "audit_token_to_pidversion" in source
+    assert "ES_EVENT_TYPE_NOTIFY_FORK" in source
+    assert "append_json_escaped" in source
+    assert "path_truncated" in source

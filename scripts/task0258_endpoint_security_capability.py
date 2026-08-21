@@ -11,6 +11,7 @@ import argparse
 import json
 import platform
 import plistlib
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -22,21 +23,51 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, capture_output=True, text=True, check=False)
 
 
-def derive_status(*, sdk_available: bool, compile_ok: bool, entitlement_present: bool) -> str:
+def derive_status(
+    *,
+    sdk_available: bool,
+    compile_ok: bool,
+    entitlement_present: bool,
+    signature_kind: str | None = None,
+) -> str:
     if not sdk_available:
         return "unavailable_sdk"
     if not compile_ok:
         return "unavailable_build"
     if not entitlement_present:
         return "blocked_external_authorization"
+    if signature_kind != "signed":
+        return "blocked_external_authorization"
     return "requires_external_user_approval"
+
+
+def _checked_artifact_path(path: Path) -> Path:
+    """Bind the selected artifact to a canonical, non-symlink path."""
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    if candidate.is_symlink():
+        raise ValueError(f"signed artifact path is a symlink: {candidate}")
+    try:
+        candidate = candidate.resolve(strict=True)
+    except FileNotFoundError:
+        raise FileNotFoundError(candidate) from None
+    current = candidate
+    while True:
+        metadata = current.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError(f"signed artifact path contains a symlink: {current}")
+        if current == candidate and not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
+            raise ValueError(f"signed artifact is not a file or bundle directory: {candidate}")
+        if current.parent == current:
+            break
+        current = current.parent
+    return candidate
 
 
 def inspect_signed_artifact(path: Path) -> tuple[str, bool]:
     """Inspect a caller-selected signed executable or system-extension bundle."""
-    path = Path(path)
-    if not path.exists() or path.is_symlink():
-        raise FileNotFoundError(path)
+    path = _checked_artifact_path(Path(path))
     verification = _run("codesign", "--verify", "--deep", "--strict", "--verbose=4", str(path))
     if verification.returncode != 0:
         raise ValueError(f"codesign verification failed for {path}: {verification.stderr[-1000:]}")
@@ -134,6 +165,7 @@ def build_capability_report(*, signed_artifact: Path | None = None) -> dict[str,
             sdk_available=True,
             compile_ok=True,
             entitlement_present=entitlement_present,
+            signature_kind=signature_kind,
         )
     return report
 
