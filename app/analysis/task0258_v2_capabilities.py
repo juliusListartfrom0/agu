@@ -16,7 +16,9 @@ import re
 import stat
 import tempfile
 from collections.abc import Mapping
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 
 from app.analysis.task0258_module_a_v2 import (
     AUTHORIZATION_PROVIDER_ORDER,
@@ -47,6 +49,14 @@ from app.analysis.task0258_v2_fs import verify_generation_directory
 from app.analysis.task0258_v2_pipeline import build_member_receipts
 from app.analysis.task0258_v2_read_isolation import verify_read_isolation_binding
 from app.analysis.task0258_v2_verification import verify_verification_attempt
+from app.analysis.vru_causal_temporal_retrospective import (
+    Task0257ExpectedReceipts,
+    Task0257InputPaths,
+    VerifiedTemporalFeaturePlan,
+    _verify_task0257_receipt_mapping,
+    load_verified_temporal_feature_plan,
+    verify_task0257_temporal_inputs,
+)
 
 _DISCOVERY_TOKEN = object()
 _SANDBOX_TOKEN = object()
@@ -61,6 +71,7 @@ _IMPLEMENTATION_APPROVAL_TOKEN = object()
 _PARENT_SPEC_APPROVAL_TOKEN = object()
 _AMENDED_IMPLEMENTATION_REVIEW_TOKEN = object()
 _RERUN_AUTHORIZATION_TOKEN = object()
+_STATIC_INPUTS_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
 
@@ -255,6 +266,17 @@ _RERUN_ALLOWED_OPERATIONS = (
     "postpublication_verify",
     "load_existing_terminal",
 )
+_TASK0257_PATH_SEQUENCE_LENGTHS = {
+    "parent_review_jpegs": 1536,
+    "parent_candidate_children": 3,
+    "parent_label_children": 3,
+    "old_embedding_files": 2,
+    "harwood_review_jpegs": 1536,
+    "source_videos": 4,
+    "checkpoints": 2,
+}
+_TASK0257_RECEIPT_PROJECTION_FIELDS = frozenset(Task0257ExpectedReceipts.__dataclass_fields__)
+_REGISTERED_STATIC_INPUTS_CAPABILITIES: dict[int, tuple[object, str]] = {}
 
 
 class VerifiedReviewDiscoveryContext:
@@ -533,6 +555,62 @@ class VerifiedReviewRerunAuthorization:
         self.output_root = kwargs["output_root"]
         self.candidate_bundle_path = kwargs["candidate_bundle_path"]
         self.production_capability = False
+
+
+class VerifiedModuleAStaticInputs:
+    """Review-only replay of the complete Module-A static input graph.
+
+    The parent plan and TASK-0257 verifier objects are deliberately not
+    exposed.  This wrapper carries only immutable byte snapshots and the
+    three-hash contract needed by later review replay; it never authorizes a
+    model run or publication.
+    """
+
+    __slots__ = (
+        "_token",
+        "_temporal_plan_artifact_sha256",
+        "_temporal_plan_file_sha256",
+        "_temporal_plan_snapshot",
+        "_task0257_input_paths_snapshot",
+        "_task0257_receipts_projection_sha256",
+        "_task0257_receipts_snapshot",
+        "production_capability",
+    )
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _STATIC_INPUTS_TOKEN:
+            raise TypeError("VerifiedModuleAStaticInputs cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        if token is not _STATIC_INPUTS_TOKEN:
+            raise TypeError("VerifiedModuleAStaticInputs cannot be constructed directly")
+        self._token = token
+        self._temporal_plan_artifact_sha256 = kwargs["temporal_plan_artifact_sha256"]
+        self._temporal_plan_file_sha256 = kwargs["temporal_plan_file_sha256"]
+        self._temporal_plan_snapshot = kwargs["temporal_plan_snapshot"]
+        self._task0257_input_paths_snapshot = kwargs["task0257_input_paths_snapshot"]
+        self._task0257_receipts_projection_sha256 = kwargs["task0257_receipts_projection_sha256"]
+        self._task0257_receipts_snapshot = kwargs["task0257_receipts_snapshot"]
+        self.production_capability = False
+
+    @property
+    def static_input_contract(self) -> Mapping[str, str]:
+        return MappingProxyType(
+            {
+                "temporal_plan_artifact_sha256": self._temporal_plan_artifact_sha256,
+                "temporal_plan_file_sha256": self._temporal_plan_file_sha256,
+                "task0257_receipts_projection_sha256": self._task0257_receipts_projection_sha256,
+            }
+        )
+
+    @property
+    def temporal_plan_snapshot(self) -> bytes:
+        return bytes(self._temporal_plan_snapshot)
+
+    @property
+    def task0257_receipts_snapshot(self) -> bytes:
+        return bytes(self._task0257_receipts_snapshot)
 
 
 class VerifiedRunHistoryLedger:
@@ -2061,6 +2139,159 @@ def _verify_rerun_authorization_payload(
         raise ValueError("rerun authorization approval metadata is invalid")
 
 
+def _canonical_json_with_lf(value: object) -> bytes:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _verify_static_input_path(raw_path: object, *, description: str) -> Path:
+    if not isinstance(raw_path, Path):
+        raise TypeError(f"{description} must be a pathlib.Path")
+    path = Path(raw_path)
+    _verify_absolute_no_symlink_path(path)
+    if os.path.normpath(os.fspath(path)) != os.fspath(path):
+        raise ValueError(f"{description} must be canonical")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise ValueError(f"{description} must exist") from error
+    if resolved != path:
+        raise ValueError(f"{description} must not resolve through an alias")
+    return path
+
+
+def _snapshot_task0257_input_paths(paths: Task0257InputPaths) -> dict[str, object]:
+    if type(paths) is not Task0257InputPaths:
+        raise TypeError("static inputs require the closed TASK-0257 path contract")
+    snapshot: dict[str, object] = {}
+    for field in Task0257InputPaths.__dataclass_fields__:
+        value = getattr(paths, field)
+        if field in _TASK0257_PATH_SEQUENCE_LENGTHS:
+            expected_length = _TASK0257_PATH_SEQUENCE_LENGTHS[field]
+            if not isinstance(value, tuple) or len(value) != expected_length:
+                raise ValueError(f"TASK-0257 {field} cardinality is invalid")
+            snapshot[field] = tuple(
+                str(_verify_static_input_path(item, description=f"TASK-0257 {field} item")) for item in value
+            )
+        else:
+            snapshot[field] = str(_verify_static_input_path(value, description=f"TASK-0257 {field}"))
+    return snapshot
+
+
+def _task0257_receipt_projection(receipts: Task0257ExpectedReceipts) -> tuple[dict[str, object], bytes, str]:
+    if type(receipts) is not Task0257ExpectedReceipts:
+        raise TypeError("static inputs require the closed TASK-0257 receipt contract")
+    mapping = json.loads(json.dumps(asdict(receipts), allow_nan=False))
+    if set(mapping) != _TASK0257_RECEIPT_PROJECTION_FIELDS:
+        raise ValueError("TASK-0257 receipt projection fields are invalid")
+    _verify_task0257_receipt_mapping(mapping)
+    encoded = (compact_canonical_json(mapping) + "\n").encode("utf-8")
+    return mapping, encoded, hashlib.sha256(encoded).hexdigest()
+
+
+def _static_inputs_fingerprint(capability: VerifiedModuleAStaticInputs) -> str:
+    digest = hashlib.sha256()
+    for value in (
+        capability._temporal_plan_artifact_sha256.encode("ascii"),
+        capability._temporal_plan_file_sha256.encode("ascii"),
+        capability._task0257_receipts_projection_sha256.encode("ascii"),
+        capability._temporal_plan_snapshot,
+        capability._task0257_input_paths_snapshot,
+        capability._task0257_receipts_snapshot,
+    ):
+        if isinstance(value, str):
+            value = value.encode("utf-8")
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+    return digest.hexdigest()
+
+
+def _require_verified_module_a_static_inputs(capability: VerifiedModuleAStaticInputs) -> None:
+    if (
+        type(capability) is not VerifiedModuleAStaticInputs
+        or getattr(capability, "_token", None) is not _STATIC_INPUTS_TOKEN
+        or capability.production_capability
+    ):
+        raise TypeError("a review-only Module-A static-input capability is required")
+    registered = _REGISTERED_STATIC_INPUTS_CAPABILITIES.get(id(capability))
+    if registered is None or registered[0] is not capability:
+        raise TypeError("a registered Module-A static-input capability is required")
+    if registered[1] != _static_inputs_fingerprint(capability):
+        raise ValueError("verified Module-A static inputs were mutated")
+
+
+def load_verified_module_a_static_inputs(
+    *,
+    execution_context: object,
+    temporal_plan_path: Path,
+    expected_temporal_plan_artifact_sha256: str,
+    expected_temporal_plan_file_sha256: str,
+    task0257_input_paths: Task0257InputPaths,
+    expected_task0257_receipts: Task0257ExpectedReceipts,
+    expected_task0257_receipts_projection_sha256: str,
+) -> VerifiedModuleAStaticInputs:
+    """Replay the complete static input graph in the review sandbox only.
+
+    This is intentionally a local evidence loader.  It invokes the parent
+    public plan and TASK-0257 verifiers, binds the caller-frozen projection,
+    and returns no production authorization or model-execution capability.
+    """
+    if (
+        type(execution_context) is not VerifiedImplementationReviewSandboxContext
+        or execution_context._token is not _SANDBOX_TOKEN
+    ):
+        raise PermissionError("static-input loader requires a verified review context")
+    if not is_sha256(expected_temporal_plan_artifact_sha256) or not is_sha256(expected_temporal_plan_file_sha256):
+        raise ValueError("temporal plan expected SHA-256 is invalid")
+    if not is_sha256(expected_task0257_receipts_projection_sha256):
+        raise ValueError("TASK-0257 receipt projection SHA-256 is invalid")
+
+    plan_path = _verify_static_input_path(temporal_plan_path, description="temporal plan")
+    paths_snapshot = _snapshot_task0257_input_paths(task0257_input_paths)
+    receipt_mapping, receipt_projection, receipt_projection_sha256 = _task0257_receipt_projection(
+        expected_task0257_receipts
+    )
+    if receipt_projection_sha256 != expected_task0257_receipts_projection_sha256:
+        raise ValueError("TASK-0257 receipt projection SHA-256 does not match")
+
+    verified_plan = load_verified_temporal_feature_plan(
+        plan_path=plan_path,
+        expected_artifact_sha256=expected_temporal_plan_artifact_sha256,
+        expected_file_sha256=expected_temporal_plan_file_sha256,
+    )
+    if type(verified_plan) is not VerifiedTemporalFeaturePlan:
+        raise TypeError("temporal plan loader returned an invalid capability")
+    if verified_plan._payload.get("task0257_receipts") != receipt_mapping:
+        raise ValueError("temporal plan is not bound to the complete TASK-0257 receipt projection")
+
+    # The returned parent capability is deliberately discarded after replay;
+    # later production code must reopen this graph from independent receipts.
+    verify_task0257_temporal_inputs(
+        paths=task0257_input_paths,
+        expected_receipts=expected_task0257_receipts,
+    )
+    plan_snapshot = _canonical_json_with_lf(verified_plan._payload)
+    capability = VerifiedModuleAStaticInputs(
+        _STATIC_INPUTS_TOKEN,
+        temporal_plan_artifact_sha256=expected_temporal_plan_artifact_sha256,
+        temporal_plan_file_sha256=expected_temporal_plan_file_sha256,
+        temporal_plan_snapshot=plan_snapshot,
+        task0257_input_paths_snapshot=_canonical_json_with_lf(paths_snapshot),
+        task0257_receipts_projection_sha256=expected_task0257_receipts_projection_sha256,
+        task0257_receipts_snapshot=receipt_projection,
+    )
+    _REGISTERED_STATIC_INPUTS_CAPABILITIES[id(capability)] = (capability, _static_inputs_fingerprint(capability))
+    return capability
+
+
 def load_verified_review_rerun_authorization(
     *,
     execution_context: object,
@@ -2881,6 +3112,7 @@ __all__ = [
     "VerifiedReviewImplementationApproval",
     "VerifiedReviewAmendedImplementationReview",
     "VerifiedReviewRerunAuthorization",
+    "VerifiedModuleAStaticInputs",
     "VerifiedRunHistoryLedger",
     "VerifiedReviewRunAdmission",
     "bind_implementation_review_discovery_context",
@@ -2899,6 +3131,7 @@ __all__ = [
     "load_verified_amendment_implementation_approval",
     "load_verified_amended_implementation_review",
     "load_verified_review_rerun_authorization",
+    "load_verified_module_a_static_inputs",
     "load_verified_review_implementation_approval",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",

@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
+from app.analysis import vru_causal_temporal_retrospective as temporal_module
 from app.analysis.task0258_module_a_v2 import (
     VERIFICATION_ATTEMPT_SCHEMA_V2,
     canonical_artifact_sha256,
@@ -18,6 +20,7 @@ from app.analysis.task0258_run_history import ADMISSION_SCHEMA, CLAIM_SCHEMA, CO
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_capabilities import (
     VerifiedImplementationReviewSandboxContext,
+    VerifiedModuleAStaticInputs,
     VerifiedReviewAmendedImplementationReview,
     VerifiedReviewDiscoveryContext,
     VerifiedReviewImplementationApproval,
@@ -38,6 +41,7 @@ from app.analysis.task0258_v2_capabilities import (
     load_verified_amended_implementation_review,
     load_verified_amendment_implementation_approval,
     load_verified_candidate_receipt_bundle,
+    load_verified_module_a_static_inputs,
     load_verified_parent_module_a_spec_approval,
     load_verified_read_isolation_binding,
     load_verified_review_rerun_authorization,
@@ -66,6 +70,12 @@ from app.analysis.task0258_v2_read_isolation import (
     READ_ISOLATION_POLICY_SCHEMA,
 )
 from app.analysis.task0258_v2_registry import seal_run_consumption_claim, seal_run_consumption_completed
+from app.analysis.vru_causal_temporal_retrospective import (
+    FileReceipt,
+    StoredArtifactReceipt,
+    Task0257ExpectedReceipts,
+    Task0257InputPaths,
+)
 
 
 def _receipt():
@@ -1150,6 +1160,92 @@ def test_amended_implementation_review_loader_replays_fresh_review_and_checks(tm
             expected_static_input_contract=authorization_payload["approved_static_input_contract"],
             output_root=output_root,
             candidate_bundle_path=candidate_bundle_path,
+        )
+
+
+def test_static_input_loader_replays_complete_parent_graph_as_review_only(tmp_path, monkeypatch):
+    repository_root = Path(__file__).resolve().parents[1]
+    contract_path = (
+        repository_root
+        / "analysis_outputs/public_research/task0258_module_a_spec_registry_v1/task0257_input_contract.json"
+    )
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    path_values = {
+        field: tuple(Path(item) for item in value) if isinstance(value, list) else Path(value)
+        for field, value in contract["paths"].items()
+    }
+    paths = Task0257InputPaths(**path_values)
+
+    stored_sequences = {"parent_candidate_children", "old_embedding_files"}
+    file_sequences = {
+        "parent_label_children",
+        "parent_review_jpegs",
+        "harwood_review_jpegs",
+        "source_videos",
+        "checkpoints",
+    }
+    file_scalars = {"parent_source_manifest", "v2_label_child", "harwood_source_manifest"}
+    receipt_values = {}
+    for field, value in contract["expected_receipts"].items():
+        if field in stored_sequences:
+            receipt_values[field] = tuple(StoredArtifactReceipt(**row) for row in value)
+        elif field in file_sequences:
+            receipt_values[field] = tuple(FileReceipt(**row) for row in value)
+        elif field in file_scalars:
+            receipt_values[field] = FileReceipt(**value)
+        else:
+            receipt_values[field] = StoredArtifactReceipt(**value)
+    receipts = Task0257ExpectedReceipts(**receipt_values)
+
+    plan_path = tmp_path / "temporal-plan.json"
+    plan_path.write_bytes(b"review-only-plan\n")
+    plan = temporal_module.VerifiedTemporalFeaturePlan(temporal_module._VERIFIED_PLAN_TOKEN)
+    plan._payload = {"task0257_receipts": json.loads(json.dumps(asdict(receipts)))}
+    plan._path = plan_path
+    monkeypatch.setattr(
+        "app.analysis.task0258_v2_capabilities.load_verified_temporal_feature_plan",
+        lambda **_kwargs: plan,
+    )
+    calls = []
+    monkeypatch.setattr(
+        "app.analysis.task0258_v2_capabilities.verify_task0257_temporal_inputs",
+        lambda **kwargs: calls.append(kwargs) or object(),
+    )
+
+    projection = (compact_canonical_json(asdict(receipts)) + "\n").encode("utf-8")
+    capability = load_verified_module_a_static_inputs(
+        execution_context=bind_implementation_review_sandbox_context(
+            expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+        ),
+        temporal_plan_path=plan_path,
+        expected_temporal_plan_artifact_sha256="1" * 64,
+        expected_temporal_plan_file_sha256="2" * 64,
+        task0257_input_paths=paths,
+        expected_task0257_receipts=receipts,
+        expected_task0257_receipts_projection_sha256=hashlib.sha256(projection).hexdigest(),
+    )
+
+    assert isinstance(capability, VerifiedModuleAStaticInputs)
+    assert capability.production_capability is False
+    assert dict(capability.static_input_contract) == {
+        "temporal_plan_artifact_sha256": "1" * 64,
+        "temporal_plan_file_sha256": "2" * 64,
+        "task0257_receipts_projection_sha256": hashlib.sha256(projection).hexdigest(),
+    }
+    assert capability.task0257_receipts_snapshot == projection
+    assert calls == [{"paths": paths, "expected_receipts": receipts}]
+    with pytest.raises(TypeError):
+        VerifiedModuleAStaticInputs()
+
+    with pytest.raises(PermissionError, match="review context"):
+        load_verified_module_a_static_inputs(
+            execution_context=object(),
+            temporal_plan_path=plan_path,
+            expected_temporal_plan_artifact_sha256="1" * 64,
+            expected_temporal_plan_file_sha256="2" * 64,
+            task0257_input_paths=paths,
+            expected_task0257_receipts=receipts,
+            expected_task0257_receipts_projection_sha256=hashlib.sha256(projection).hexdigest(),
         )
 
 

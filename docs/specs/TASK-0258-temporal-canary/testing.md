@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `211 passed` (including the local simulation command,
+- TASK-0258 focused suite: `212 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the review-only amended-implementation-review loader increment: `2,079 passed, 5
+- Full repository pytest after the review-only static-input loader increment: `2,080 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -114,6 +114,13 @@
   candidate-bundle paths, and registry physical identity. It rejects Module B
   authorization and returns `production_capability=false`; it does not consume
   a run or issue production admission.
+- The review-only static-input loader now replays the explicit canonical
+  temporal-plan and complete TASK-0257 parent receipt graph. It enforces the
+  declared path cardinalities, no-symlink absolute paths, all ordered JPEG /
+  source-video / checkpoint receipts, and the caller-frozen compact-canonical
+  projection hash before returning `VerifiedModuleAStaticInputs` with
+  `production_capability=false`; the parent verifier capability is discarded
+  and no model/video run is started.
 - `verify_verification_attempt` now invokes that binder as the attempt-level
   gate, so individually schema-valid but cross-boundary-drifting policy and
   attestation objects cannot enter a verification attempt.
