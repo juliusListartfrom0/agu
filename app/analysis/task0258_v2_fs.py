@@ -15,6 +15,7 @@ import os
 import secrets
 import stat
 import sys
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
@@ -227,7 +228,25 @@ def build_generation_directory(
     return stage
 
 
-def publish_generation_directory(staged: Path, final: Path, *, flock_path: Path) -> None:
+def _publish_generation_directory_locked(staged: Path, final: Path) -> None:
+    verify_absent(final)
+    if sys.platform == "darwin":
+        _rename_no_clobber_darwin(staged, final)
+    else:
+        # A portable directory rename has no no-clobber primitive. Refuse
+        # the trust-boundary operation instead of silently relying on the
+        # cooperative flock against an unrelated publisher.
+        raise OSError("atomic no-clobber directory publication is unavailable on this platform")
+    fsync_dir(final.parent)
+
+
+def publish_generation_directory(
+    staged: Path,
+    final: Path,
+    *,
+    flock_path: Path,
+    under_lock_validator: Callable[[], None] | None = None,
+) -> None:
     """Atomically publish a staged generation directory to ``final``.
 
     Under an exclusive flock on ``flock_path``, verifies ``final`` is absent then
@@ -244,15 +263,9 @@ def publish_generation_directory(staged: Path, final: Path, *, flock_path: Path)
     final.parent.mkdir(parents=True, exist_ok=True)
     _verify_no_symlink_ancestors(final.parent)
     with exclusive_flock(flock_path):
-        verify_absent(final)
-        if sys.platform == "darwin":
-            _rename_no_clobber_darwin(staged, final)
-        else:
-            # A portable directory rename has no no-clobber primitive. Refuse
-            # the trust-boundary operation instead of silently relying on the
-            # cooperative flock against an unrelated publisher.
-            raise OSError("atomic no-clobber directory publication is unavailable on this platform")
-        fsync_dir(final.parent)
+        if under_lock_validator is not None:
+            under_lock_validator()
+        _publish_generation_directory_locked(staged, final)
 
 
 def verify_generation_directory(final: Path, expected_paths: tuple[str, ...]) -> None:
@@ -291,6 +304,7 @@ def seal_generation_directory(
     *,
     flock_path: Path,
     stage_name: str | None = None,
+    pre_publish_validator: Callable[[], None] | None = None,
 ) -> Path:
     """Validate exact member coverage and atomically publish a generation.
 
@@ -310,12 +324,25 @@ def seal_generation_directory(
         )
     for relpath in members:
         _validate_member_path(relpath)
-    staged = build_generation_directory(parent, members, stage_name=stage_name)
+    _verify_no_symlink_ancestors(parent)
+    parent.mkdir(parents=True, exist_ok=True)
+    _verify_no_symlink_ancestors(parent)
     final = parent / final_name
-    publish_generation_directory(staged, final, flock_path=flock_path)
-    verify_generation_directory(final, expected_paths)
-    if stage_name is not None and (staged.exists() or staged.is_symlink()):
-        raise ValueError("fixed generation stage remained after publication")
+    with exclusive_flock(flock_path):
+        if pre_publish_validator is not None:
+            pre_publish_validator()
+        staged = build_generation_directory(parent, members, stage_name=stage_name)
+        try:
+            _publish_generation_directory_locked(staged, final)
+            verify_generation_directory(final, expected_paths)
+            if stage_name is not None and (staged.exists() or staged.is_symlink()):
+                raise ValueError("fixed generation stage remained after publication")
+        except BaseException:
+            if staged.exists() or staged.is_symlink():
+                import shutil
+
+                shutil.rmtree(staged, ignore_errors=True)
+            raise
     return final
 
 

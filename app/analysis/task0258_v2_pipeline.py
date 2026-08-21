@@ -311,6 +311,10 @@ def seal_verified_result(
     authorization_sha256 = authorization_receipts["rerun_authorization"]["artifact_sha256"]
     if not is_sha256(authorization_sha256):
         raise ValueError("verified result rerun authorization SHA is invalid")
+
+    def validate_topology() -> None:
+        _require_candidate_terminal_topology(output_root, "verified_result_v2")
+
     registry_bytes = (compact_canonical_json(registry_payload) + "\n").encode("utf-8")
     return seal_generation_directory(
         output_root,
@@ -319,6 +323,7 @@ def seal_verified_result(
         ("verification_registry.json",),
         flock_path=flock_path,
         stage_name=f".{authorization_sha256}.verified-result-v2-stage",
+        pre_publish_validator=validate_topology,
     )
 
 
@@ -382,6 +387,9 @@ def seal_postverification_failure(
     if not is_sha256(authorization_sha256):
         raise ValueError("postverification failure authorization SHA is invalid")
 
+    def validate_topology() -> None:
+        _require_candidate_terminal_topology(output_root, "postverification_failure_v2")
+
     failure_bytes = (compact_canonical_json(failure_payload) + "\n").encode("utf-8")
     return seal_generation_directory(
         output_root,
@@ -390,7 +398,17 @@ def seal_postverification_failure(
         ("failure.json",),
         flock_path=flock_path,
         stage_name=f".{authorization_sha256}.postverification-failure-v2-stage",
+        pre_publish_validator=validate_topology,
     )
+
+
+def _require_candidate_terminal_topology(output_root: Path, target_name: str) -> None:
+    try:
+        verify_generation_directory(output_root / "candidate_v2", CANDIDATE_MEMBER_PATHS)
+        for name in ("terminal_failure_v2", "verified_result_v2", "postverification_failure_v2"):
+            verify_absent(output_root / name)
+    except (FileExistsError, ValueError) as exc:
+        raise ValueError(f"terminal publication topology is invalid for {target_name}") from exc
 
 
 __all__ = [

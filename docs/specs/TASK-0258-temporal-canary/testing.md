@@ -40,6 +40,9 @@
   deterministic stage-directory names from the rerun-authorization SHA, reject
   pre-existing stage residue, publish no-clobber, and reopen exact member
   coverage after rename. This also remains repository-local evidence.
+- Terminal publication now replays the candidate-present topology under the
+  output-root lock before creating a stage and rejects an existing terminal
+  sibling, so result and postverification failure cannot coexist in one root.
 - The read-isolation audit tests prove that both raw `fs_usage` rows and direct
   Python `verified_event_rows` injection fail closed with no attestation; the
   external kernel-provider capability is still absent.

@@ -48,7 +48,9 @@ model execution or readiness transition.
       bundle-parent lock, uses the fixed authorization-bound stage basename,
       and reopens the published bundle. Result and postverification-failure
       directory sealing now uses authorization-bound fixed stages and reopens
-      exact member coverage after rename. The repeatable
+      exact member coverage after rename; terminal publication now checks the
+      candidate-present, mutually-exclusive topology under the root lock before
+      creating any stage. The repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and

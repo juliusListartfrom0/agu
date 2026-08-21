@@ -295,6 +295,8 @@ def test_seal_verified_result_and_postverification_failure(tmp_path):
     out.mkdir()
     lock = out / ".lock"
     lock.write_text("")
+    candidate = seal_candidate_v2(out, _make_members(), flock_path=lock)
+    assert candidate == out / "candidate_v2"
     final = seal_verified_result(out, _result(True), flock_path=lock)
     assert final == out / "verified_result_v2"
     assert (final / "verification_registry.json").is_file()
@@ -332,7 +334,16 @@ def test_seal_verified_result_and_postverification_failure(tmp_path):
     )
     assert failure["decision"] == "mechanical_failure"
     assert failure["final_result_published"] is False
-    fail_dir = seal_postverification_failure(out, failure, flock_path=lock)
-    assert fail_dir == out / "postverification_failure_v2"
+    with pytest.raises(ValueError, match="terminal publication topology"):
+        seal_postverification_failure(out, failure, flock_path=lock)
+    assert not (out / "postverification_failure_v2").exists()
+
+    failure_out = tmp_path / "failure-out"
+    failure_out.mkdir()
+    failure_lock = failure_out / ".lock"
+    failure_lock.write_text("")
+    seal_candidate_v2(failure_out, _make_members(), flock_path=failure_lock)
+    fail_dir = seal_postverification_failure(failure_out, failure, flock_path=failure_lock)
+    assert fail_dir == failure_out / "postverification_failure_v2"
     assert (fail_dir / "failure.json").is_file()
-    assert not (out / f".{slots[3]['receipt']['artifact_sha256']}.postverification-failure-v2-stage").exists()
+    assert not (failure_out / f".{slots[3]['receipt']['artifact_sha256']}.postverification-failure-v2-stage").exists()
