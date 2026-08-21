@@ -238,6 +238,10 @@ The canonical local simulation command is:
 The 2026-08-21 run exercised the synthetic discovery manifest and both
 review-only state-machine contexts. It returned `evidence_class=diagnostic_only`
 for the platform boundary, `production_capability=false`, and `p5_ready=false`.
+The simulation now also parses two C-shaped Endpoint Security diagnostic rows
+and their clean finalization record, reporting the result as
+`evidence_class=diagnostic_only` with `production_capability=false`; this does
+not represent an actual kernel observation.
 The platform portion remained `blocked_external_authorization` with ad-hoc
 signing, no Endpoint Security entitlement, no user approval, and no kernel
 read-isolation attestation. This command is deliberately not a substitute for

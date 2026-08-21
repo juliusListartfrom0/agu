@@ -120,7 +120,8 @@ model execution or readiness transition.
       not an OS-enforced sandbox or kernel attestation.
       repeatable
       repository-local simulation command now passes the synthetic discovery
-      and review state machine while explicitly returning `p5_ready=false`.
+      and review state machine, parses a C-shaped Endpoint Security event stream
+      with clean finalization, and explicitly returns `p5_ready=false`.
       The pipeline now reopens the published candidate bundle under its distinct
       bundle lock through a bounded regular-file/no-follow descriptor before
       binding its file receipt into the result.
