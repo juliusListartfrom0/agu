@@ -7,10 +7,12 @@ import io
 import pytest
 
 from app.analysis.task0258_v2_audit import (
+    EndpointSecurityEvent,
     ExternalKernelAuditUnavailable,
     ReadEvent,
     build_read_isolation_attestation,
     build_verified_read_isolation_attestation,
+    parse_endpoint_security_transcript,
     parse_fsusage_line,
     parse_fsusage_transcript,
 )
@@ -73,6 +75,105 @@ def test_parse_fsusage_transcript_enforces_event_row_cap():
 def test_parse_fsusage_transcript_enforces_byte_cap():
     with pytest.raises(ValueError, match="byte cap"):
         parse_fsusage_transcript(io.StringIO("diagnostic header\n"), maximum_bytes=8)
+
+
+def test_parse_endpoint_security_transcript_preserves_notify_results_and_sequences():
+    text = (
+        '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":10,'
+        '"global_seq_num":100,"path":"/private/tmp/input.json",'
+        '"result_type":"auth","result_auth":"allow"}\n'
+        '{"event":"fork","pid":43,"pidversion":8,"ppid":42,"seq_num":11,'
+        '"global_seq_num":102,"path":null,"result_type":"flags","result_flags":3}\n'
+    )
+
+    assert parse_endpoint_security_transcript(io.StringIO(text)) == [
+        EndpointSecurityEvent(
+            event="open",
+            pid=42,
+            pidversion=7,
+            ppid=1,
+            seq_num=10,
+            global_seq_num=100,
+            path="/private/tmp/input.json",
+            result_type="auth",
+            result_auth="allow",
+            result_flags=None,
+        ),
+        EndpointSecurityEvent(
+            event="fork",
+            pid=43,
+            pidversion=8,
+            ppid=42,
+            seq_num=11,
+            global_seq_num=102,
+            path=None,
+            result_type="flags",
+            result_auth=None,
+            result_flags=3,
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ('{"event":"open","pid":42,"pidversion":7,"ppid":1}', "field set"),
+        (
+            '{"event":"unknown","pid":42,"pidversion":7,"ppid":1,"seq_num":1,'
+            '"global_seq_num":1,"path":null,"result_type":"auth","result_auth":"allow"}',
+            "event",
+        ),
+        (
+            '{"event":"open","pid":0,"pidversion":7,"ppid":1,"seq_num":1,'
+            '"global_seq_num":1,"path":null,"result_type":"auth","result_auth":"allow"}',
+            "pid",
+        ),
+        (
+            '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":1,'
+            '"global_seq_num":1,"path":"relative/path","result_type":"auth",'
+            '"result_auth":"allow"}',
+            "path",
+        ),
+        (
+            '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":1,'
+            '"global_seq_num":1,"path":null,"result_type":"auth","result_auth":"maybe"}',
+            "result_auth",
+        ),
+    ],
+)
+def test_parse_endpoint_security_transcript_rejects_invalid_rows(text, message):
+    with pytest.raises(ValueError, match=message):
+        parse_endpoint_security_transcript(io.StringIO(text + "\n"))
+
+
+def test_parse_endpoint_security_transcript_rejects_duplicate_keys_and_sequence_regression():
+    duplicate = (
+        '{"event":"open","event":"stat","pid":42,"pidversion":7,"ppid":1,'
+        '"seq_num":1,"global_seq_num":1,"path":null,"result_type":"auth",'
+        '"result_auth":"allow"}\n'
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_endpoint_security_transcript(io.StringIO(duplicate))
+
+    regressed = (
+        '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":2,'
+        '"global_seq_num":2,"path":null,"result_type":"auth","result_auth":"allow"}\n'
+        '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":1,'
+        '"global_seq_num":3,"path":null,"result_type":"auth","result_auth":"allow"}\n'
+    )
+    with pytest.raises(ValueError, match="sequence"):
+        parse_endpoint_security_transcript(io.StringIO(regressed))
+
+
+def test_parse_endpoint_security_transcript_enforces_bounds():
+    row = (
+        '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":1,'
+        '"global_seq_num":1,"path":null,"result_type":"auth","result_auth":"allow"}\n'
+    )
+    with pytest.raises(ValueError, match="event-row cap"):
+        parse_endpoint_security_transcript(io.StringIO(row + row), maximum_rows=1)
+    with pytest.raises(ValueError, match="byte cap"):
+        parse_endpoint_security_transcript(io.StringIO(row), maximum_bytes=8)
 
 
 def test_attestation_allowed_only():

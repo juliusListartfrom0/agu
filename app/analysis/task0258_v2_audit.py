@@ -8,6 +8,7 @@ requires a future externally authenticated kernel-audit provider.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import IO
@@ -49,6 +50,30 @@ class ReadEvent:
     operation: str
     path: str | None
     errno: int | None
+
+
+@dataclass(frozen=True)
+class EndpointSecurityEvent:
+    """One strictly validated row from the diagnostic Endpoint Security JSONL."""
+
+    event: str
+    pid: int
+    pidversion: int
+    ppid: int
+    seq_num: int | None
+    global_seq_num: int | None
+    path: str | None
+    result_type: str
+    result_auth: str | None
+    result_flags: int | None
+
+
+_ENDPOINT_SECURITY_EVENTS = frozenset(
+    {"open", "stat", "access", "readlink", "getdents", "exec", "mmap", "getxattr", "setxattr", "fork"}
+)
+_ENDPOINT_SECURITY_BASE_FIELDS = frozenset(
+    {"event", "pid", "pidversion", "ppid", "seq_num", "global_seq_num", "path", "result_type"}
+)
 
 
 def _token_is_path(token: str) -> bool:
@@ -113,6 +138,140 @@ def parse_fsusage_transcript(
             if len(events) >= maximum_rows:
                 raise ValueError("fs_usage transcript exceeds event-row cap")
             events.append(event)
+    return events
+
+
+def _reject_duplicate_json_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON field: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(value: str) -> object:
+    raise ValueError(f"JSON constant is not allowed: {value}")
+
+
+def _verify_json_integer(value: object, name: str, *, minimum: int = 0) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise ValueError(f"{name} is invalid")
+    return value
+
+
+def _verify_optional_json_integer(value: object, name: str) -> int | None:
+    if value is None:
+        return None
+    return _verify_json_integer(value, name)
+
+
+def _parse_endpoint_security_row(payload: object, line_number: int) -> EndpointSecurityEvent:
+    if not isinstance(payload, dict):
+        raise ValueError(f"line {line_number} must contain a JSON object")
+    fields = set(payload)
+    result_type = payload.get("result_type")
+    if fields not in (
+        _ENDPOINT_SECURITY_BASE_FIELDS | {"result_auth"},
+        _ENDPOINT_SECURITY_BASE_FIELDS | {"result_flags"},
+    ):
+        raise ValueError(f"line {line_number} field set is invalid")
+    if result_type not in {"auth", "flags"}:
+        raise ValueError(f"line {line_number} result_type is invalid")
+
+    event = payload["event"]
+    if not isinstance(event, str) or event not in _ENDPOINT_SECURITY_EVENTS:
+        raise ValueError(f"line {line_number} event is invalid")
+    pid = _verify_json_integer(payload["pid"], f"line {line_number} pid", minimum=1)
+    pidversion = _verify_json_integer(payload["pidversion"], f"line {line_number} pidversion")
+    ppid = _verify_json_integer(payload["ppid"], f"line {line_number} ppid")
+    seq_num = _verify_optional_json_integer(payload["seq_num"], f"line {line_number} seq_num")
+    global_seq_num = _verify_optional_json_integer(
+        payload["global_seq_num"], f"line {line_number} global_seq_num"
+    )
+    path = payload["path"]
+    if path is not None and (
+        not isinstance(path, str) or not path.startswith("/") or "\x00" in path
+    ):
+        raise ValueError(f"line {line_number} path is invalid")
+
+    result_auth: str | None = None
+    result_flags: int | None = None
+    if result_type == "auth":
+        result_auth = payload["result_auth"]
+        if result_auth not in {"allow", "deny"}:
+            raise ValueError(f"line {line_number} result_auth is invalid")
+    else:
+        result_flags = _verify_json_integer(payload["result_flags"], f"line {line_number} result_flags")
+
+    return EndpointSecurityEvent(
+        event=event,
+        pid=pid,
+        pidversion=pidversion,
+        ppid=ppid,
+        seq_num=seq_num,
+        global_seq_num=global_seq_num,
+        path=path,
+        result_type=result_type,
+        result_auth=result_auth,
+        result_flags=result_flags,
+    )
+
+
+def parse_endpoint_security_transcript(
+    stream: IO[str],
+    *,
+    maximum_rows: int = MAXIMUM_READ_EVENT_ROWS,
+    maximum_bytes: int = MAXIMUM_READ_EVENT_BYTES,
+) -> list[EndpointSecurityEvent]:
+    """Parse a bounded Endpoint Security JSONL transcript for diagnostics.
+
+    The C client already performs sequence-gap checks before writing rows. This
+    parser repeats the retained-row ordering check and validates the exact
+    result projection, but it never upgrades the transcript into a provider
+    receipt or a read-isolation attestation.
+    """
+    if isinstance(maximum_rows, bool) or not isinstance(maximum_rows, int) or maximum_rows <= 0:
+        raise ValueError("maximum_rows must be a positive integer")
+    if isinstance(maximum_bytes, bool) or not isinstance(maximum_bytes, int) or maximum_bytes <= 0:
+        raise ValueError("maximum_bytes must be a positive integer")
+
+    events: list[EndpointSecurityEvent] = []
+    total_bytes = 0
+    last_global_seq_num: int | None = None
+    last_seq_num: dict[str, int] = {}
+    for line_number, line in enumerate(stream, start=1):
+        try:
+            total_bytes += len(line.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("Endpoint Security transcript must contain UTF-8 text") from exc
+        if total_bytes > maximum_bytes:
+            raise ValueError("Endpoint Security transcript exceeds byte cap")
+        if not line.strip():
+            raise ValueError(f"line {line_number} is empty")
+        if len(events) >= maximum_rows:
+            raise ValueError("Endpoint Security transcript exceeds event-row cap")
+        try:
+            payload = json.loads(
+                line,
+                object_pairs_hook=_reject_duplicate_json_fields,
+                parse_constant=_reject_json_constant,
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            if isinstance(exc, ValueError) and str(exc).startswith("duplicate JSON field"):
+                raise
+            raise ValueError(f"line {line_number} is invalid JSON") from exc
+        event = _parse_endpoint_security_row(payload, line_number)
+        if event.seq_num is not None:
+            previous = last_seq_num.get(event.event)
+            if previous is not None and event.seq_num <= previous:
+                raise ValueError(f"line {line_number} sequence is not increasing")
+            last_seq_num[event.event] = event.seq_num
+        if event.global_seq_num is not None:
+            if last_global_seq_num is not None and event.global_seq_num <= last_global_seq_num:
+                raise ValueError(f"line {line_number} global sequence is not increasing")
+            last_global_seq_num = event.global_seq_num
+        events.append(event)
     return events
 
 
@@ -202,12 +361,14 @@ def build_verified_read_isolation_attestation(
 
 
 __all__ = [
+    "EndpointSecurityEvent",
     "ReadEvent",
     "ExternalKernelAuditUnavailable",
     "MAXIMUM_READ_EVENT_BYTES",
     "MAXIMUM_READ_EVENT_ROWS",
     "parse_fsusage_line",
     "parse_fsusage_transcript",
+    "parse_endpoint_security_transcript",
     "build_read_isolation_attestation",
     "build_verified_read_isolation_attestation",
 ]
