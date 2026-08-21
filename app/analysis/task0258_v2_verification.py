@@ -25,8 +25,7 @@ from app.analysis.task0258_module_a_v2 import (
 )
 from app.analysis.task0258_v2_artifacts import verify_common_false_fields
 from app.analysis.task0258_v2_read_isolation import (
-    verify_read_isolation_attestation,
-    verify_read_isolation_policy,
+    verify_read_isolation_binding,
 )
 
 ROLE = "independent_empty_state_verification"
@@ -288,8 +287,7 @@ def verify_verification_attempt(payload: Mapping[str, object]) -> None:
     if payload["verification_ordinal"] != 1:
         raise ValueError("verification attempt ordinal must be 1")
     verify_v2_receipt_fields(payload)
-    verify_read_isolation_policy(payload["read_isolation_policy"])
-    verify_read_isolation_attestation(payload["read_isolation_attestation"])
+    verify_read_isolation_binding(payload["read_isolation_policy"], payload["read_isolation_attestation"])
     slot = payload["verification_embedding_slot"]
     verify_provider_slot(slot)
     if slot["provider"] != "verification_tiled_swin_embeddings":

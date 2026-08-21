@@ -69,6 +69,7 @@ def _embedding():
 
 
 def _attempt(disposition="completed"):
+    policy = _policy()
     p = _common(VERIFICATION_ATTEMPT_SCHEMA_V2)
     p.update(
         {
@@ -86,8 +87,8 @@ def _attempt(disposition="completed"):
             "worker_request": {},
             "child_observation": {},
             "worker_payload": {},
-            "read_isolation_policy": _policy(),
-            "read_isolation_attestation": _attestation(),
+            "read_isolation_policy": policy,
+            "read_isolation_attestation": _attestation(policy=policy),
             "verification_embedding_slot": {
                 "provider": "verification_tiled_swin_embeddings",
                 "verification_state": "verified",
@@ -295,13 +296,13 @@ def _policy():
     return payload
 
 
-def _attestation():
+def _attestation(*, policy=None):
     from app.analysis.task0258_v2_read_isolation import READ_ISOLATION_ATTESTATION_SCHEMA
 
     payload = {
         "schema_version": READ_ISOLATION_ATTESTATION_SCHEMA,
         "module_id": MODULE_ID,
-        "policy_artifact_sha256": "0" * 64,
+        "policy_artifact_sha256": (policy or {}).get("artifact_sha256", "0" * 64),
         "provider_receipt": _receipt(),
         "run_identity_receipt": _receipt(),
         "worker_role": "verification",
@@ -328,13 +329,20 @@ def _attestation():
 
 def test_verification_attempt_binds_read_isolation():
     p = _attempt("completed")
-    p["read_isolation_policy"] = _policy()
-    p["read_isolation_attestation"] = _attestation()
     verify_verification_attempt(p)
     # attestation with a denied read attempt is rejected
     bad = _attempt("completed")
-    bad["read_isolation_policy"] = _policy()
-    bad["read_isolation_attestation"] = _attestation()
     bad["read_isolation_attestation"]["denied_read_attempt_count"] = 1
     with pytest.raises(ValueError):
+        verify_verification_attempt(bad)
+
+
+def test_verification_attempt_rejects_read_isolation_tuple_drift():
+    bad = _attempt("completed")
+    bad["read_isolation_attestation"]["worker_role"] = "producer"
+    bad["read_isolation_attestation"]["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bad["read_isolation_attestation"].items() if key != "artifact_sha256"}
+    )
+
+    with pytest.raises(ValueError, match="worker role"):
         verify_verification_attempt(bad)
