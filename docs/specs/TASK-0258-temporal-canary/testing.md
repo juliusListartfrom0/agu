@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `194 passed` (including the local simulation command,
+- TASK-0258 focused suite: `199 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the admission/terminal-loader hardening: `2,062 passed, 5
+- Full repository pytest after the admission/terminal-loader hardening: `2,067 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -63,6 +63,12 @@
 - Candidate bundle replay now also reopens and validates the candidate gate
   schema; terminal replay binds its authorization, run-admission, static-input,
   and run-history provider slots to the independently loaded trust spine.
+- Read-isolation policy/attestation binding now verifies the policy artifact
+  hash, provider/run/worker/nonce tuple, deny-before-allow precedence, unique
+  longest policy-row match, fixed inherited-FD locators, and returned regular
+  file identity. It validates an externally produced attestation only; it
+  never creates kernel evidence, and raw `fs_usage`/Python-row paths remain
+  fail-closed.
 - Canonical JSON reopening restores the schema's fixed authorization-provider
   iteration order only after canonical bytes and the internal artifact hash
   have been verified; this avoids treating JSON serializer key sorting as
@@ -76,7 +82,9 @@
   sibling, so result and postverification failure cannot coexist in one root.
 - The read-isolation audit tests prove that both raw `fs_usage` rows and direct
   Python `verified_event_rows` injection fail closed with no attestation; the
-  external kernel-provider capability is still absent.
+  local policy↔attestation binder rejects tuple drift, unknown/denied events,
+  and ambiguous policy matches; the external kernel-provider capability is
+  still absent.
 
 - Module-A focused tests: `67 passed`.
 - Adjacent TASK-0257 export/probe/backbone/causal regression: `523 passed, 3 skipped`.
