@@ -169,6 +169,9 @@ model execution or readiness transition.
       rows over the C-aligned 512-byte single-row cap; it remains
       diagnostic-only and cannot mint an attestation. SDK
       compilation remains local evidence only.
+      Diff-scoped Ruff over the TASK-0258 Python change set passes; a full
+      repository Ruff audit still reports 52 pre-existing findings outside
+      this scope and is not silently broadened into this phase.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
 

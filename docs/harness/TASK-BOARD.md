@@ -78,9 +78,15 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > is unchanged: P1/P2 remain open and no production evidence is claimed.
 
 > Latest verification supersession (2026-08-22): after the synthetic context
-> no-follow hardening and macOS temporary-path canonicalization, the current
-> totals are 262 focused TASK-0258 tests and 2,130 full-suite tests. This
-> supersedes the older 260/2,128 figures in the historical remediation notes.
+> no-follow hardening, macOS temporary-path canonicalization, and diagnostic
+> CLI path hardening, the current totals are 264 focused TASK-0258 tests and
+> 2,132 full-suite tests. This supersedes the older 260/2,128 and 262/2,130
+> figures in the historical remediation notes.
+
+> Verification scope note (2026-08-22): diff-scoped Ruff over the TASK-0258
+> Python change set passes. A repository-wide `ruff check app scripts tests`
+> audit reports 52 pre-existing findings outside this task scope; no unrelated
+> cleanup is being claimed as part of P1/P2 remediation.
 
 | Task ID | Task Name | Phase | Owner | Blockers | Docs | Last Updated |
 | --- | --- | --- | --- | --- | --- | --- |

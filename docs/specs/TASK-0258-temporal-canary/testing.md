@@ -35,6 +35,9 @@
 - The fs_usage CLI reads policy JSON through the bounded no-follow reader and
   writes future provider output via no-clobber atomic JSON; regression tests
   reject symlinked policy and output paths before any overwrite.
+- Diff-scoped Ruff over the 44-file implementation scope passes. A full
+  repository Ruff run still reports 52 pre-existing findings outside the
+  TASK-0258 scope; no unrelated cleanup is claimed.
 - The Endpoint Security diagnostic client accepts only strict positive decimal
   PID/timeout values, subscribes to the target EXIT event, and uses a bounded
   default 120-second lifetime with timeout exit code `4`; this prevents an

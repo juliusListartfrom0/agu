@@ -40,7 +40,8 @@ Use the canonical environment and record exact output:
 ```bash
 .venv/bin/python -m pytest -q tests/test_task0258_*.py
 .venv/bin/python -m pytest -q
-.venv/bin/python -m ruff check app scripts tests
+git diff --name-only c5157f2...9fc27a9 -- '*.py' | \\
+  xargs .venv/bin/python -m ruff check
 .venv/bin/python scripts/verify_harness.py
 .venv/bin/python scripts/task0258_local_simulation.py --json
 .venv/bin/python scripts/task0258_endpoint_security_capability.py --json
@@ -49,6 +50,9 @@ Use the canonical environment and record exact output:
 The current local evidence is 264 focused TASK-0258 tests and 2,132 full-suite
 tests, with 5 skips and 15 warnings. The simulation and capability probe must
 remain explicitly diagnostic-only and must report no production capability.
+The repository-wide `ruff check app scripts tests` baseline currently reports
+52 existing findings outside the TASK-0258 diff; the diff-scoped Python check
+above passes, and this task does not silently modify unrelated files.
 
 ## Required review output
 
