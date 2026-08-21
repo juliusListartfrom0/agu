@@ -4,13 +4,14 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `176 passed`.
+- TASK-0258 focused suite: `179 passed` (including the local simulation command
+  and its fail-closed P5 boundary tests).
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the remediation slice: `2,044 passed, 5
+- Full repository pytest after the local simulation increment: `2,047 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -44,6 +45,22 @@ read-isolation attestation. The probe now accepts
 `--signed-artifact <path> --json` to inspect the actual signed executable or
 `.systemextension`; without that option it intentionally reports the
 temporary ad-hoc compile and cannot observe an installed system extension.
+
+## Repository-local simulation
+
+The canonical local simulation command is:
+
+```bash
+.venv/bin/python scripts/task0258_local_simulation.py --json
+```
+
+The 2026-08-21 run exercised the synthetic discovery manifest and both
+review-only state-machine contexts. It returned `evidence_class=diagnostic_only`
+for the platform boundary, `production_capability=false`, and `p5_ready=false`.
+The platform portion remained `blocked_external_authorization` with ad-hoc
+signing, no Endpoint Security entitlement, no user approval, and no kernel
+read-isolation attestation. This command is deliberately not a substitute for
+an OS-enforced review sandbox or real Endpoint Security evidence.
 
 ## Local service curl hook
 
