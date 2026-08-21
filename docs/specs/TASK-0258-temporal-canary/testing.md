@@ -211,7 +211,9 @@ read-isolation attestation. The probe now accepts
   bounded fork/pidversion lineage, path-truncation rejection, JSON-safe path
   encoding, strict decimal PID/timeout parsing, and bounded target-exit/timeout
   shutdown, exact notify-result serialization, and fail-closed notification
-  sequence-gap detection. Without that option it intentionally reports the temporary
+  sequence-gap detection. Successful transcript finalization also flushes and
+  `fsync`s the descriptor before close. Without that option it intentionally
+  reports the temporary
   ad-hoc compile and cannot observe an installed system extension.
 
 ## Repository-local simulation
