@@ -68,8 +68,14 @@ def run_worker_subprocess(
     On timeout the process group is hard-killed and ``WorkerTimeoutError`` is
     raised with the captured output.
     """
-    if not argv or not isinstance(argv[0], str) or any(not isinstance(arg, str) for arg in argv):
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or any(not isinstance(arg, str) or "\x00" in arg for arg in argv)
+    ):
         raise ValueError("worker argv is invalid")
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
+        raise ValueError("worker timeout must be a positive integer")
     expected_env = sanitized_worker_env()
     if env is not None and env != expected_env:
         raise ValueError("worker environment must be the exact sanitized contract environment")

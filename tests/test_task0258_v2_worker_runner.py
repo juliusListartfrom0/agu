@@ -44,6 +44,22 @@ def test_run_worker_subprocess_env_isolation():
     assert observed["SECRET_HOST_VAR"] is None
 
 
+@pytest.mark.parametrize(
+    ("argv", "timeout_seconds"),
+    [
+        ("not-a-list", 1),
+        ([sys.executable, "-c\x00print(1)"], 1),
+        ([sys.executable, "-c", "print(1)"], 0),
+        ([sys.executable, "-c", "print(1)"], -1),
+        ([sys.executable, "-c", "print(1)"], True),
+        ([sys.executable, "-c", "print(1)"], 1.0),
+    ],
+)
+def test_run_worker_subprocess_rejects_invalid_launch_inputs(argv, timeout_seconds):
+    with pytest.raises(ValueError):
+        run_worker_subprocess(argv=argv, timeout_seconds=timeout_seconds)
+
+
 def test_run_worker_subprocess_timeout():
     with pytest.raises(WorkerTimeoutError):
         run_worker_subprocess(
