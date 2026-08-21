@@ -59,6 +59,7 @@ _ATTEMPT_SPINE_TOKEN = object()
 _PREFLIGHT_TOKEN = object()
 _IMPLEMENTATION_APPROVAL_TOKEN = object()
 _PARENT_SPEC_APPROVAL_TOKEN = object()
+_AMENDED_IMPLEMENTATION_REVIEW_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
 
@@ -112,6 +113,101 @@ _IMPLEMENTATION_SCOPE_BASELINE_FIELDS = frozenset(
         "ordered_repository_executable_receipts",
         "captured_at_utc",
         "artifact_sha256",
+    }
+)
+_AMENDED_IMPLEMENTATION_REVIEW_SCHEMA = "agu.task0258-module-a-fresh-code-review.v1"
+_AMENDED_IMPLEMENTATION_REVIEW_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "repository_root_absolute_path",
+        "repository_root_device",
+        "repository_root_inode",
+        "amendment_implementation_approval_receipt",
+        "implementation_context_id",
+        "reviewer_context_id",
+        "reviewer_independence",
+        "ordered_code_file_receipts",
+        "ordered_test_file_receipts",
+        "ordered_runtime_dependency_file_receipts",
+        "ordered_check_configuration_file_receipts",
+        "ordered_check_input_receipt_sets",
+        "implementation_scope_baseline_receipt",
+        "implementation_scope_delta",
+        "bootstrap_launcher_receipt",
+        "ordered_check_receipts",
+        "review_resource_summary",
+        "critical_count",
+        "required_count",
+        "optional_count",
+        "heavy_execution_performed",
+        "reviewed_at_utc",
+        "artifact_sha256",
+    }
+)
+_FRESH_IMPLEMENTATION_REVIEW_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "repository_root_absolute_path",
+        "repository_root_device",
+        "repository_root_inode",
+        "amendment_implementation_approval_receipt",
+        "implementation_context_id",
+        "reviewer_context_id",
+        "reviewer_independence",
+        "ordered_code_file_receipts",
+        "ordered_test_file_receipts",
+        "ordered_runtime_dependency_file_receipts",
+        "ordered_check_configuration_file_receipts",
+        "ordered_check_input_receipt_sets",
+        "implementation_scope_baseline_receipt",
+        "implementation_scope_delta",
+        "bootstrap_launcher_receipt",
+        "ordered_pre_review_check_receipts",
+        "fresh_review_governance_observation",
+        "critical_count",
+        "required_count",
+        "optional_count",
+        "heavy_execution_performed",
+        "reviewed_at_utc",
+        "artifact_sha256",
+    }
+)
+_AMENDED_REVIEW_CODE_PATHS = (
+    "app/analysis/vru_causal_temporal_retrospective.py",
+    "scripts/extract_vru_causal_tiled_swin_embeddings.py",
+    "scripts/screen_vru_causal_temporal_retrospective.py",
+    "scripts/seal_vru_causal_temporal_feature_plan.py",
+    "scripts/task0258_module_a_verified_bootstrap.py",
+)
+_AMENDED_REVIEW_TEST_PATHS = (
+    "tests/test_task0258_module_a_cli.py",
+    "tests/test_vru_causal_final_evaluator.py",
+    "tests/test_vru_causal_temporal_feature_plan.py",
+    "tests/test_vru_causal_temporal_retrospective.py",
+    "tests/test_vru_causal_tiled_swin_embeddings.py",
+)
+_AMENDED_REVIEW_CHECK_NAMES = (
+    "focused_pytest",
+    "full_pytest",
+    "ruff_check",
+    "ruff_format_check",
+    "diff_check",
+    "fresh_context_code_review",
+)
+_AMENDED_REVIEW_CHECK_FIELDS = frozenset(
+    {
+        "check_name",
+        "execution_protocol",
+        "sandbox_attestation_sha256",
+        "command_sha256",
+        "exit_code",
+        "output_path",
+        "output_size_bytes",
+        "output_artifact_sha256",
+        "output_file_sha256",
+        "completed_at_utc",
     }
 )
 
@@ -328,6 +424,38 @@ class VerifiedReviewImplementationApproval:
         self.amendment = kwargs.get("amendment")
         self.amendment_review = kwargs.get("amendment_review")
         self.implementation_scope_baseline = kwargs.get("implementation_scope_baseline")
+        self.repository_root_identity = kwargs["repository_root_identity"]
+        self.production_capability = False
+
+
+class VerifiedReviewAmendedImplementationReview:
+    """Review-only replay of the amended implementation and fresh review.
+
+    This object binds the externally receipted implementation-review artifact
+    to the already loaded implementation approval and its separate fresh
+    reviewer artifact.  It is evidence for local diagnostics only; it cannot
+    authorize a rerun, a worker, or production publication.
+    """
+
+    __slots__ = (
+        "_token",
+        "artifact",
+        "fresh_review",
+        "implementation_approval",
+        "repository_root_identity",
+        "production_capability",
+    )
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _AMENDED_IMPLEMENTATION_REVIEW_TOKEN:
+            raise TypeError("VerifiedReviewAmendedImplementationReview cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        self._token = token
+        self.artifact = kwargs["artifact"]
+        self.fresh_review = kwargs["fresh_review"]
+        self.implementation_approval = kwargs["implementation_approval"]
         self.repository_root_identity = kwargs["repository_root_identity"]
         self.production_capability = False
 
@@ -1054,6 +1182,645 @@ def _verify_implementation_approval_artifact(payload: Mapping[str, object]) -> t
     return root, {"device": root_device, "inode": root_inode}
 
 
+def _verify_nonnegative_integer(value: object, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _verify_reviewed_file_rows(
+    payload: Mapping[str, object],
+    *,
+    field: str,
+    repository_root: Path,
+    expected_paths: tuple[str, ...] | None = None,
+) -> tuple[dict[str, object], ...]:
+    rows = payload[field]
+    if not isinstance(rows, list) or not rows:
+        raise ValueError(f"{field} must be a non-empty list")
+    normalized: list[dict[str, object]] = []
+    for row in rows:
+        _verify_reviewed_file_receipt(row)
+        normalized.append(dict(row))
+    paths = tuple(row["path"] for row in normalized)
+    if paths != tuple(sorted(paths)) or len(set(paths)) != len(paths):
+        raise ValueError(f"{field} is not lexically ordered and unique")
+    if expected_paths is not None and paths != expected_paths:
+        raise ValueError(f"{field} does not use the frozen path set")
+    for row in normalized:
+        _verify_file_receipt_against_path(
+            row,
+            path=repository_root / row["path"],
+            repository_root=repository_root,
+            basename_only=False,
+        )
+    return tuple(normalized)
+
+
+def _verify_amended_review_governance(value: object) -> dict[str, object]:
+    expected = {
+        "review_scope": "external_governance_only",
+        "model_execution_scope": "review_reasoning_only",
+        "local_module_a_worker_or_media_execution_performed": False,
+    }
+    if not isinstance(value, Mapping) or dict(value) != expected:
+        raise ValueError("fresh review governance observation is invalid")
+    return dict(value)
+
+
+def _verify_amended_review_scope_delta(
+    value: object,
+    *,
+    code_rows: tuple[dict[str, object], ...],
+    test_rows: tuple[dict[str, object], ...],
+    baseline_entries: Mapping[str, Mapping[str, object]],
+) -> dict[str, object]:
+    if not isinstance(value, Mapping) or set(value) != {"ordered_leaf_rows", "ordered_directory_rows"}:
+        raise ValueError("implementation scope delta shape is invalid")
+    expected_rows = {row["path"]: row for row in code_rows + test_rows}
+    leaf_rows = value["ordered_leaf_rows"]
+    if not isinstance(leaf_rows, list) or len(leaf_rows) != len(expected_rows):
+        raise ValueError("implementation scope delta leaf rows are invalid")
+    seen: list[str] = []
+    for row in leaf_rows:
+        if not isinstance(row, Mapping) or set(row) != {"path", "before_entry", "after_file", "change_kind"}:
+            raise ValueError("implementation scope delta leaf row shape is invalid")
+        path = row["path"]
+        if path not in expected_rows or path in seen:
+            raise ValueError("implementation scope delta leaf path is invalid")
+        if not isinstance(row["before_entry"], Mapping):
+            raise ValueError("implementation scope delta before entry is invalid")
+        if path not in baseline_entries or dict(row["before_entry"]) != dict(baseline_entries[path]):
+            raise ValueError("implementation scope delta before entry is not baseline-bound")
+        _verify_reviewed_file_receipt(row["after_file"])
+        if dict(row["after_file"]) != expected_rows[path]:
+            raise ValueError("implementation scope delta after receipt is not current")
+        if row["change_kind"] not in {"unchanged", "modified", "created"}:
+            raise ValueError("implementation scope delta change kind is invalid")
+        if path.endswith("task0258_module_a_verified_bootstrap.py"):
+            if row["change_kind"] != "created":
+                raise ValueError("bootstrap delta must be created")
+        elif row["change_kind"] == "created":
+            raise ValueError("only the bootstrap may be created")
+        seen.append(path)
+    if tuple(seen) != tuple(sorted(seen)) or set(seen) != set(expected_rows):
+        raise ValueError("implementation scope delta leaf order is invalid")
+
+    directory_rows = value["ordered_directory_rows"]
+    if not isinstance(directory_rows, list) or len(directory_rows) != 1:
+        raise ValueError("implementation scope delta directory rows are invalid")
+    directory = directory_rows[0]
+    expected_directory_fields = {
+        "path",
+        "before_child_names",
+        "after_child_names",
+        "authorized_added_children",
+        "authorized_removed_children",
+    }
+    if not isinstance(directory, Mapping) or set(directory) != expected_directory_fields:
+        raise ValueError("implementation scope delta directory row shape is invalid")
+    if directory["path"] != "scripts":
+        raise ValueError("implementation scope delta directory path is invalid")
+    for field in (
+        "before_child_names",
+        "after_child_names",
+        "authorized_added_children",
+        "authorized_removed_children",
+    ):
+        names = directory[field]
+        if not isinstance(names, list) or any(not isinstance(name, str) or not name for name in names):
+            raise ValueError("implementation scope delta directory children are invalid")
+        if names != sorted(names) or len(set(names)) != len(names):
+            raise ValueError("implementation scope delta directory children are not ordered")
+    if directory["authorized_added_children"] != ["task0258_module_a_verified_bootstrap.py"]:
+        raise ValueError("implementation scope delta added children are invalid")
+    if directory["authorized_removed_children"]:
+        raise ValueError("implementation scope delta may not remove children")
+    expected_after = sorted(set(directory["before_child_names"]) | {"task0258_module_a_verified_bootstrap.py"})
+    if directory["after_child_names"] != expected_after:
+        raise ValueError("implementation scope delta after children are invalid")
+    return {"ordered_leaf_rows": [dict(row) for row in leaf_rows], "ordered_directory_rows": [dict(directory)]}
+
+
+def _verify_amended_review_bootstrap(value: object, *, code_rows: tuple[dict[str, object], ...]) -> dict[str, object]:
+    expected_fields = {"protocol", "source_sha256", "runtime_snapshot_receipt"}
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise ValueError("bootstrap launcher receipt shape is invalid")
+    if value["protocol"] != "task0258-module-a-verified-python-bootstrap-v2":
+        raise ValueError("bootstrap launcher protocol is invalid")
+    bootstrap_row = next(row for row in code_rows if row["path"].endswith("task0258_module_a_verified_bootstrap.py"))
+    if value["source_sha256"] != bootstrap_row["file_sha256"]:
+        raise ValueError("bootstrap launcher source hash is not bound")
+    runtime = value["runtime_snapshot_receipt"]
+    if not isinstance(runtime, Mapping) or set(runtime) != {
+        "contract_absolute_path",
+        "artifact_sha256",
+        "file_sha256",
+        "postpublication_free_bytes",
+    }:
+        raise ValueError("runtime snapshot receipt shape is invalid")
+    _verify_absolute_no_symlink_path(Path(runtime["contract_absolute_path"]))
+    _verify_sha(runtime["artifact_sha256"], "runtime snapshot artifact hash")
+    _verify_sha(runtime["file_sha256"], "runtime snapshot file hash")
+    _verify_nonnegative_integer(runtime["postpublication_free_bytes"], "runtime snapshot free bytes")
+    return {key: value[key] for key in expected_fields}
+
+
+def _verify_namespace_query_receipt(value: object, *, repository_root: Path) -> dict[str, object]:
+    fields = {
+        "operation",
+        "path",
+        "arguments",
+        "follow_policy",
+        "result_kind",
+        "errno",
+        "stat_result",
+        "access_result",
+        "readlink_target_text",
+        "ordered_directory_entries",
+        "xattr_result",
+        "file_content",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("namespace query receipt shape is invalid")
+    operation = value["operation"]
+    if operation not in {"access", "exec", "fstat", "getdents", "lstat", "mmap", "open", "readlink", "stat", "xattr"}:
+        raise ValueError("namespace query operation is invalid")
+    path = value["path"]
+    if (
+        not isinstance(path, str)
+        or not path
+        or Path(path).is_absolute()
+        or any(part in {"", ".", ".."} for part in PurePosixPath(path).parts)
+    ):
+        raise ValueError("namespace query path is invalid")
+    argument_shapes = {
+        "access": {"mode", "follow_symlinks"},
+        "stat": {"follow_symlinks"},
+        "open": {"flags", "creation_mode"},
+        "fstat": {"source_open_query_sha256"},
+        "getdents": {"source_open_query_sha256"},
+        "mmap": {"source_open_query_sha256", "offset", "length", "access"},
+        "xattr": {"name", "options", "follow_symlinks"},
+        "exec": set(),
+        "lstat": set(),
+        "readlink": set(),
+    }
+    if not isinstance(value["arguments"], Mapping) or set(value["arguments"]) != argument_shapes[operation]:
+        raise ValueError("namespace query arguments are invalid")
+    if value["follow_policy"] not in {"follow", "no_follow", "not_applicable"}:
+        raise ValueError("namespace query follow policy is invalid")
+    if value["result_kind"] not in {"success", "error"}:
+        raise ValueError("namespace query result kind is invalid")
+    if value["result_kind"] == "error":
+        if value["errno"] not in {"EACCES", "ELOOP", "ENOENT", "ENOTDIR"}:
+            raise ValueError("namespace query errno is invalid")
+        if any(
+            value[field] is not None
+            for field in fields - {"operation", "path", "arguments", "follow_policy", "result_kind", "errno"}
+        ):
+            raise ValueError("namespace query error projection is not empty")
+    else:
+        if value["errno"] is not None:
+            raise ValueError("namespace query success errno is invalid")
+        stat_result = value["stat_result"]
+        if stat_result is not None:
+            stat_fields = {
+                "entry_kind",
+                "mode",
+                "device",
+                "inode",
+                "nlink",
+                "uid",
+                "gid",
+                "rdev",
+                "size_bytes",
+                "atime_ns",
+                "mtime_ns",
+                "ctime_ns",
+                "birthtime_ns",
+                "flags",
+            }
+            if not isinstance(stat_result, Mapping) or set(stat_result) != stat_fields:
+                raise ValueError("namespace query stat projection is invalid")
+            if stat_result["entry_kind"] not in {"directory", "regular", "symlink"}:
+                raise ValueError("namespace query stat entry kind is invalid")
+            for field in stat_fields - {"entry_kind"}:
+                _verify_nonnegative_integer(stat_result[field], f"namespace query stat {field}")
+        if value["access_result"] is not None and not isinstance(value["access_result"], bool):
+            raise ValueError("namespace query access result is invalid")
+        if value["readlink_target_text"] is not None and not isinstance(value["readlink_target_text"], str):
+            raise ValueError("namespace query readlink result is invalid")
+        if value["ordered_directory_entries"] is not None and not isinstance(value["ordered_directory_entries"], list):
+            raise ValueError("namespace query directory projection is invalid")
+        if value["xattr_result"] is not None and not isinstance(value["xattr_result"], Mapping):
+            raise ValueError("namespace query xattr projection is invalid")
+        file_content = value["file_content"]
+        if file_content is not None:
+            if not isinstance(file_content, Mapping) or set(file_content) != {"size_bytes", "file_sha256"}:
+                raise ValueError("namespace query file projection is invalid")
+            _verify_nonnegative_integer(file_content["size_bytes"], "namespace query file size")
+            _verify_sha(file_content["file_sha256"], "namespace query file hash")
+            actual = _read_no_follow_file_under_root(
+                repository_root / path, allowed_root=repository_root, description="namespace query file"
+            )
+            if (
+                len(actual) != file_content["size_bytes"]
+                or hashlib.sha256(actual).hexdigest() != file_content["file_sha256"]
+            ):
+                raise ValueError("namespace query file projection does not match current bytes")
+    return dict(value)
+
+
+def _verify_amended_review_check_inputs(value: object, *, repository_root: Path) -> tuple[dict[str, object], ...]:
+    if not isinstance(value, list) or len(value) != 5:
+        raise ValueError("implementation review check-input sets are invalid")
+    rows: list[dict[str, object]] = []
+    expected_names = _AMENDED_REVIEW_CHECK_NAMES[:5]
+    for expected_name, row in zip(expected_names, value, strict=True):
+        if not isinstance(row, Mapping) or set(row) != {"check_name", "ordered_query_receipts", "projection_sha256"}:
+            raise ValueError("implementation review check-input row shape is invalid")
+        if row["check_name"] != expected_name or not isinstance(row["ordered_query_receipts"], list):
+            raise ValueError("implementation review check-input name or rows are invalid")
+        queries = [
+            _verify_namespace_query_receipt(query, repository_root=repository_root)
+            for query in row["ordered_query_receipts"]
+        ]
+        query_keys = [
+            (
+                query["operation"],
+                query["path"],
+                compact_canonical_json(query["arguments"]),
+                query["follow_policy"],
+            )
+            for query in queries
+        ]
+        if query_keys != sorted(query_keys) or len(set(query_keys)) != len(query_keys):
+            raise ValueError("implementation review check-input query order is invalid")
+        if (
+            not queries
+            or hashlib.sha256(compact_canonical_json(queries).encode()).hexdigest() != row["projection_sha256"]
+        ):
+            raise ValueError("implementation review check-input projection is invalid")
+        rows.append(
+            {
+                "check_name": row["check_name"],
+                "ordered_query_receipts": queries,
+                "projection_sha256": row["projection_sha256"],
+            }
+        )
+    return tuple(rows)
+
+
+def _verify_amended_review_check_rows(
+    value: object,
+    *,
+    check_output_directory: Path,
+    fresh_review_artifact_sha256: str,
+    fresh_review_path: Path,
+) -> tuple[dict[str, object], ...]:
+    if not isinstance(value, list) or len(value) != len(_AMENDED_REVIEW_CHECK_NAMES):
+        raise ValueError("implementation review check receipts are invalid")
+    rows: list[dict[str, object]] = []
+    for expected_name, row in zip(_AMENDED_REVIEW_CHECK_NAMES, value, strict=True):
+        if not isinstance(row, Mapping) or set(row) != _AMENDED_REVIEW_CHECK_FIELDS:
+            raise ValueError("implementation review check receipt shape is invalid")
+        if row["check_name"] != expected_name or row["execution_protocol"] != (
+            "fresh-context-read-only-code-review-v1"
+            if expected_name == "fresh_context_code_review"
+            else "task0258-review-snapshot-fd-v2"
+        ):
+            raise ValueError("implementation review check receipt identity is invalid")
+        if expected_name == "fresh_context_code_review":
+            if (
+                row["sandbox_attestation_sha256"] is not None
+                or row["output_artifact_sha256"] != fresh_review_artifact_sha256
+            ):
+                raise ValueError("fresh review check receipt is not bound")
+            if Path(row["output_path"]) != fresh_review_path:
+                raise ValueError("fresh review output path is not bound")
+        else:
+            if not is_sha256(row["sandbox_attestation_sha256"]) or row["output_artifact_sha256"] is not None:
+                raise ValueError("implementation check receipt attestation is invalid")
+            if Path(row["output_path"]).name != f"{expected_name}.out":
+                raise ValueError("implementation check output basename is invalid")
+        if not is_sha256(row["command_sha256"]) or row["exit_code"] != 0 or not is_rfc3339(row["completed_at_utc"]):
+            raise ValueError("implementation check receipt command or status is invalid")
+        output_path = Path(row["output_path"])
+        if not output_path.is_absolute() or output_path.parent != check_output_directory:
+            raise ValueError("implementation check output path is outside the bound directory")
+        _verify_absolute_no_symlink_path(output_path)
+        raw = _read_no_follow_file_under_root(
+            output_path, allowed_root=Path(output_path.anchor), description="implementation check output"
+        )
+        if len(raw) != row["output_size_bytes"] or hashlib.sha256(raw).hexdigest() != row["output_file_sha256"]:
+            raise ValueError("implementation check output receipt does not match bytes")
+        _verify_nonnegative_integer(row["output_size_bytes"], "implementation check output size")
+        rows.append(dict(row))
+    return tuple(rows)
+
+
+def _verify_amended_review_resource_summary(
+    value: object, *, fresh_review_size: int, governance: Mapping[str, object]
+) -> None:
+    fields = {"runtime_build_observation", "ordered_check_observations", "fresh_review_observation"}
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("implementation review resource summary shape is invalid")
+    runtime = value["runtime_build_observation"]
+    if not isinstance(runtime, Mapping) or set(runtime) != {
+        "build_resource_limits",
+        "build_resource_observation",
+        "postpublication_free_bytes",
+    }:
+        raise ValueError("implementation review runtime resource summary is invalid")
+    _verify_nonnegative_integer(runtime["postpublication_free_bytes"], "implementation review free bytes")
+    observations = value["ordered_check_observations"]
+    if not isinstance(observations, list) or len(observations) != 5:
+        raise ValueError("implementation review check resource summary is invalid")
+    for expected_name, observation in zip(_AMENDED_REVIEW_CHECK_NAMES[:5], observations, strict=True):
+        if not isinstance(observation, Mapping) or set(observation) != {
+            "check_name",
+            "process_resource_observation",
+            "output_publication_observation",
+        }:
+            raise ValueError("implementation review check observation shape is invalid")
+        if observation["check_name"] != expected_name:
+            raise ValueError("implementation review check observation order is invalid")
+        if not isinstance(observation["process_resource_observation"], Mapping) or not isinstance(
+            observation["output_publication_observation"], Mapping
+        ):
+            raise ValueError("implementation review check observation values are invalid")
+    fresh = value["fresh_review_observation"]
+    if not isinstance(fresh, Mapping) or set(fresh) != {"governance_observation", "fresh_review_artifact_bytes"}:
+        raise ValueError("implementation review fresh resource summary is invalid")
+    if (
+        dict(fresh["governance_observation"]) != dict(governance)
+        or fresh["fresh_review_artifact_bytes"] != fresh_review_size
+    ):
+        raise ValueError("implementation review fresh resource summary is not bound")
+
+
+def _verify_amended_review_payload(
+    payload: Mapping[str, object],
+    *,
+    repository_root: Path,
+    root_identity: Mapping[str, int],
+    implementation_approval: VerifiedReviewImplementationApproval,
+    check_output_directory: Path,
+    fresh_review_artifact_sha256: str,
+    fresh_review_path: Path,
+    fresh_review_size: int,
+) -> tuple[tuple[dict[str, object], ...], tuple[dict[str, object], ...], dict[str, object]]:
+    if set(payload) != _AMENDED_IMPLEMENTATION_REVIEW_FIELDS:
+        raise ValueError("amended implementation review field set is invalid")
+    if (
+        payload["schema_version"] != _AMENDED_IMPLEMENTATION_REVIEW_SCHEMA
+        or payload["module_id"] != "existing-45-temporal-retrospective"
+    ):
+        raise ValueError("amended implementation review identity is invalid")
+    payload_root = Path(payload["repository_root_absolute_path"])
+    _verify_absolute_no_symlink_path(payload_root)
+    if payload_root != repository_root:
+        raise ValueError("amended implementation review repository root path is not bound")
+    if (
+        payload["repository_root_device"] != root_identity["device"]
+        or payload["repository_root_inode"] != root_identity["inode"]
+    ):
+        raise ValueError("amended implementation review repository root identity drifted")
+    for field in ("repository_root_device", "repository_root_inode"):
+        _verify_nonnegative_integer(payload[field], f"amended implementation review {field}")
+    if payload["amendment_implementation_approval_receipt"] != _artifact_file_receipt(implementation_approval.artifact):
+        raise ValueError("amended implementation review approval receipt is not bound")
+    implementation_context_id = payload["implementation_context_id"]
+    reviewer_context_id = payload["reviewer_context_id"]
+    if (
+        not is_safe_slug(implementation_context_id)
+        or not is_safe_slug(reviewer_context_id)
+        or implementation_context_id == reviewer_context_id
+    ):
+        raise ValueError("amended implementation review contexts are invalid")
+    if payload["reviewer_independence"] != "different_fresh_context":
+        raise ValueError("amended implementation review independence is invalid")
+    code_rows = _verify_reviewed_file_rows(
+        payload,
+        field="ordered_code_file_receipts",
+        repository_root=repository_root,
+        expected_paths=_AMENDED_REVIEW_CODE_PATHS,
+    )
+    test_rows = _verify_reviewed_file_rows(
+        payload,
+        field="ordered_test_file_receipts",
+        repository_root=repository_root,
+        expected_paths=_AMENDED_REVIEW_TEST_PATHS,
+    )
+    _verify_reviewed_file_rows(
+        payload, field="ordered_runtime_dependency_file_receipts", repository_root=repository_root
+    )
+    _verify_reviewed_file_rows(
+        payload,
+        field="ordered_check_configuration_file_receipts",
+        repository_root=repository_root,
+        expected_paths=("pyproject.toml", "pytest.ini"),
+    )
+    _verify_amended_review_check_inputs(payload["ordered_check_input_receipt_sets"], repository_root=repository_root)
+    baseline_receipt = implementation_approval.artifact.payload["implementation_scope_baseline_receipt"]
+    if payload["implementation_scope_baseline_receipt"] != baseline_receipt:
+        raise ValueError("amended implementation review baseline receipt is not bound")
+    delta = _verify_amended_review_scope_delta(
+        payload["implementation_scope_delta"],
+        code_rows=code_rows,
+        test_rows=test_rows,
+        baseline_entries={
+            entry["path"]: entry
+            for entry in implementation_approval.implementation_scope_baseline.payload["ordered_entry_receipts"]
+            if isinstance(entry, Mapping) and isinstance(entry.get("path"), str)
+        },
+    )
+    _verify_amended_review_bootstrap(payload["bootstrap_launcher_receipt"], code_rows=code_rows)
+    _verify_amended_review_check_rows(
+        payload["ordered_check_receipts"],
+        check_output_directory=check_output_directory,
+        fresh_review_artifact_sha256=fresh_review_artifact_sha256,
+        fresh_review_path=fresh_review_path,
+    )
+    if (
+        payload["critical_count"] != 0
+        or payload["required_count"] != 0
+        or not isinstance(payload["optional_count"], int)
+        or isinstance(payload["optional_count"], bool)
+        or payload["optional_count"] < 0
+    ):
+        raise ValueError("amended implementation review counts are invalid")
+    if payload["heavy_execution_performed"] is not False or not is_rfc3339(payload["reviewed_at_utc"]):
+        raise ValueError("amended implementation review status is invalid")
+    _verify_amended_review_resource_summary(
+        payload["review_resource_summary"],
+        fresh_review_size=fresh_review_size,
+        governance=_verify_amended_review_governance(
+            payload["review_resource_summary"]["fresh_review_observation"]["governance_observation"]
+        ),
+    )
+    return code_rows, test_rows, delta
+
+
+def _verify_fresh_amended_review_payload(
+    payload: Mapping[str, object],
+    *,
+    repository_root: Path,
+    root_identity: Mapping[str, int],
+    implementation_approval: VerifiedReviewImplementationApproval,
+    implementation_payload: Mapping[str, object],
+) -> None:
+    if set(payload) != _FRESH_IMPLEMENTATION_REVIEW_FIELDS:
+        raise ValueError("fresh amended implementation review field set is invalid")
+    if (
+        payload["schema_version"] != _AMENDED_IMPLEMENTATION_REVIEW_SCHEMA
+        or payload["module_id"] != "existing-45-temporal-retrospective"
+    ):
+        raise ValueError("fresh amended implementation review identity is invalid")
+    payload_root = Path(payload["repository_root_absolute_path"])
+    _verify_absolute_no_symlink_path(payload_root)
+    if (
+        payload_root != repository_root
+        or payload["repository_root_device"] != root_identity["device"]
+        or payload["repository_root_inode"] != root_identity["inode"]
+    ):
+        raise ValueError("fresh amended implementation review root identity is invalid")
+    if payload["amendment_implementation_approval_receipt"] != _artifact_file_receipt(implementation_approval.artifact):
+        raise ValueError("fresh amended implementation review approval receipt is not bound")
+    if not is_safe_slug(payload["implementation_context_id"]) or not is_safe_slug(payload["reviewer_context_id"]):
+        raise ValueError("fresh amended implementation review context is invalid")
+    if (
+        payload["implementation_context_id"] == payload["reviewer_context_id"]
+        or payload["reviewer_independence"] != "different_fresh_context"
+    ):
+        raise ValueError("fresh amended implementation review independence is invalid")
+    for field in (
+        "ordered_code_file_receipts",
+        "ordered_test_file_receipts",
+        "ordered_runtime_dependency_file_receipts",
+        "ordered_check_configuration_file_receipts",
+        "ordered_check_input_receipt_sets",
+        "implementation_scope_baseline_receipt",
+        "implementation_scope_delta",
+        "bootstrap_launcher_receipt",
+    ):
+        if payload[field] != implementation_payload[field]:
+            raise ValueError(f"fresh amended implementation review {field} is not bound")
+    if payload["ordered_pre_review_check_receipts"] != implementation_payload["ordered_check_receipts"][:5]:
+        raise ValueError("fresh amended implementation review pre-review checks are not bound")
+    if _verify_amended_review_governance(payload["fresh_review_governance_observation"])[
+        "local_module_a_worker_or_media_execution_performed"
+    ]:
+        raise ValueError("fresh amended implementation review claims local execution")
+    if (
+        payload["critical_count"] != 0
+        or payload["required_count"] != 0
+        or not isinstance(payload["optional_count"], int)
+        or isinstance(payload["optional_count"], bool)
+        or payload["optional_count"] < 0
+    ):
+        raise ValueError("fresh amended implementation review counts are invalid")
+    if payload["heavy_execution_performed"] is not False or not is_rfc3339(payload["reviewed_at_utc"]):
+        raise ValueError("fresh amended implementation review status is invalid")
+
+
+def load_verified_amended_implementation_review(
+    *,
+    execution_context: object,
+    repository_root: Path,
+    implementation_approval: VerifiedReviewImplementationApproval,
+    implementation_review_path: Path,
+    expected_implementation_review_artifact_sha256: str,
+    expected_implementation_review_file_sha256: str,
+    fresh_review_path: Path,
+    expected_fresh_review_artifact_sha256: str,
+    expected_fresh_review_file_sha256: str,
+) -> VerifiedReviewAmendedImplementationReview:
+    """Replay the amended implementation review and its fresh reviewer receipt.
+
+    This is intentionally review-only.  It reopens the canonical review and
+    fresh-review bytes, checks the exact closed receipt shapes and current code,
+    test, runtime, configuration, check-output, and check-input bindings, and
+    returns no production authority.
+    """
+    if (
+        type(execution_context) is not VerifiedImplementationReviewSandboxContext
+        or execution_context._token is not _SANDBOX_TOKEN
+    ):
+        raise PermissionError("amended implementation review loader requires a verified review context")
+    if type(implementation_approval) is not VerifiedReviewImplementationApproval:
+        raise PermissionError("amended implementation review requires a verified implementation approval")
+    repository_root = Path(repository_root)
+    _verify_absolute_no_symlink_path(repository_root)
+    root_device, root_inode = _verify_real_directory(repository_root)
+    root_identity = {"device": root_device, "inode": root_inode}
+    baseline = implementation_approval.implementation_scope_baseline
+    if not isinstance(baseline, VerifiedJsonArtifact):
+        raise PermissionError("implementation approval baseline is not loaded")
+    baseline_payload = baseline.payload
+    check_output_directory = Path(baseline_payload["check_output_directory_absolute_path"])
+    _verify_absolute_no_symlink_path(check_output_directory)
+    try:
+        check_output_directory.relative_to(repository_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("implementation review check-output directory must be outside the repository")
+    check_output_identity = _verify_real_directory(check_output_directory)
+    if check_output_identity != (
+        baseline_payload["check_output_directory_device"],
+        baseline_payload["check_output_directory_inode"],
+    ):
+        raise ValueError("implementation review check-output directory identity drifted")
+    review_artifact = _load_verified_json_artifact_under_root(
+        path=Path(implementation_review_path),
+        repository_root=Path(Path(implementation_review_path).anchor),
+        expected_artifact_sha256=expected_implementation_review_artifact_sha256,
+        expected_file_sha256=expected_implementation_review_file_sha256,
+        description="amended implementation review",
+    )
+    fresh_artifact = _load_verified_json_artifact_under_root(
+        path=Path(fresh_review_path),
+        repository_root=Path(Path(fresh_review_path).anchor),
+        expected_artifact_sha256=expected_fresh_review_artifact_sha256,
+        expected_file_sha256=expected_fresh_review_file_sha256,
+        description="fresh amended implementation review",
+    )
+    _verify_amended_review_payload(
+        review_artifact.payload,
+        repository_root=repository_root,
+        root_identity=root_identity,
+        implementation_approval=implementation_approval,
+        check_output_directory=check_output_directory,
+        fresh_review_artifact_sha256=fresh_artifact.artifact_sha256,
+        fresh_review_path=Path(fresh_review_path),
+        fresh_review_size=len(
+            _read_no_follow_file_under_root(
+                Path(fresh_review_path),
+                allowed_root=Path(Path(fresh_review_path).anchor),
+                description="fresh amended implementation review",
+            )
+        ),
+    )
+    _verify_fresh_amended_review_payload(
+        fresh_artifact.payload,
+        repository_root=repository_root,
+        root_identity=root_identity,
+        implementation_approval=implementation_approval,
+        implementation_payload=review_artifact.payload,
+    )
+    if review_artifact.payload["ordered_check_receipts"][-1]["output_file_sha256"] != fresh_artifact.file_sha256:
+        raise ValueError("fresh amended implementation review file receipt is not bound")
+    return VerifiedReviewAmendedImplementationReview(
+        _AMENDED_IMPLEMENTATION_REVIEW_TOKEN,
+        artifact=review_artifact,
+        fresh_review=fresh_artifact,
+        implementation_approval=implementation_approval,
+        repository_root_identity=root_identity,
+    )
+
+
 def load_verified_parent_module_a_spec_approval(
     *,
     execution_context: object,
@@ -1761,6 +2528,7 @@ __all__ = [
     "VerifiedReviewNoWritePreflight",
     "VerifiedReviewParentModuleASpecApproval",
     "VerifiedReviewImplementationApproval",
+    "VerifiedReviewAmendedImplementationReview",
     "VerifiedRunHistoryLedger",
     "VerifiedReviewRunAdmission",
     "bind_implementation_review_discovery_context",
@@ -1777,6 +2545,7 @@ __all__ = [
     "bind_verified_review_no_write_preflight",
     "load_verified_parent_module_a_spec_approval",
     "load_verified_amendment_implementation_approval",
+    "load_verified_amended_implementation_review",
     "load_verified_review_implementation_approval",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",

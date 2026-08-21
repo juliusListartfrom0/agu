@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `210 passed` (including the local simulation command,
+- TASK-0258 focused suite: `211 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the review-only implementation-approval loader increment: `2,078 passed, 5
+- Full repository pytest after the review-only amended-implementation-review loader increment: `2,079 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -101,6 +101,13 @@
   file, the Critical/Required 0/0 fresh review, and the implementation-scope
   baseline/root CAS, and returns an opaque diagnostic artifact. It does not
   issue rerun authorization or provide production admission.
+- The amended-implementation-review loader now reopens the canonical
+  implementation-review artifact and separate fresh-review artifact, binds
+  approval/root/baseline receipts, replays the frozen code/test/runtime/config,
+  check-input, check-output, and scope-delta rows, and requires the fresh
+  reviewer governance observation plus Critical/Required `0/0`. It returns
+  only an opaque diagnostic object; an independent review is not claimed for
+  the current branch unless an external receipt supplies that artifact.
 - `verify_verification_attempt` now invokes that binder as the attempt-level
   gate, so individually schema-valid but cross-boundary-drifting policy and
   attestation objects cannot enter a verification attempt.

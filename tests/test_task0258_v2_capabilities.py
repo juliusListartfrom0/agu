@@ -18,6 +18,7 @@ from app.analysis.task0258_run_history import ADMISSION_SCHEMA, CLAIM_SCHEMA, CO
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_capabilities import (
     VerifiedImplementationReviewSandboxContext,
+    VerifiedReviewAmendedImplementationReview,
     VerifiedReviewDiscoveryContext,
     VerifiedReviewImplementationApproval,
     VerifiedReviewNoWritePreflight,
@@ -33,6 +34,7 @@ from app.analysis.task0258_v2_capabilities import (
     bind_verified_review_no_write_preflight,
     exercise_module_a_v2_state_machine_for_discovery,
     exercise_module_a_v2_state_machine_for_review,
+    load_verified_amended_implementation_review,
     load_verified_amendment_implementation_approval,
     load_verified_candidate_receipt_bundle,
     load_verified_parent_module_a_spec_approval,
@@ -538,6 +540,8 @@ def test_review_contexts_are_opaque_and_distinct():
     with pytest.raises(TypeError):
         VerifiedReviewImplementationApproval()
     with pytest.raises(TypeError):
+        VerifiedReviewAmendedImplementationReview()
+    with pytest.raises(TypeError):
         VerifiedReviewVerificationAttempt()
     with pytest.raises(TypeError):
         VerifiedReviewVerificationAttemptRunSpine()
@@ -689,6 +693,361 @@ def test_amendment_implementation_loader_replays_all_review_receipts(tmp_path):
         "device": repository_root.stat().st_dev,
         "inode": repository_root.stat().st_ino,
     }
+
+
+def test_amended_implementation_review_loader_replays_fresh_review_and_checks(tmp_path):
+    repository_root = Path(__file__).resolve().parents[1]
+    approval_dir = repository_root / "analysis_outputs/public_research/task0258_module_a_amendment_approval"
+    parent_source = (
+        repository_root
+        / "analysis_outputs/public_research/task0258_module_a_spec_registry_v2/module_a_spec_approval.json"
+    )
+    parent_payload = json.loads(parent_source.read_text(encoding="utf-8"))
+    parent_raw = (compact_canonical_json(parent_payload) + "\n").encode()
+    parent_path = tmp_path / "parent-spec-approval.json"
+    parent_path.write_bytes(parent_raw)
+    approved_specs = {
+        name: repository_root / "docs/specs/TASK-0258-temporal-canary" / name
+        for name in ("requirement.md", "solution.md", "gate-review.md")
+    }
+    review_context = bind_implementation_review_sandbox_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+    parent = load_verified_parent_module_a_spec_approval(
+        execution_context=review_context,
+        approval_path=parent_path,
+        expected_artifact_sha256=parent_payload["artifact_sha256"],
+        expected_file_sha256=hashlib.sha256(parent_raw).hexdigest(),
+        approved_spec_paths=approved_specs,
+        expected_fresh_review_internal_sha256=parent_payload["fresh_review_receipt"]["internal_sha256"],
+        expected_fresh_review_file_sha256=parent_payload["fresh_review_receipt"]["file_sha256"],
+        expected_approval_statement_sha256=parent_payload["approval_statement_sha256"],
+    )
+
+    baseline_scope_paths = sorted(
+        (
+            "app/analysis/vru_causal_temporal_retrospective.py",
+            "scripts/extract_vru_causal_tiled_swin_embeddings.py",
+            "scripts/screen_vru_causal_temporal_retrospective.py",
+            "scripts/seal_vru_causal_temporal_feature_plan.py",
+            "scripts/task0258_module_a_verified_bootstrap.py",
+            "tests/test_task0258_module_a_cli.py",
+            "tests/test_vru_causal_final_evaluator.py",
+            "tests/test_vru_causal_temporal_feature_plan.py",
+            "tests/test_vru_causal_temporal_retrospective.py",
+            "tests/test_vru_causal_tiled_swin_embeddings.py",
+        )
+    )
+    baseline_entries = [
+        {
+            "path": ".",
+            "entry_kind": "directory",
+            "mode_bits": 0o700,
+            "link_count": None,
+            "size_bytes": None,
+            "file_sha256": None,
+            "symlink_target_text": None,
+            "hardlink_group_sha256": None,
+            "ordered_child_names": [],
+        },
+        {
+            "path": "scripts",
+            "entry_kind": "directory",
+            "mode_bits": 0o700,
+            "link_count": None,
+            "size_bytes": None,
+            "file_sha256": None,
+            "symlink_target_text": None,
+            "hardlink_group_sha256": None,
+            "ordered_child_names": ["task0258_module_a_verified_bootstrap.py"],
+        },
+    ]
+    for path_text in baseline_scope_paths:
+        path_stat = (repository_root / path_text).stat()
+        baseline_entries.append(
+            {
+                "path": path_text,
+                "entry_kind": "regular",
+                "mode_bits": path_stat.st_mode,
+                "link_count": 1,
+                "size_bytes": path_stat.st_size,
+                "file_sha256": hashlib.sha256((repository_root / path_text).read_bytes()).hexdigest(),
+                "symlink_target_text": None,
+                "hardlink_group_sha256": hashlib.sha256(compact_canonical_json([path_text]).encode()).hexdigest(),
+                "ordered_child_names": None,
+            }
+        )
+    baseline_entries = [baseline_entries[0], *sorted(baseline_entries[1:], key=lambda entry: entry["path"])]
+    baseline_payload = {
+        "schema_version": "agu.task0258-module-a-implementation-scope-baseline.v1",
+        "module_id": "existing-45-temporal-retrospective",
+        "repository_root_absolute_path": str(repository_root),
+        "repository_root_device": repository_root.stat().st_dev,
+        "repository_root_inode": repository_root.stat().st_ino,
+        "ordered_root_paths": ["."],
+        "check_output_directory_absolute_path": str(tmp_path),
+        "check_output_directory_device": tmp_path.stat().st_dev,
+        "check_output_directory_inode": tmp_path.stat().st_ino,
+        "ordered_entry_receipts": baseline_entries,
+        "ordered_repository_executable_receipts": [],
+        "captured_at_utc": "2026-08-22T00:00:00Z",
+    }
+    baseline_payload["artifact_sha256"] = canonical_artifact_sha256(baseline_payload)
+    baseline_raw = (compact_canonical_json(baseline_payload) + "\n").encode()
+    baseline_path = tmp_path / "implementation-scope-baseline.json"
+    baseline_path.write_bytes(baseline_raw)
+
+    amendment_path = repository_root / "docs/specs/TASK-0258-temporal-canary/amendment-001-postpublication-proof.md"
+    amendment_review_path = approval_dir / "amendment_fresh_review.md"
+    approval_payload = json.loads((approval_dir / "amendment_implementation_approval.json").read_text())
+    approval_payload["repository_root_device"] = repository_root.stat().st_dev
+    approval_payload["repository_root_inode"] = repository_root.stat().st_ino
+    approval_payload["parent_spec_approval_receipt"] = {
+        "artifact_sha256": parent_payload["artifact_sha256"],
+        "file_sha256": hashlib.sha256(parent_raw).hexdigest(),
+    }
+    review_bytes = amendment_review_path.read_bytes()
+    approval_payload["amendment_fresh_review_receipt"] = {
+        "artifact_sha256": hashlib.sha256(review_bytes).hexdigest(),
+        "file_sha256": hashlib.sha256(review_bytes).hexdigest(),
+    }
+    approval_payload["implementation_scope_baseline_receipt"] = {
+        "artifact_sha256": baseline_payload["artifact_sha256"],
+        "file_sha256": hashlib.sha256(baseline_raw).hexdigest(),
+    }
+    approval_payload["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in approval_payload.items() if key != "artifact_sha256"}
+    )
+    approval_raw = (compact_canonical_json(approval_payload) + "\n").encode()
+    approval_path = tmp_path / "amendment-implementation-approval.json"
+    approval_path.write_bytes(approval_raw)
+    implementation_approval = load_verified_amendment_implementation_approval(
+        execution_context=review_context,
+        repository_root=repository_root,
+        approval_path=approval_path,
+        expected_artifact_sha256=approval_payload["artifact_sha256"],
+        expected_file_sha256=hashlib.sha256(approval_raw).hexdigest(),
+        parent_approval=parent,
+        amendment_path=amendment_path,
+        expected_amendment_file_sha256=approval_payload["approved_amendment_file_receipt"]["file_sha256"],
+        amendment_review_path=amendment_review_path,
+        expected_amendment_review_artifact_sha256=approval_payload["amendment_fresh_review_receipt"]["artifact_sha256"],
+        expected_amendment_review_file_sha256=approval_payload["amendment_fresh_review_receipt"]["file_sha256"],
+        implementation_scope_baseline_path=baseline_path,
+        expected_implementation_scope_baseline_artifact_sha256=baseline_payload["artifact_sha256"],
+        expected_implementation_scope_baseline_file_sha256=hashlib.sha256(baseline_raw).hexdigest(),
+    )
+
+    def reviewed(path_text):
+        raw = (repository_root / path_text).read_bytes()
+        return {"path": path_text, "size_bytes": len(raw), "file_sha256": hashlib.sha256(raw).hexdigest()}
+
+    code_paths = (
+        "app/analysis/vru_causal_temporal_retrospective.py",
+        "scripts/extract_vru_causal_tiled_swin_embeddings.py",
+        "scripts/screen_vru_causal_temporal_retrospective.py",
+        "scripts/seal_vru_causal_temporal_feature_plan.py",
+        "scripts/task0258_module_a_verified_bootstrap.py",
+    )
+    test_paths = (
+        "tests/test_task0258_module_a_cli.py",
+        "tests/test_vru_causal_final_evaluator.py",
+        "tests/test_vru_causal_temporal_feature_plan.py",
+        "tests/test_vru_causal_temporal_retrospective.py",
+        "tests/test_vru_causal_tiled_swin_embeddings.py",
+    )
+    code_rows = [reviewed(path) for path in code_paths]
+    test_rows = [reviewed(path) for path in test_paths]
+    runtime_rows = [reviewed(path) for path in code_paths]
+    config_rows = [reviewed(path) for path in ("pyproject.toml", "pytest.ini")]
+    baseline_by_path = {entry["path"]: entry for entry in baseline_entries}
+    delta = {
+        "ordered_leaf_rows": [
+            {
+                "path": row["path"],
+                "before_entry": baseline_by_path[row["path"]],
+                "after_file": row,
+                "change_kind": "created"
+                if row["path"].endswith("task0258_module_a_verified_bootstrap.py")
+                else "modified",
+            }
+            for row in sorted(code_rows + test_rows, key=lambda item: item["path"])
+        ],
+        "ordered_directory_rows": [
+            {
+                "path": "scripts",
+                "before_child_names": [],
+                "after_child_names": ["task0258_module_a_verified_bootstrap.py"],
+                "authorized_added_children": ["task0258_module_a_verified_bootstrap.py"],
+                "authorized_removed_children": [],
+            }
+        ],
+    }
+    bootstrap = {
+        "protocol": "task0258-module-a-verified-python-bootstrap-v2",
+        "source_sha256": code_rows[-1]["file_sha256"],
+        "runtime_snapshot_receipt": {
+            "contract_absolute_path": str(tmp_path / "runtime-contract.json"),
+            "artifact_sha256": "4" * 64,
+            "file_sha256": "5" * 64,
+            "postpublication_free_bytes": 0,
+        },
+    }
+    checks = ("focused_pytest", "full_pytest", "ruff_check", "ruff_format_check", "diff_check")
+    query_path = code_paths[0]
+    query_file = repository_root / query_path
+    query_stat = query_file.stat()
+    query_stat_result = {
+        "entry_kind": "regular",
+        "mode": query_stat.st_mode,
+        "device": query_stat.st_dev,
+        "inode": query_stat.st_ino,
+        "nlink": query_stat.st_nlink,
+        "uid": query_stat.st_uid,
+        "gid": query_stat.st_gid,
+        "rdev": query_stat.st_rdev,
+        "size_bytes": query_stat.st_size,
+        "atime_ns": query_stat.st_atime_ns,
+        "mtime_ns": query_stat.st_mtime_ns,
+        "ctime_ns": query_stat.st_ctime_ns,
+        "birthtime_ns": getattr(query_stat, "st_birthtime_ns", 0),
+        "flags": getattr(query_stat, "st_flags", 0),
+    }
+    query = {
+        "operation": "open",
+        "path": query_path,
+        "arguments": {"flags": 0, "creation_mode": None},
+        "follow_policy": "follow",
+        "result_kind": "success",
+        "errno": None,
+        "stat_result": query_stat_result,
+        "access_result": None,
+        "readlink_target_text": None,
+        "ordered_directory_entries": None,
+        "xattr_result": None,
+        "file_content": {"size_bytes": query_stat.st_size, "file_sha256": code_rows[0]["file_sha256"]},
+    }
+    query_projection = hashlib.sha256(compact_canonical_json([query]).encode()).hexdigest()
+    check_inputs = [
+        {"check_name": check, "ordered_query_receipts": [query], "projection_sha256": query_projection}
+        for check in checks
+    ]
+    check_rows = []
+    for check in checks:
+        output_path = tmp_path / f"{check}.out"
+        output_raw = f"{check}: ok\n".encode()
+        output_path.write_bytes(output_raw)
+        check_rows.append(
+            {
+                "check_name": check,
+                "execution_protocol": "task0258-review-snapshot-fd-v2",
+                "sandbox_attestation_sha256": "6" * 64,
+                "command_sha256": "7" * 64,
+                "exit_code": 0,
+                "output_path": str(output_path),
+                "output_size_bytes": len(output_raw),
+                "output_artifact_sha256": None,
+                "output_file_sha256": hashlib.sha256(output_raw).hexdigest(),
+                "completed_at_utc": "2026-08-22T00:00:00Z",
+            }
+        )
+    governance = {
+        "review_scope": "external_governance_only",
+        "model_execution_scope": "review_reasoning_only",
+        "local_module_a_worker_or_media_execution_performed": False,
+    }
+    fresh_payload = {
+        "schema_version": "agu.task0258-module-a-fresh-code-review.v1",
+        "module_id": "existing-45-temporal-retrospective",
+        "repository_root_absolute_path": str(repository_root),
+        "repository_root_device": repository_root.stat().st_dev,
+        "repository_root_inode": repository_root.stat().st_ino,
+        "amendment_implementation_approval_receipt": {
+            "artifact_sha256": implementation_approval.artifact.artifact_sha256,
+            "file_sha256": implementation_approval.artifact.file_sha256,
+        },
+        "implementation_context_id": "implementation-context",
+        "reviewer_context_id": "fresh-review-context",
+        "reviewer_independence": "different_fresh_context",
+        "ordered_code_file_receipts": code_rows,
+        "ordered_test_file_receipts": test_rows,
+        "ordered_runtime_dependency_file_receipts": runtime_rows,
+        "ordered_check_configuration_file_receipts": config_rows,
+        "ordered_check_input_receipt_sets": check_inputs,
+        "implementation_scope_baseline_receipt": approval_payload["implementation_scope_baseline_receipt"],
+        "implementation_scope_delta": delta,
+        "bootstrap_launcher_receipt": bootstrap,
+        "ordered_pre_review_check_receipts": check_rows,
+        "fresh_review_governance_observation": governance,
+        "critical_count": 0,
+        "required_count": 0,
+        "optional_count": 0,
+        "heavy_execution_performed": False,
+        "reviewed_at_utc": "2026-08-22T00:00:01Z",
+    }
+    fresh_payload["artifact_sha256"] = canonical_artifact_sha256(fresh_payload)
+    fresh_raw = (compact_canonical_json(fresh_payload) + "\n").encode()
+    fresh_path = tmp_path / "fresh_context_code_review.out"
+    fresh_path.write_bytes(fresh_raw)
+    fresh_file_sha = hashlib.sha256(fresh_raw).hexdigest()
+    check_rows.append(
+        {
+            "check_name": "fresh_context_code_review",
+            "execution_protocol": "fresh-context-read-only-code-review-v1",
+            "sandbox_attestation_sha256": None,
+            "command_sha256": "8" * 64,
+            "exit_code": 0,
+            "output_path": str(fresh_path),
+            "output_size_bytes": len(fresh_raw),
+            "output_artifact_sha256": fresh_payload["artifact_sha256"],
+            "output_file_sha256": fresh_file_sha,
+            "completed_at_utc": "2026-08-22T00:00:02Z",
+        }
+    )
+    review_payload = {
+        **{
+            key: value
+            for key, value in fresh_payload.items()
+            if key not in {"ordered_pre_review_check_receipts", "fresh_review_governance_observation"}
+        },
+        "ordered_check_receipts": check_rows,
+        "review_resource_summary": {
+            "runtime_build_observation": {
+                "build_resource_limits": {},
+                "build_resource_observation": {},
+                "postpublication_free_bytes": 0,
+            },
+            "ordered_check_observations": [
+                {"check_name": check, "process_resource_observation": {}, "output_publication_observation": {}}
+                for check in checks
+            ],
+            "fresh_review_observation": {
+                "governance_observation": governance,
+                "fresh_review_artifact_bytes": len(fresh_raw),
+            },
+        },
+    }
+    review_payload["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in review_payload.items() if key != "artifact_sha256"}
+    )
+    review_raw = (compact_canonical_json(review_payload) + "\n").encode()
+    implementation_review_path = tmp_path / "amended-implementation-review.json"
+    implementation_review_path.write_bytes(review_raw)
+    loaded = load_verified_amended_implementation_review(
+        execution_context=review_context,
+        repository_root=repository_root,
+        implementation_approval=implementation_approval,
+        implementation_review_path=implementation_review_path,
+        expected_implementation_review_artifact_sha256=review_payload["artifact_sha256"],
+        expected_implementation_review_file_sha256=hashlib.sha256(review_raw).hexdigest(),
+        fresh_review_path=fresh_path,
+        expected_fresh_review_artifact_sha256=fresh_payload["artifact_sha256"],
+        expected_fresh_review_file_sha256=fresh_file_sha,
+    )
+    assert isinstance(loaded, VerifiedReviewAmendedImplementationReview)
+    assert loaded.production_capability is False
+    assert loaded.implementation_approval is implementation_approval
+    assert loaded.fresh_review.payload["critical_count"] == 0
 
 
 def test_discovery_manifest_rejects_symlinked_temp_parent(tmp_path):
