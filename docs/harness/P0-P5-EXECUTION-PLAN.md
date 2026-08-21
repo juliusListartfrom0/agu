@@ -53,7 +53,11 @@ model execution or readiness transition.
       creating any stage. Candidate publication now validates the candidate gate
       itself, binds its exact rerun authorization SHA to a fixed stage name, and
       checks candidate/terminal occupancy under the root lock before creating
-      any stage. The repeatable
+      any stage. The pipeline preflight now cross-binds candidate-gate
+      authorization/admission/history receipts to the actual admission and
+      completion bytes, requires the bundle and result to share the same tuple
+      and candidate-member receipts, and rejects mismatches before registry or
+      output writes. The repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and

@@ -11,6 +11,7 @@ from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_pipeline import (
     build_candidate_gate_payload,
     build_candidate_receipt_bundle_payload,
+    build_member_receipts,
     build_postpublication_verification_payload,
     seal_candidate_v2,
 )
@@ -49,7 +50,14 @@ def _file_receipt(payload):
     return {"artifact_sha256": payload["artifact_sha256"], "file_sha256": hashlib.sha256(data).hexdigest()}
 
 
-def _trust_slots(providers):
+def _trust_slots(
+    providers,
+    *,
+    authorization_receipt=None,
+    history_receipt=None,
+    admission_receipt=None,
+    static_input_contract=None,
+):
     out = []
     for p in providers:
         if p == "run_history_ledger":
@@ -57,7 +65,8 @@ def _trust_slots(providers):
                 {
                     "provider": p,
                     "verification_state": "verified",
-                    "receipt": {"run_identity_receipt": _receipt(), "head_receipt": _receipt(), "marker_count": 0},
+                    "receipt": history_receipt
+                    or {"run_identity_receipt": _receipt(), "head_receipt": _receipt(), "marker_count": 0},
                 }
             )
         elif p == "static_inputs":
@@ -65,13 +74,20 @@ def _trust_slots(providers):
                 {
                     "provider": p,
                     "verification_state": "verified",
-                    "receipt": {
+                    "receipt": static_input_contract
+                    or {
                         "temporal_plan_artifact_sha256": "0" * 64,
                         "temporal_plan_file_sha256": "0" * 64,
                         "task0257_receipts_projection_sha256": "0" * 64,
                     },
                 }
             )
+        elif p == "exact_v2_rerun_authorization":
+            out.append(
+                {"provider": p, "verification_state": "verified", "receipt": authorization_receipt or _receipt()}
+            )
+        elif p == "run_admission":
+            out.append({"provider": p, "verification_state": "verified", "receipt": admission_receipt or _receipt()})
         else:
             out.append({"provider": p, "verification_state": "verified", "receipt": _receipt()})
     return out
@@ -141,7 +157,13 @@ def _completed(output_root="/x", claim_receipt=None, admission_receipt=None):
     )
 
 
-def _gate():
+def _gate(
+    *,
+    authorization_receipt=None,
+    history_receipt=None,
+    admission_receipt=None,
+    static_input_contract=None,
+):
     return build_candidate_gate_payload(
         input_receipts=_trust_slots(
             (
@@ -158,7 +180,11 @@ def _gate():
                 "retrospective",
                 "baseline_evaluator",
                 "candidate_evaluator",
-            )
+            ),
+            authorization_receipt=authorization_receipt,
+            history_receipt=history_receipt,
+            admission_receipt=admission_receipt,
+            static_input_contract=static_input_contract,
         ),
         producer_attempt_chain=[],
         verification_attempt_receipt=_receipt(),
@@ -173,7 +199,7 @@ def _json_member(name):
     return payload
 
 
-def _members():
+def _members(candidate_gate=None):
     return {
         "terminal_attempt/resource_guard.jsonl": b'{"attempt_role":"producer"}\n',
         "terminal_attempt/attempt_record.json": _json_member("attempt"),
@@ -184,28 +210,40 @@ def _members():
         "temporal_retrospective.json": _json_member("retrospective"),
         "baseline_final_evaluator.json": _json_member("baseline-evaluator"),
         "candidate_final_evaluator.json": _json_member("candidate-evaluator"),
-        "candidate_gate.json": _gate(),
+        "candidate_gate.json": candidate_gate or _gate(),
     }
 
 
-def _result_payload():
-    member_rows = [_member_row(path) for path in CANDIDATE_MEMBER_PATHS]
+def _result_payload(
+    *,
+    authorization_receipt=None,
+    history_receipt=None,
+    admission_receipt=None,
+    static_input_contract=None,
+    candidate_member_receipts=None,
+    candidate_published_history_head_receipt=None,
+):
+    member_rows = candidate_member_receipts or [_member_row(path) for path in CANDIDATE_MEMBER_PATHS]
     member_by_path = {row["relative_path"]: row for row in member_rows}
+    authorization_receipt = authorization_receipt or _receipt()
+    history_receipt = history_receipt or {
+        "run_identity_receipt": _receipt(),
+        "head_receipt": candidate_published_history_head_receipt or _receipt(),
+        "marker_count": 0,
+    }
+    admission_receipt = admission_receipt or _receipt()
+    static_input_contract = static_input_contract or _admission()["static_input_contract"]
     return build_postpublication_verification_payload(
         error_bounds_pass=True,
         authorization_receipts={
             "parent_spec_approval": _receipt(),
             "amendment_implementation_approval": _receipt(),
             "amended_implementation_review": _receipt(),
-            "rerun_authorization": _receipt(),
+            "rerun_authorization": authorization_receipt,
         },
-        run_history_contract_receipt={
-            "run_identity_receipt": _receipt(),
-            "head_receipt": _receipt(),
-            "marker_count": 0,
-        },
-        run_admission_receipt=_receipt(),
-        static_input_contract=_admission()["static_input_contract"],
+        run_history_contract_receipt=history_receipt,
+        run_admission_receipt=admission_receipt,
+        static_input_contract=static_input_contract,
         candidate_receipt_bundle_receipt=_receipt(),
         candidate_member_receipts=member_rows,
         prior_attempt_receipts=[],
@@ -221,7 +259,34 @@ def _result_payload():
 
 
 def test_run_v2_pipeline_end_to_end(tmp_path):
-    members = _members()
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    root = out / "vru_causal_temporal_retrospective_v2"
+    lock2 = out / ".lock"
+    lock2.write_text("")
+    bundle_path = tmp_path / "candidate-receipt-bundle.json"
+    claim = _claim(str(root))
+    admission = _admission(str(root), _file_receipt(claim))
+    completion = _completed(str(root), _file_receipt(claim), _file_receipt(admission))
+    admission_receipt = _file_receipt(admission)
+    completion_receipt = _file_receipt(completion)
+    candidate_published_history_head_receipt = _receipt()
+    authorization_receipt = _receipt()
+    static_input_contract = admission["static_input_contract"]
+    history_receipt = {
+        "run_identity_receipt": completion_receipt,
+        "head_receipt": completion_receipt,
+        "marker_count": 0,
+    }
+    candidate_gate = _gate(
+        authorization_receipt=authorization_receipt,
+        history_receipt=history_receipt,
+        admission_receipt=admission_receipt,
+        static_input_contract=static_input_contract,
+    )
+    members = _members(candidate_gate)
     encoded = assemble_candidate_members(members)
 
     # Pre-publish candidate_v2 in a scratch root to compute the bundle's member
@@ -233,27 +298,26 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
     pre_candidate = seal_candidate_v2(scratch, encoded, flock_path=lock)
 
     bundle_payload = build_candidate_receipt_bundle_payload(
-        authorization_receipt=_receipt(),
-        run_identity_receipt=_receipt(),
-        run_admission_receipt=_receipt(),
-        static_input_contract=_admission()["static_input_contract"],
-        candidate_published_history_head_receipt=_receipt(),
+        authorization_receipt=authorization_receipt,
+        run_identity_receipt=completion_receipt,
+        run_admission_receipt=admission_receipt,
+        static_input_contract=static_input_contract,
+        candidate_published_history_head_receipt=candidate_published_history_head_receipt,
         candidate_dir=pre_candidate,
         observed_at_utc="2026-08-17T00:00:00Z",
     )
-
-    # Run the pipeline on a fresh registry + fresh output root.
-    reg = tmp_path / "registry"
-    reg.mkdir()
-    out = tmp_path / "out"
-    out.mkdir()
-    lock2 = out / ".lock"
-    lock2.write_text("")
-    root = out / "vru_causal_temporal_retrospective_v2"
-    bundle_path = tmp_path / "candidate-receipt-bundle.json"
-    claim = _claim(str(root))
-    admission = _admission(str(root), _file_receipt(claim))
-    completion = _completed(str(root), _file_receipt(claim), _file_receipt(admission))
+    result_payload = _result_payload(
+        authorization_receipt=authorization_receipt,
+        history_receipt={
+            "run_identity_receipt": completion_receipt,
+            "head_receipt": candidate_published_history_head_receipt,
+            "marker_count": 0,
+        },
+        admission_receipt=admission_receipt,
+        static_input_contract=static_input_contract,
+        candidate_member_receipts=build_member_receipts(pre_candidate),
+        candidate_published_history_head_receipt=candidate_published_history_head_receipt,
+    )
 
     with pytest.raises(PermissionError):
         run_v2_pipeline(
@@ -267,7 +331,58 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
             candidate_members=members,
             bundle_path=bundle_path,
             bundle_payload=bundle_payload,
-            result_payload=_result_payload(),
+            result_payload=result_payload,
+        )
+    assert not any(reg.iterdir())
+    assert not root.exists()
+    assert not bundle_path.exists()
+
+    bad_bundle = dict(bundle_payload)
+    bad_bundle["run_admission_receipt"] = _receipt()
+    bad_bundle["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bad_bundle.items() if key != "artifact_sha256"}
+    )
+    with pytest.raises(ValueError, match="bundle admission receipt"):
+        run_v2_pipeline(
+            output_root=root,
+            registry_dir=reg,
+            flock_path=lock2,
+            auth_sha256="0" * 64,
+            claim_payload=claim,
+            admission_payload=admission,
+            completion_payload=completion,
+            candidate_members=members,
+            bundle_path=bundle_path,
+            bundle_payload=bad_bundle,
+            result_payload=result_payload,
+            authorization_context=_issue_verified_v2_pipeline_admission_context(),
+        )
+    assert not any(reg.iterdir())
+    assert not root.exists()
+    assert not bundle_path.exists()
+
+    bad_result = dict(result_payload)
+    bad_member_rows = list(result_payload["candidate_member_receipts"])
+    bad_member_rows[0] = dict(bad_member_rows[0])
+    bad_member_rows[0]["file_sha256"] = "1" * 64
+    bad_result["candidate_member_receipts"] = bad_member_rows
+    bad_result["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bad_result.items() if key != "artifact_sha256"}
+    )
+    with pytest.raises(ValueError, match="candidate member receipts"):
+        run_v2_pipeline(
+            output_root=root,
+            registry_dir=reg,
+            flock_path=lock2,
+            auth_sha256="0" * 64,
+            claim_payload=claim,
+            admission_payload=admission,
+            completion_payload=completion,
+            candidate_members=members,
+            bundle_path=bundle_path,
+            bundle_payload=bundle_payload,
+            result_payload=bad_result,
+            authorization_context=_issue_verified_v2_pipeline_admission_context(),
         )
     assert not any(reg.iterdir())
     assert not root.exists()
@@ -284,7 +399,7 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
         candidate_members=members,
         bundle_path=bundle_path,
         bundle_payload=bundle_payload,
-        result_payload=_result_payload(),
+        result_payload=result_payload,
         authorization_context=_issue_verified_v2_pipeline_admission_context(),
     )
     assert result["candidate"] == root / "candidate_v2"

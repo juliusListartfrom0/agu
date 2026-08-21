@@ -39,6 +39,12 @@
   under those locks, rejects candidate drift and exact fixed-stage residue, and
   reopens the published bundle bytes. This is repository-local publication
   hardening, not a substitute for the external receipt issuer or OS sandbox.
+- The public pipeline preflight now cross-binds the candidate gate's
+  authorization, admission, and run-identity receipts to the actual admission
+  and completion bytes, then requires the bundle and result to share the same
+  authorization/admission/history/static-input tuple and exact candidate-member
+  rows. Mismatches fail before registry, output-root, or bundle writes; tests
+  cover admission drift and result-member drift with zero side effects.
 - `verified_result_v2` and `postverification_failure_v2` sealing now derive
   deterministic stage-directory names from the rerun-authorization SHA, reject
   pre-existing stage residue, publish no-clobber, and reopen exact member

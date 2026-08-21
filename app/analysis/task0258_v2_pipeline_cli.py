@@ -20,9 +20,11 @@ from pathlib import Path
 from app.analysis.task0258_module_a_v2 import (
     canonical_artifact_sha256,
     compact_canonical_json,
+    is_sha256,
     verify_internal_artifact_hash,
 )
 from app.analysis.task0258_v2_artifacts import (
+    CANDIDATE_INPUT_RECEIPT_PROVIDERS,
     CANDIDATE_MEMBER_PATHS,
     verify_candidate_gate,
     verify_candidate_receipt_bundle,
@@ -122,6 +124,16 @@ def run_v2_pipeline(
     if not isinstance(result_payload, Mapping):
         raise ValueError("verified result must be an object")
     verify_postpublication_verification(result_payload)
+    if not all(isinstance(payload, Mapping) for payload in (claim_payload, admission_payload, completion_payload)):
+        raise ValueError("run-history payloads must be objects")
+    _require_pipeline_receipt_bindings(
+        auth_sha256=auth_sha256,
+        candidate_gate=candidate_gate,
+        admission_payload=admission_payload,
+        completion_payload=completion_payload,
+        bundle_payload=bundle_payload,
+        result_payload=result_payload,
+    )
     create_run_history_registry(
         registry_dir=registry_dir,
         auth_sha256=auth_sha256,
@@ -153,6 +165,88 @@ def run_v2_pipeline(
     verify_postpublication_verification(bound_result)
     result = seal_verified_result(output_root, bound_result, flock_path=flock_path)
     return {"candidate": candidate, "bundle": bundle_path, "result": result}
+
+
+def _require_pipeline_receipt_bindings(
+    *,
+    auth_sha256: str,
+    candidate_gate: Mapping[str, object],
+    admission_payload: Mapping[str, object],
+    completion_payload: Mapping[str, object],
+    bundle_payload: Mapping[str, object],
+    result_payload: Mapping[str, object],
+) -> None:
+    """Require the supplied pipeline payloads to share one receipt tuple.
+
+    This preflight runs before registry or output publication.  It closes the
+    caller-self-reporting seam where individually valid candidate, bundle, and
+    result objects could otherwise describe different authorization, admission,
+    history, or candidate-member bytes.
+    """
+    if not is_sha256(auth_sha256):
+        raise ValueError("pipeline authorization SHA is invalid")
+    input_receipts = candidate_gate["input_receipts"]
+    authorization_index = CANDIDATE_INPUT_RECEIPT_PROVIDERS.index("exact_v2_rerun_authorization")
+    admission_index = CANDIDATE_INPUT_RECEIPT_PROVIDERS.index("run_admission")
+    history_index = CANDIDATE_INPUT_RECEIPT_PROVIDERS.index("run_history_ledger")
+    authorization_receipt = _verified_provider_receipt(input_receipts[authorization_index])
+    admission_receipt = _verified_provider_receipt(input_receipts[admission_index])
+    history_receipt = _verified_provider_receipt(input_receipts[history_index])
+    actual_admission_receipt = _json_artifact_receipt(admission_payload)
+    actual_completion_receipt = _json_artifact_receipt(completion_payload)
+
+    if authorization_receipt["artifact_sha256"] != auth_sha256:
+        raise ValueError("candidate gate authorization is not bound to the pipeline authorization")
+    if authorization_receipt != bundle_payload["authorization_receipt"]:
+        raise ValueError("candidate gate and bundle authorization receipts differ")
+    if admission_receipt != actual_admission_receipt:
+        raise ValueError("candidate gate admission receipt is not bound to admission bytes")
+    if bundle_payload["run_admission_receipt"] != actual_admission_receipt:
+        raise ValueError("bundle admission receipt is not bound to admission bytes")
+    if bundle_payload["static_input_contract"] != admission_payload["static_input_contract"]:
+        raise ValueError("bundle static input contract is not bound to admission")
+    if not isinstance(history_receipt, Mapping):
+        raise ValueError("candidate gate history receipt is invalid")
+    if history_receipt["run_identity_receipt"] != actual_completion_receipt:
+        raise ValueError("candidate gate run identity is not bound to completion bytes")
+    if bundle_payload["run_identity_receipt"] != history_receipt["run_identity_receipt"]:
+        raise ValueError("bundle run identity is not bound to the candidate gate")
+
+    result_authorization = result_payload["authorization_receipts"]
+    if not isinstance(result_authorization, Mapping):
+        raise ValueError("result authorization receipts are invalid")
+    if result_authorization["rerun_authorization"] != bundle_payload["authorization_receipt"]:
+        raise ValueError("result authorization is not bound to the bundle")
+    if result_payload["run_admission_receipt"] != bundle_payload["run_admission_receipt"]:
+        raise ValueError("result admission receipt is not bound to the bundle")
+    if result_payload["static_input_contract"] != bundle_payload["static_input_contract"]:
+        raise ValueError("result static input contract is not bound to the bundle")
+    result_history = result_payload["run_history_contract_receipt"]
+    if not isinstance(result_history, Mapping):
+        raise ValueError("result history contract receipt is invalid")
+    if result_history["run_identity_receipt"] != bundle_payload["run_identity_receipt"]:
+        raise ValueError("result run identity is not bound to the bundle")
+    if result_history["head_receipt"] != bundle_payload["candidate_published_history_head_receipt"]:
+        raise ValueError("result history head is not bound to the bundle")
+    if result_payload["candidate_member_receipts"] != bundle_payload["ordered_member_receipts"]:
+        raise ValueError("result candidate member receipts are not bound to the bundle")
+
+
+def _verified_provider_receipt(slot: object) -> Mapping[str, object]:
+    if not isinstance(slot, Mapping) or slot.get("verification_state") != "verified":
+        raise ValueError("pipeline provider slot is not verified")
+    receipt = slot.get("receipt")
+    if not isinstance(receipt, Mapping):
+        raise ValueError("pipeline provider receipt is invalid")
+    return receipt
+
+
+def _json_artifact_receipt(payload: Mapping[str, object]) -> dict[str, str]:
+    data = (compact_canonical_json(payload) + "\n").encode("utf-8")
+    return {
+        "artifact_sha256": str(payload["artifact_sha256"]),
+        "file_sha256": hashlib.sha256(data).hexdigest(),
+    }
 
 
 __all__ = [
