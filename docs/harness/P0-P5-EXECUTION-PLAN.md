@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 207 passed and
-      full suite is 2,075 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 209 passed and
+      full suite is 2,077 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -82,7 +82,10 @@ model execution or readiness transition.
       artifact and invokes its nested read-isolation gate before returning an
       opaque review-only object. A review-only trust-spine binder now binds
       that attempt to the loaded admission/history/authorization and output
-      root physical CAS. The
+      root physical CAS. A review-only no-write preflight now reopens the
+      output-root and registry identities, rejects reserved output/stage
+      residue and bundle-path aliases, and returns only a diagnostic write
+      plan; it cannot issue production authorization. The
       repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.

@@ -27,6 +27,7 @@ from app.analysis.task0258_module_a_v2 import (
 from app.analysis.task0258_run_history import (
     claim_filename,
     completion_filename,
+    registry_history_filenames,
     replay_run_history_registry,
     verify_run_admission,
     verify_run_consumption_claim,
@@ -52,6 +53,7 @@ _JSON_ARTIFACT_TOKEN = object()
 _READ_ISOLATION_TOKEN = object()
 _VERIFICATION_ATTEMPT_TOKEN = object()
 _ATTEMPT_SPINE_TOKEN = object()
+_PREFLIGHT_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
 
@@ -188,6 +190,44 @@ class VerifiedReviewVerificationAttemptRunSpine:
         self.attempt = kwargs["attempt"]
         self.run_admission = kwargs["run_admission"]
         self.run_history = kwargs["run_history"]
+
+
+class VerifiedReviewNoWritePreflight:
+    """Review-only replay of the complete no-write publication preflight.
+
+    This object records the identities and planned paths that a future
+    externally authorized runner would revalidate immediately before
+    publication. It deliberately carries no production authorization and is
+    rejected by :func:`run_v2_pipeline`.
+    """
+
+    __slots__ = (
+        "_token",
+        "attempt_spine",
+        "output_root",
+        "output_root_identity",
+        "registry_directory",
+        "registry_identity",
+        "candidate_bundle_path",
+        "planned_paths",
+        "production_capability",
+    )
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _PREFLIGHT_TOKEN:
+            raise TypeError("VerifiedReviewNoWritePreflight cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        self._token = token
+        self.attempt_spine = kwargs["attempt_spine"]
+        self.output_root = kwargs["output_root"]
+        self.output_root_identity = kwargs["output_root_identity"]
+        self.registry_directory = kwargs["registry_directory"]
+        self.registry_identity = kwargs["registry_identity"]
+        self.candidate_bundle_path = kwargs["candidate_bundle_path"]
+        self.planned_paths = tuple(kwargs["planned_paths"])
+        self.production_capability = False
 
 
 class VerifiedRunHistoryLedger:
@@ -710,6 +750,95 @@ def bind_verified_review_attempt_to_run_spine(
     )
 
 
+def bind_verified_review_no_write_preflight(
+    *,
+    execution_context: object,
+    attempt_spine: VerifiedReviewVerificationAttemptRunSpine,
+    candidate_bundle_path: Path,
+) -> VerifiedReviewNoWritePreflight:
+    """Replay the local no-write preflight for one verified review spine.
+
+    The checks intentionally stop before lock creation, directory creation,
+    model/device access, or output publication.  The returned object is a
+    diagnostic record only; an external runner must still bind kernel audit,
+    retained runtime, and exact rerun authorization before production use.
+    """
+    if type(execution_context) is not VerifiedImplementationReviewSandboxContext:
+        raise PermissionError("no-write preflight requires a verified review context")
+    if (
+        type(attempt_spine) is not VerifiedReviewVerificationAttemptRunSpine
+        or attempt_spine._token is not _ATTEMPT_SPINE_TOKEN
+    ):
+        raise TypeError("attempt spine is not a verified review object")
+
+    admission = attempt_spine.run_admission
+    history = attempt_spine.run_history
+    if type(admission) is not VerifiedReviewRunAdmission or admission._token is not _RUN_ADMISSION_TOKEN:
+        raise TypeError("no-write preflight admission is invalid")
+    if type(history) is not VerifiedRunHistoryLedger or history._token is not _RUN_HISTORY_TOKEN:
+        raise TypeError("no-write preflight history is invalid")
+
+    output_root = Path(admission.admission.payload["output_root_absolute_path"])
+    output_identity = _verify_review_temp_directory(output_root)
+    expected_root_identity = {
+        "device": output_identity[0],
+        "inode": output_identity[1],
+    }
+    if expected_root_identity != admission.root_identity:
+        raise ValueError("no-write preflight output-root identity drifted")
+    if admission.completion.payload["root_identity"] != expected_root_identity:
+        raise ValueError("no-write preflight completion root identity drifted")
+
+    reserved_output_names = {
+        "candidate_v2",
+        "terminal_failure_v2",
+        "verified_result_v2",
+        "postverification_failure_v2",
+    }
+    for entry in output_root.iterdir():
+        if entry.name.startswith(".") or entry.name in reserved_output_names:
+            raise ValueError("no-write preflight found reserved output residue")
+
+    registry = Path(history.directory)
+    registry_identity = _verify_review_temp_directory(registry)
+    if registry == output_root or registry in output_root.parents or output_root in registry.parents:
+        raise ValueError("no-write preflight registry and output root must be distinct")
+    expected_registry_names = registry_history_filenames(registry, history.authorization_sha256)
+    actual_registry_entries = list(registry.iterdir())
+    if {entry.name for entry in actual_registry_entries} != set(expected_registry_names):
+        raise ValueError("no-write preflight registry contains unstable residue")
+    if any(entry.is_symlink() or not entry.is_file() for entry in actual_registry_entries):
+        raise ValueError("no-write preflight registry contains a non-regular member")
+
+    bundle_path = Path(candidate_bundle_path)
+    _verify_absolute_no_symlink_path(bundle_path)
+    bundle_parent = bundle_path.parent
+    _verify_review_temp_directory(bundle_parent)
+    if bundle_path.exists() or bundle_path.is_symlink():
+        raise ValueError("no-write preflight candidate bundle target is not absent")
+    if bundle_parent == output_root or output_root in bundle_parent.parents:
+        raise ValueError("no-write preflight candidate bundle is inside the output root")
+    if bundle_parent == registry or registry in bundle_parent.parents:
+        raise ValueError("no-write preflight candidate bundle is inside the registry")
+
+    planned_paths = (
+        output_root / "candidate_v2",
+        bundle_path,
+        output_root / "verified_result_v2",
+        output_root / "postverification_failure_v2",
+    )
+    return VerifiedReviewNoWritePreflight(
+        _PREFLIGHT_TOKEN,
+        attempt_spine=attempt_spine,
+        output_root=output_root,
+        output_root_identity=expected_root_identity,
+        registry_directory=registry,
+        registry_identity={"device": registry_identity[0], "inode": registry_identity[1]},
+        candidate_bundle_path=bundle_path,
+        planned_paths=planned_paths,
+    )
+
+
 def _load_candidate_gate_artifact(
     *, candidate_dir: Path, member_receipts: list[dict[str, object]]
 ) -> VerifiedJsonArtifact:
@@ -1018,6 +1147,7 @@ __all__ = [
     "VerifiedReviewReadIsolationBinding",
     "VerifiedReviewVerificationAttempt",
     "VerifiedReviewVerificationAttemptRunSpine",
+    "VerifiedReviewNoWritePreflight",
     "VerifiedRunHistoryLedger",
     "VerifiedReviewRunAdmission",
     "bind_implementation_review_discovery_context",
@@ -1031,6 +1161,7 @@ __all__ = [
     "load_verified_read_isolation_binding",
     "load_verified_verification_attempt",
     "bind_verified_review_attempt_to_run_spine",
+    "bind_verified_review_no_write_preflight",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",
     "load_verified_run_history_ledger",
