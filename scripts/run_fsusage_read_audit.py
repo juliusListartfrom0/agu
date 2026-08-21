@@ -78,6 +78,14 @@ def _drain_text_stream(stream, sink: _BoundedTextCapture, errors: list[Exception
         errors.append(exc)
 
 
+def _join_diagnostic_drains(threads, *, timeout_seconds: float) -> None:
+    """Require every diagnostic drain to finish before parsing its transcript."""
+    for thread in threads:
+        thread.join(timeout=timeout_seconds)
+    if any(thread.is_alive() for thread in threads):
+        raise RuntimeError("fs_usage diagnostic stream did not finish")
+
+
 def run_read_audit(
     *,
     worker_argv: list[str],
@@ -131,8 +139,7 @@ def run_read_audit(
         fs.terminate()
     except ProcessLookupError:
         pass
-    t1.join(timeout=5)
-    t2.join(timeout=5)
+    _join_diagnostic_drains((t1, t2), timeout_seconds=5)
     if drain_errors:
         raise RuntimeError("fs_usage diagnostic stream drain failed") from drain_errors[0]
     fs_out = out_capture.finish()

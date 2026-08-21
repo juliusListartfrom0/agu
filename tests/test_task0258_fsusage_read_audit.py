@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.run_fsusage_read_audit import _BoundedTextCapture, _drain_text_stream
+from scripts.run_fsusage_read_audit import (
+    _BoundedTextCapture,
+    _drain_text_stream,
+    _join_diagnostic_drains,
+)
 
 
 def test_bounded_text_capture_returns_text_within_byte_cap():
@@ -43,6 +47,18 @@ def test_drain_text_stream_records_iterator_failures_for_main_thread():
     assert capture.finish() == "first line\n"
     assert len(errors) == 1
     assert str(errors[0]) == "decoder failed"
+
+
+def test_join_diagnostic_drains_rejects_a_stream_that_did_not_finish():
+    class HangingThread:
+        def join(self, timeout):
+            assert timeout == 0.25
+
+        def is_alive(self):
+            return True
+
+    with pytest.raises(RuntimeError, match="did not finish"):
+        _join_diagnostic_drains([HangingThread()], timeout_seconds=0.25)
 
 
 @pytest.mark.parametrize("maximum_bytes", [0, -1, True, 1.0])
