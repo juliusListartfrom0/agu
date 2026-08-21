@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from app.analysis import task0258_v2_capabilities as capabilities_module
 from app.analysis import vru_causal_temporal_retrospective as temporal_module
 from app.analysis.task0258_module_a_v2 import (
     VERIFICATION_ATTEMPT_SCHEMA_V2,
@@ -45,6 +46,7 @@ from app.analysis.task0258_v2_capabilities import (
     load_verified_parent_module_a_spec_approval,
     load_verified_read_isolation_binding,
     load_verified_review_rerun_authorization,
+    load_verified_review_rerun_authorization_bound_to_static_inputs,
     load_verified_run_admission,
     load_verified_run_history_ledger,
     load_verified_terminal_artifact,
@@ -1255,6 +1257,57 @@ def test_static_input_loader_replays_complete_parent_graph_as_review_only(tmp_pa
             expected_task0257_receipts=receipts,
             expected_task0257_receipts_projection_sha256=hashlib.sha256(projection).hexdigest(),
         )
+
+
+def test_review_rerun_authorization_requires_per_use_static_replay(tmp_path, monkeypatch):
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_bytes(b"plan\n")
+    static_inputs = VerifiedModuleAStaticInputs(
+        capabilities_module._STATIC_INPUTS_TOKEN,
+        temporal_plan_artifact_sha256="a" * 64,
+        temporal_plan_file_sha256="b" * 64,
+        temporal_plan_path=plan_path,
+        temporal_plan_snapshot=b"plan-snapshot",
+        task0257_input_paths_snapshot=b"paths-snapshot",
+        task0257_receipts_projection_sha256="c" * 64,
+        task0257_receipts_snapshot=b"receipts-snapshot",
+    )
+    capabilities_module._REGISTERED_STATIC_INPUTS_CAPABILITIES[id(static_inputs)] = (
+        static_inputs,
+        capabilities_module._static_inputs_fingerprint(static_inputs),
+    )
+    replay_calls = []
+    loader_calls = []
+    monkeypatch.setattr(
+        "app.analysis.task0258_v2_capabilities.replay_verified_module_a_static_inputs",
+        lambda value: replay_calls.append(value),
+    )
+    expected = object()
+    monkeypatch.setattr(
+        "app.analysis.task0258_v2_capabilities.load_verified_review_rerun_authorization",
+        lambda **kwargs: loader_calls.append(kwargs) or expected,
+    )
+
+    result = load_verified_review_rerun_authorization_bound_to_static_inputs(
+        execution_context=object(),
+        repository_root=tmp_path,
+        authorization_path=tmp_path / "authorization.json",
+        expected_artifact_sha256="d" * 64,
+        expected_file_sha256="e" * 64,
+        implementation_approval=object(),
+        implementation_review=object(),
+        static_inputs=static_inputs,
+        output_root=tmp_path / "output",
+        candidate_bundle_path=tmp_path / "bundle.json",
+    )
+
+    assert result is expected
+    assert replay_calls == [static_inputs]
+    assert loader_calls[0]["expected_static_input_contract"] == {
+        "temporal_plan_artifact_sha256": "a" * 64,
+        "temporal_plan_file_sha256": "b" * 64,
+        "task0257_receipts_projection_sha256": "c" * 64,
+    }
 
 
 def test_discovery_manifest_rejects_symlinked_temp_parent(tmp_path):

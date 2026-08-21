@@ -37,11 +37,11 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 ## In Progress
 
-> Follow-up verification (2026-08-22): the amended-implementation-review and static-input replays are local, review-only evidence; current totals are 212 TASK-0258 tests and 2,080 full-suite tests. The independent fresh-context review still must be externally issued/repeated; Apple Developer access remains optional for this local work and external for the real Endpoint Security gate.
+> Follow-up verification (2026-08-22): the amended-implementation-review, static-input, and authorization-binding replays are local, review-only evidence; current totals are 213 TASK-0258 tests and 2,081 full-suite tests. The independent fresh-context review still must be externally issued/repeated; Apple Developer access remains optional for this local work and external for the real Endpoint Security gate.
 
 > Local P3 preparation (2026-08-22): the review-only rerun-authorization replay now binds the exact approval/review/static-input receipts, fixed operation list, absent output and candidate-bundle paths, registry identity, and `module_b_authorized=false`. It returns no production capability and consumes no run; the actual exact-SHA authorization remains an external/user-issued gate.
 
-> Local static-input preparation (2026-08-22): `VerifiedModuleAStaticInputs` now replays the complete explicit temporal-plan/TASK-0257 graph, including all ordered JPEG, source-video, and checkpoint receipts, computes the caller-frozen projection, and returns only `production_capability=false`. Its review-only replay entry point reopens the stored plan and replays the parent graph on each use, including in-memory snapshot mutation rejection. It uses the repository's parent public verifier and does not authorize model execution or P5.
+> Local static-input preparation (2026-08-22): `VerifiedModuleAStaticInputs` now replays the complete explicit temporal-plan/TASK-0257 graph, including all ordered JPEG, source-video, and checkpoint receipts, computes the caller-frozen projection, and returns only `production_capability=false`. Its review-only replay entry point reopens the stored plan and replays the parent graph on each use, including in-memory snapshot mutation rejection. The review-only authorization binding requires this per-use replay before binding the static-input contract. It uses the repository's parent public verifier and does not authorize model execution or P5.
 
 > Latest push (2026-08-22): `codex/agu-p2` is at `6807865` with the local per-use static-input replay slice; `main` remains at `c5157f2` because the independent review and external platform gates are still open.
 

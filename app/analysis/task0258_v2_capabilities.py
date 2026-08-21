@@ -2489,6 +2489,36 @@ def load_verified_review_rerun_authorization(
     )
 
 
+def load_verified_review_rerun_authorization_bound_to_static_inputs(
+    *,
+    execution_context: object,
+    repository_root: Path,
+    authorization_path: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+    implementation_approval: VerifiedReviewImplementationApproval,
+    implementation_review: VerifiedReviewAmendedImplementationReview,
+    static_inputs: VerifiedModuleAStaticInputs,
+    output_root: Path,
+    candidate_bundle_path: Path,
+) -> VerifiedReviewRerunAuthorization:
+    """Replay review authorization only after per-use static-input replay."""
+    _require_verified_module_a_static_inputs(static_inputs)
+    replay_verified_module_a_static_inputs(static_inputs)
+    return load_verified_review_rerun_authorization(
+        execution_context=execution_context,
+        repository_root=repository_root,
+        authorization_path=authorization_path,
+        expected_artifact_sha256=expected_artifact_sha256,
+        expected_file_sha256=expected_file_sha256,
+        implementation_approval=implementation_approval,
+        implementation_review=implementation_review,
+        expected_static_input_contract=static_inputs.static_input_contract,
+        output_root=output_root,
+        candidate_bundle_path=candidate_bundle_path,
+    )
+
+
 def load_verified_parent_module_a_spec_approval(
     *,
     execution_context: object,
@@ -3217,6 +3247,7 @@ __all__ = [
     "load_verified_amendment_implementation_approval",
     "load_verified_amended_implementation_review",
     "load_verified_review_rerun_authorization",
+    "load_verified_review_rerun_authorization_bound_to_static_inputs",
     "load_verified_module_a_static_inputs",
     "replay_verified_module_a_static_inputs",
     "load_verified_review_implementation_approval",

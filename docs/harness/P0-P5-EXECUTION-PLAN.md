@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 212 passed and
-      full suite is 2,080 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 213 passed and
+      full suite is 2,081 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -108,7 +108,9 @@ model execution or readiness transition.
       receipts, computes the caller-frozen projection, and returns an opaque
       `production_capability=false` wrapper. Its review-only replay entry point
       reopens the plan and replays the full parent graph again on every use; it
-      does not authorize a run.
+      does not authorize a run. The authorization replay now has a separate
+      review-only entry point that requires this per-use static replay before
+      binding the exact three-hash contract.
       repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.
