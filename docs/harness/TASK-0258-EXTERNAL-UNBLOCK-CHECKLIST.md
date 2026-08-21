@@ -85,7 +85,7 @@ diagnostic projection without upgrading it to an attestation:
 The expected local result is `status=valid_diagnostic_transcript` with
 `finalization_verified=true`, `evidence_class=diagnostic_only`,
 `production_capability=false`, and `p5_ready=false`. A missing/unclean
-finalization record, truncated row, symlinked file, or count mismatch must
+finalization record, truncated row, symlinked file/ancestor, or count mismatch must
 return `invalid_diagnostic_transcript` and a nonzero exit code.
 
 ## Install and collect approval evidence

@@ -42,7 +42,7 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > returning only `valid_diagnostic_transcript`; it cannot create authorization,
 > kernel evidence, or P5 readiness.
 
-> Follow-up verification (2026-08-22): the amended-implementation-review, static-input, authorization-binding, run-admission-binding, terminal-binding, real bootstrap-launcher integration, bounded `fs_usage` diagnostic parser/capture, worker launch-input validation, and local Endpoint Security client/probe hardening are local, review-only evidence; current totals are 256 TASK-0258 tests and 2,124 full-suite tests. The independent fresh-context review still must be externally issued/repeated; Apple Developer access remains optional for this local work and external for the real Endpoint Security gate.
+> Follow-up verification (2026-08-22): the amended-implementation-review, static-input, authorization-binding, run-admission-binding, terminal-binding, real bootstrap-launcher integration, bounded `fs_usage` diagnostic parser/capture, worker launch-input validation, and local Endpoint Security client/probe hardening are local, review-only evidence; current totals are 257 TASK-0258 tests and 2,125 full-suite tests. The independent fresh-context review still must be externally issued/repeated; Apple Developer access remains optional for this local work and external for the real Endpoint Security gate.
 
 > Local audit/worker hardening (2026-08-22): `parse_fsusage_transcript()` and the
 > UTF-8 transcript bytes and parsed event rows against the v2 read-event caps,
