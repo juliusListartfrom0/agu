@@ -92,6 +92,168 @@ def test_run_read_audit_uses_sanitized_worker_process_group(monkeypatch):
     assert calls[0][1]["start_new_session"] is True
 
 
+def test_run_read_audit_reaps_worker_when_fs_usage_cannot_start(monkeypatch):
+    class StubbornWorker:
+        pid = 4321
+
+        def __init__(self):
+            self.terminated = False
+            self.reaped = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(cmd=["worker"], timeout=timeout)
+            self.reaped = True
+
+    worker = StubbornWorker()
+    popen_calls = 0
+
+    def fail_fs_usage(argv, **kwargs):
+        nonlocal popen_calls
+        popen_calls += 1
+        if popen_calls == 1:
+            return worker
+        raise OSError("fs_usage unavailable")
+
+    kill_calls = []
+    monkeypatch.setattr(subprocess, "Popen", fail_fs_usage)
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: kill_calls.append((pid, sig)))
+
+    with pytest.raises(OSError, match="fs_usage unavailable"):
+        run_read_audit(worker_argv=["worker"], policy_payload={}, attestation_inputs={})
+
+    assert worker.terminated is True
+    assert worker.reaped is True
+    assert kill_calls == [(worker.pid, signal.SIGKILL)]
+
+
+def test_run_read_audit_reaps_fs_usage_after_worker_finishes(monkeypatch):
+    class FinishedWorker:
+        pid = 1111
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    class DiagnosticProcess:
+        pid = 2222
+        returncode = 0
+
+        def __init__(self):
+            self.terminated = False
+            self.reaped = False
+            self.stdin = None
+            self.stdout = [""]
+            self.stderr = [""]
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            self.reaped = True
+            return self.returncode
+
+    worker = FinishedWorker()
+    diagnostic = DiagnosticProcess()
+    popen_calls = 0
+
+    def fake_popen(argv, **kwargs):
+        nonlocal popen_calls
+        popen_calls += 1
+        if popen_calls == 1:
+            return worker
+        diagnostic.stdin = kwargs.get("stdin")
+        return diagnostic
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    sha = "0" * 64
+    inputs = {
+        "policy_artifact_sha256": sha,
+        "provider_receipt": {},
+        "run_identity_receipt": {},
+        "worker_role": "verification",
+        "provider_process_instance_id": 1,
+        "child_nonce": sha,
+        "prepare_artifact_sha256": sha,
+        "prepared_artifact_sha256": sha,
+        "child_started_artifact_sha256": sha,
+        "permit_artifact_sha256": sha,
+        "finalize_artifact_sha256": sha,
+    }
+    with pytest.raises(PermissionError, match="externally authenticated"):
+        run_read_audit(worker_argv=["worker"], policy_payload={}, attestation_inputs=inputs)
+
+    assert diagnostic.reaped is True
+
+
+def test_run_read_audit_reaps_worker_when_diagnostic_drain_cleanup_fails(monkeypatch):
+    class Worker:
+        pid = 3333
+
+        def __init__(self):
+            self.terminated = False
+            self.reaped = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            self.reaped = True
+            return 0
+
+    class DiagnosticProcess:
+        pid = 4444
+        returncode = 0
+
+        def __init__(self):
+            self.stdin = None
+            self.stdout = [""]
+            self.stderr = [""]
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    worker = Worker()
+    diagnostic = DiagnosticProcess()
+    popen_calls = 0
+
+    def fake_popen(argv, **kwargs):
+        nonlocal popen_calls
+        popen_calls += 1
+        if popen_calls == 1:
+            return worker
+        return diagnostic
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        "scripts.run_fsusage_read_audit._join_diagnostic_drains",
+        lambda threads, timeout_seconds: (_ for _ in ()).throw(RuntimeError("drain failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="drain failed"):
+        run_read_audit(worker_argv=["worker"], policy_payload={}, attestation_inputs={})
+
+    assert worker.terminated is True
+    assert worker.reaped is True
+
+
 def test_run_read_audit_rejects_invalid_worker_timeout_before_spawn(monkeypatch):
     def fail_popen(*args, **kwargs):
         pytest.fail("invalid worker timeout reached Popen")

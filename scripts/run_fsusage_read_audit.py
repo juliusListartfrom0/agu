@@ -98,12 +98,30 @@ def _wait_for_worker(proc, worker_argv: list[str], *, timeout_seconds: int) -> N
     try:
         proc.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait()
+        _kill_process_group(proc)
         raise WorkerTimeoutError(worker_argv, timeout_seconds, "", "") from None
+
+
+def _kill_process_group(proc) -> None:
+    """Hard-kill and reap a process whose group was created by this harness."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
+
+
+def _terminate_and_reap_process(proc, *, timeout_seconds: int = 5) -> None:
+    """Best-effort terminate, escalation, and reap for a harness child."""
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
 
 
 def run_read_audit(
@@ -144,37 +162,46 @@ def run_read_audit(
     fs_argv = sudo_mode + ["fs_usage", "-w", "-f", "filesys", str(proc.pid)]
     if fs_usage_extra_args:
         fs_argv = fs_argv[:3] + fs_usage_extra_args + fs_argv[3:]
-    fs = subprocess.Popen(
-        fs_argv,
-        stdin=subprocess.PIPE if sudo_password is not None else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if sudo_password is not None:
-        fs.stdin.write(sudo_password + "\n")
-        fs.stdin.flush()
-        fs.stdin.close()
     out_capture = _BoundedTextCapture(maximum_bytes=_MAXIMUM_DIAGNOSTIC_TRANSCRIPT_BYTES)
     err_capture = _BoundedTextCapture(maximum_bytes=_MAXIMUM_DIAGNOSTIC_TRANSCRIPT_BYTES)
     drain_errors: list[Exception] = []
-
-    t1 = threading.Thread(target=_drain_text_stream, args=(fs.stdout, out_capture, drain_errors), daemon=True)
-    t2 = threading.Thread(target=_drain_text_stream, args=(fs.stderr, err_capture, drain_errors), daemon=True)
-    t1.start()
-    t2.start()
-    worker_error: Exception | None = None
+    drain_threads = []
+    fs = None
     try:
+        fs = subprocess.Popen(
+            fs_argv,
+            stdin=subprocess.PIPE if sudo_password is not None else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        t1 = threading.Thread(target=_drain_text_stream, args=(fs.stdout, out_capture, drain_errors), daemon=True)
+        t2 = threading.Thread(target=_drain_text_stream, args=(fs.stderr, err_capture, drain_errors), daemon=True)
+        drain_threads = [t1, t2]
+        t1.start()
+        t2.start()
+        if sudo_password is not None:
+            if fs.stdin is None:
+                raise RuntimeError("fs_usage stdin was not opened")
+            fs.stdin.write(sudo_password + "\n")
+            fs.stdin.flush()
+            fs.stdin.close()
         _wait_for_worker(proc, worker_argv, timeout_seconds=worker_timeout_seconds)
-    except Exception as exc:
-        worker_error = exc
-    try:
-        fs.terminate()
-    except ProcessLookupError:
-        pass
-    _join_diagnostic_drains((t1, t2), timeout_seconds=5)
-    if worker_error is not None:
-        raise worker_error
+    finally:
+        try:
+            if fs is not None:
+                try:
+                    if fs.stdin is not None:
+                        fs.stdin.close()
+                except (OSError, ValueError):
+                    pass
+                _terminate_and_reap_process(fs)
+            if drain_threads:
+                _join_diagnostic_drains(drain_threads, timeout_seconds=5)
+        finally:
+            _terminate_and_reap_process(proc)
+
     if drain_errors:
         raise RuntimeError("fs_usage diagnostic stream drain failed") from drain_errors[0]
     fs_out = out_capture.finish()

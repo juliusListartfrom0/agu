@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `257 passed` (including the local simulation command,
+- TASK-0258 focused suite: `260 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or OS-enforced process-tree cleanup.
-- Latest full repository pytest: `2,125 passed, 5
+- Latest full repository pytest: `2,128 passed, 5
   skipped, 15 warnings`.
 - The bounded fs_usage capture regression defers malformed stream input to
   `finish()` and records background iterator failures for the main caller;
@@ -26,7 +26,9 @@
   from reaching the parser.
 - The fs_usage audit entry point rejects malformed worker argv before spawn and
   uses the shared sanitized environment and new-process-group contract, then
-  kills/reaps the worker group on timeout.
+  kills/reaps the worker group on timeout. It also starts fs_usage in its own
+  process group and reaps both children when observer startup or diagnostic
+  drain cleanup fails; this remains local cleanup evidence only.
 - The Endpoint Security diagnostic client accepts only strict positive decimal
   PID/timeout values, subscribes to the target EXIT event, and uses a bounded
   default 120-second lifetime with timeout exit code `4`; this prevents an
