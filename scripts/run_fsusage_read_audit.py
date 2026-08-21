@@ -40,17 +40,20 @@ class _BoundedTextCapture:
         self._total_bytes = 0
         self._lines: list[str] = []
         self._exceeded = False
+        self._error: ValueError | None = None
 
     def append(self, line: str) -> None:
         """Retain a line only while the complete stream remains under the cap."""
         if not isinstance(line, str):
-            raise ValueError("diagnostic stream must contain text")
-        if self._exceeded:
+            self._error = ValueError("diagnostic stream must contain text")
+            return
+        if self._exceeded or self._error is not None:
             return
         try:
             line_bytes = len(line.encode("utf-8"))
-        except UnicodeEncodeError as exc:
-            raise ValueError("diagnostic stream must contain UTF-8 text") from exc
+        except UnicodeEncodeError:
+            self._error = ValueError("diagnostic stream must contain UTF-8 text")
+            return
         if self._total_bytes + line_bytes > self._maximum_bytes:
             self._exceeded = True
             return
@@ -59,9 +62,20 @@ class _BoundedTextCapture:
 
     def finish(self) -> str:
         """Return retained text or fail closed after an over-limit stream."""
+        if self._error is not None:
+            raise self._error
         if self._exceeded:
             raise ValueError("diagnostic transcript exceeds byte cap")
         return "".join(self._lines)
+
+
+def _drain_text_stream(stream, sink: _BoundedTextCapture, errors: list[Exception]) -> None:
+    """Drain one diagnostic stream while making iterator failures observable."""
+    try:
+        for line in stream:
+            sink.append(line)
+    except Exception as exc:
+        errors.append(exc)
 
 
 def run_read_audit(
@@ -106,13 +120,10 @@ def run_read_audit(
         fs.stdin.close()
     out_capture = _BoundedTextCapture(maximum_bytes=_MAXIMUM_DIAGNOSTIC_TRANSCRIPT_BYTES)
     err_capture = _BoundedTextCapture(maximum_bytes=_MAXIMUM_DIAGNOSTIC_TRANSCRIPT_BYTES)
+    drain_errors: list[Exception] = []
 
-    def _drain(stream, sink):
-        for line in stream:
-            sink.append(line)
-
-    t1 = threading.Thread(target=_drain, args=(fs.stdout, out_capture), daemon=True)
-    t2 = threading.Thread(target=_drain, args=(fs.stderr, err_capture), daemon=True)
+    t1 = threading.Thread(target=_drain_text_stream, args=(fs.stdout, out_capture, drain_errors), daemon=True)
+    t2 = threading.Thread(target=_drain_text_stream, args=(fs.stderr, err_capture, drain_errors), daemon=True)
     t1.start()
     t2.start()
     proc.wait()
@@ -122,6 +133,8 @@ def run_read_audit(
         pass
     t1.join(timeout=5)
     t2.join(timeout=5)
+    if drain_errors:
+        raise RuntimeError("fs_usage diagnostic stream drain failed") from drain_errors[0]
     fs_out = out_capture.finish()
     fs_err = err_capture.finish()
     if fs.returncode not in (0, -15, None) and not fs_out and fs_err:

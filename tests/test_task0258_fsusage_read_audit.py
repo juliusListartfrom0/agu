@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.run_fsusage_read_audit import _BoundedTextCapture
+from scripts.run_fsusage_read_audit import _BoundedTextCapture, _drain_text_stream
 
 
 def test_bounded_text_capture_returns_text_within_byte_cap():
@@ -21,6 +21,28 @@ def test_bounded_text_capture_drains_after_cap_without_retaining_more_data():
     capture.append("and this later line is discarded")
     with pytest.raises(ValueError, match="byte cap"):
         capture.finish()
+
+
+def test_bounded_text_capture_defers_malformed_input_failure_to_finish():
+    capture = _BoundedTextCapture(maximum_bytes=8)
+    capture.append(None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="text"):
+        capture.finish()
+
+
+def test_drain_text_stream_records_iterator_failures_for_main_thread():
+    class FailingStream:
+        def __iter__(self):
+            yield "first line\n"
+            raise RuntimeError("decoder failed")
+
+    capture = _BoundedTextCapture(maximum_bytes=32)
+    errors = []
+    _drain_text_stream(FailingStream(), capture, errors)
+
+    assert capture.finish() == "first line\n"
+    assert len(errors) == 1
+    assert str(errors[0]) == "decoder failed"
 
 
 @pytest.mark.parametrize("maximum_bytes", [0, -1, True, 1.0])
