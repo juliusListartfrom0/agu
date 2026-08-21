@@ -21,6 +21,7 @@ from app.analysis.task0258_module_a_v2 import (
     POSTPUBLICATION_VERIFICATION_SCHEMA_V2,
     canonical_artifact_sha256,
     compact_canonical_json,
+    is_sha256,
     verify_internal_artifact_hash,
 )
 from app.analysis.task0258_v2_artifacts import (
@@ -32,10 +33,11 @@ from app.analysis.task0258_v2_artifacts import (
     verify_postpublication_verification,
 )
 from app.analysis.task0258_v2_fs import (
-    atomic_write_json,
+    atomic_write_bytes,
     exclusive_flock,
     seal_generation_directory,
     verify_absent,
+    verify_generation_directory,
 )
 from app.analysis.task0258_v2_gate import (
     CANDIDATE_PREPUBLICATION_CHECKS,
@@ -174,20 +176,54 @@ def build_candidate_receipt_bundle_payload(
 def seal_candidate_receipt_bundle(
     bundle_path: Path,
     bundle_payload: object,
+    *,
+    candidate_dir: Path,
+    output_flock_path: Path,
 ) -> Path:
-    """No-clobber publish the candidate receipt bundle outside the output root."""
+    """No-clobber publish the candidate receipt bundle under both phase locks.
+
+    The candidate directory is re-opened and its member receipts are recomputed
+    while holding the output-root lock. The bundle transaction uses the fixed
+    authorization-bound stage basename from Amendment-001 rather than a random
+    caller-independent stage.
+    """
     if not isinstance(bundle_payload, Mapping):
         raise ValueError("candidate receipt bundle must be an object")
     verify_candidate_receipt_bundle(bundle_payload)
-    verify_absent(bundle_path)
+    if not bundle_path.is_absolute() or not candidate_dir.is_absolute() or not output_flock_path.is_absolute():
+        raise ValueError("candidate bundle paths must be absolute")
+    if bundle_path.name != "candidate-receipt-bundle.json":
+        raise ValueError("candidate receipt bundle basename is not authorized")
+    if candidate_dir.name != "candidate_v2":
+        raise ValueError("candidate bundle output-root binding is invalid")
+    if bundle_path.is_relative_to(candidate_dir.parent):
+        raise ValueError("candidate receipt bundle must be outside the output root")
+    if output_flock_path.is_relative_to(candidate_dir):
+        raise ValueError("candidate output lock must be outside the candidate generation")
+    if output_flock_path == bundle_path.parent / ".candidate-receipt-bundle.lock":
+        raise ValueError("candidate output and bundle locks must be distinct")
+    authorization_receipt = bundle_payload["authorization_receipt"]
+    if not isinstance(authorization_receipt, Mapping) or not is_sha256(authorization_receipt["artifact_sha256"]):
+        raise ValueError("candidate bundle authorization receipt is invalid")
+    stage_path = bundle_path.parent / (
+        f".{authorization_receipt['artifact_sha256']}.{bundle_path.name}.task0258-bundle-stage"
+    )
     lock_path = bundle_path.parent / ".candidate-receipt-bundle.lock"
-    with exclusive_flock(lock_path):
-        verify_absent(bundle_path)
-        atomic_write_json(bundle_path, bundle_payload, mode=0o600)
-        reopened = bundle_path.read_bytes()
-        expected = (compact_canonical_json(bundle_payload) + "\n").encode("utf-8")
-        if reopened != expected:
-            raise ValueError("candidate receipt bundle changed during publication")
+    bundle_bytes = (compact_canonical_json(bundle_payload) + "\n").encode("utf-8")
+    with exclusive_flock(output_flock_path):
+        with exclusive_flock(lock_path):
+            verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
+            actual_member_receipts = build_member_receipts(candidate_dir)
+            if list(bundle_payload["ordered_member_receipts"]) != actual_member_receipts:
+                raise ValueError("candidate receipt bundle is not bound to the locked candidate bytes")
+            verify_absent(bundle_path)
+            verify_absent(stage_path)
+            atomic_write_bytes(bundle_path, bundle_bytes, mode=0o600, stage_path=stage_path)
+            reopened = bundle_path.read_bytes()
+            if reopened != bundle_bytes:
+                raise ValueError("candidate receipt bundle changed during publication")
+            if stage_path.exists() or stage_path.is_symlink():
+                raise ValueError("candidate receipt bundle stage remained after publication")
     return bundle_path
 
 

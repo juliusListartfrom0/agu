@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_pipeline import (
@@ -147,10 +149,89 @@ def test_candidate_receipt_bundle(tmp_path):
     )
     assert bundle["candidate_generation_name"] == "candidate_v2"
     assert len(bundle["ordered_member_receipts"]) == 10
-    bundle_path = tmp_path / "bundle.json"
-    seal_candidate_receipt_bundle(bundle_path, bundle)
+    bundle_path = tmp_path / "candidate-receipt-bundle.json"
+    seal_candidate_receipt_bundle(
+        bundle_path,
+        bundle,
+        candidate_dir=final,
+        output_flock_path=lock,
+    )
     assert bundle_path.is_file()
     assert json.loads(bundle_path.read_text())["candidate_generation_name"] == "candidate_v2"
+    stage_path = (
+        tmp_path / f".{bundle['authorization_receipt']['artifact_sha256']}.{bundle_path.name}.task0258-bundle-stage"
+    )
+    assert not stage_path.exists()
+
+
+def test_candidate_receipt_bundle_rejects_locked_candidate_drift(tmp_path):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / ".lock"
+    lock.write_text("")
+    final = seal_candidate_v2(out, members, flock_path=lock)
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=final,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    mutated = final / "temporal_retrospective.json"
+    mutated.write_bytes(mutated.read_bytes() + b" ")
+
+    with pytest.raises(ValueError, match="locked candidate bytes"):
+        seal_candidate_receipt_bundle(
+            tmp_path / "candidate-receipt-bundle.json",
+            bundle,
+            candidate_dir=final,
+            output_flock_path=lock,
+        )
+
+
+def test_candidate_receipt_bundle_rejects_fixed_stage_residue(tmp_path):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / ".lock"
+    lock.write_text("")
+    final = seal_candidate_v2(out, members, flock_path=lock)
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=final,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    bundle_path = tmp_path / "candidate-receipt-bundle.json"
+    stage_path = (
+        tmp_path / f".{bundle['authorization_receipt']['artifact_sha256']}.{bundle_path.name}.task0258-bundle-stage"
+    )
+    stage_path.write_bytes(b"residue")
+
+    with pytest.raises(FileExistsError):
+        seal_candidate_receipt_bundle(
+            bundle_path,
+            bundle,
+            candidate_dir=final,
+            output_flock_path=lock,
+        )
+
+    assert not bundle_path.exists()
+    assert stage_path.read_bytes() == b"residue"
 
 
 def _result(error_bounds_pass=True):

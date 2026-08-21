@@ -14,7 +14,11 @@ from app.analysis.task0258_v2_pipeline import (
     build_postpublication_verification_payload,
     seal_candidate_v2,
 )
-from app.analysis.task0258_v2_pipeline_cli import assemble_candidate_members, run_v2_pipeline
+from app.analysis.task0258_v2_pipeline_cli import (
+    _issue_verified_v2_pipeline_admission_context,
+    assemble_candidate_members,
+    run_v2_pipeline,
+)
 
 
 def _receipt():
@@ -246,7 +250,7 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
     lock2 = out / ".lock"
     lock2.write_text("")
     root = out / "vru_causal_temporal_retrospective_v2"
-    bundle_path = tmp_path / "bundle.json"
+    bundle_path = tmp_path / "candidate-receipt-bundle.json"
     claim = _claim(str(root))
     admission = _admission(str(root), _file_receipt(claim))
     completion = _completed(str(root), _file_receipt(claim), _file_receipt(admission))
@@ -268,3 +272,21 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
     assert not any(reg.iterdir())
     assert not root.exists()
     assert not bundle_path.exists()
+
+    result = run_v2_pipeline(
+        output_root=root,
+        registry_dir=reg,
+        flock_path=lock2,
+        auth_sha256="0" * 64,
+        claim_payload=claim,
+        admission_payload=admission,
+        completion_payload=completion,
+        candidate_members=members,
+        bundle_path=bundle_path,
+        bundle_payload=bundle_payload,
+        result_payload=_result_payload(),
+        authorization_context=_issue_verified_v2_pipeline_admission_context(),
+    )
+    assert result["candidate"] == root / "candidate_v2"
+    assert result["bundle"] == bundle_path
+    assert result["result"] == root / "verified_result_v2"

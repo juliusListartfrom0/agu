@@ -135,7 +135,12 @@ def run_v2_pipeline(
     actual_member_receipts = build_member_receipts(candidate)
     if list(bundle_payload["ordered_member_receipts"]) != actual_member_receipts:
         raise ValueError("candidate receipt bundle is not bound to the published candidate bytes")
-    seal_candidate_receipt_bundle(bundle_path, bundle_payload)
+    seal_candidate_receipt_bundle(
+        bundle_path,
+        bundle_payload,
+        candidate_dir=candidate,
+        output_flock_path=flock_path,
+    )
     bundle_bytes = bundle_path.read_bytes()
     bound_result = dict(result_payload)
     bound_result["candidate_receipt_bundle_receipt"] = {

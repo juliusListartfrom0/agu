@@ -119,18 +119,35 @@ def publish_no_clobber(staged: Path, final: Path) -> None:
     os.unlink(staged)
 
 
-def atomic_write_bytes(final: Path, data: bytes, *, mode: int = 0o600) -> None:
+def atomic_write_bytes(
+    final: Path,
+    data: bytes,
+    *,
+    mode: int = 0o600,
+    stage_path: Path | None = None,
+) -> None:
     """Write ``data`` to ``final`` atomically and without overwriting an existing file.
 
     Writes a private stage in the same directory, fsyncs it, publishes with
-    ``publish_no_clobber``, then fsyncs the parent directory.
+    ``publish_no_clobber``, then fsyncs the parent directory. Callers that have
+    an externally frozen transaction name may supply ``stage_path``; it must be
+    in the final file's parent and is still created with no-follow,
+    no-clobber semantics.
     """
     parent = final.parent
     _verify_no_symlink_ancestors(parent)
     if not isinstance(data, bytes):
         raise TypeError("atomic_write_bytes data must be bytes")
-    stage = parent / f".{final.name}.{secrets.token_hex(16)}.stage"
-    fd = os.open(os.fspath(stage), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    if stage_path is None:
+        stage = parent / f".{final.name}.{secrets.token_hex(16)}.stage"
+    else:
+        stage = Path(stage_path)
+        if stage.parent != parent or not stage.name or stage.name in {".", ".."}:
+            raise ValueError("fixed atomic-write stage must be a sibling of the final path")
+        _verify_no_symlink_ancestors(stage.parent)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(os.fspath(stage), flags, mode)
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)

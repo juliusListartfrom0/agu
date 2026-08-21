@@ -37,13 +37,16 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 182 passed and
-      full suite is 2,050 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 184 passed and
+      full suite is 2,052 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
       path, and all v2 lock acquisition creates/opens a regular lock file
-      without following a lock-path symlink. The repeatable
+      without following a lock-path symlink. Candidate receipt-bundle sealing
+      now reopens the candidate under the output-root lock, holds a distinct
+      bundle-parent lock, uses the fixed authorization-bound stage basename,
+      and reopens the published bundle. The repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
