@@ -18,6 +18,8 @@ model execution or readiness transition.
   Endpoint Security entitlement, external approval, and authenticated kernel
   observation. Keep P3/P4/P5 and readiness incomplete until those gates are
   satisfied.
+- The exact external handoff procedure is recorded in
+  [`TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`](TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md).
 
 ## Phase gates
 

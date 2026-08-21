@@ -32,7 +32,8 @@ review-only synthetic scenarios, capability probes, pytest, and Harness checks
 without Apple Developer Program access. The ad-hoc/no-sudo probe remains
 diagnostic only; it cannot supply Endpoint Security entitlement, user approval,
 kernel read-isolation evidence, rerun authorization, or P5 readiness. P1/P2
-external gates and P3–P5 therefore remain open.
+external gates and P3–P5 therefore remain open. The post-team handoff is
+documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 ## In Progress
 
