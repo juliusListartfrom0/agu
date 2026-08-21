@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 191 passed and
-      full suite is 2,059 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 194 passed and
+      full suite is 2,062 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -62,6 +62,11 @@ model execution or readiness transition.
       durable ledger head under the registry lock. The review-only candidate
       bundle loader now requires an absolute `candidate_v2` directory and
       replays its exact ten member receipts, rejecting candidate drift. The
+      review-only admission loader now replays claim/admission/completion
+      receipt edges and physical CAS; the terminal loader replays exactly one
+      result/failure topology and binds it to history, admission, bundle, and
+      candidate-member receipts. The canonical JSON loader restores fixed
+      provider iteration order only after canonical-byte validation. The
       repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.

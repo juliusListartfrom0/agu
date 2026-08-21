@@ -4,7 +4,7 @@ Status: **IMPLEMENTATION AUTHORIZED — PARTIALLY IMPLEMENTED** (amendment fresh
 review Critical/Required 0/0, exact-SHA approval sealed 2026-08-17; see
 `amendment_implementation_approval.json`).
 
-## Progress to date (2026-08-20)
+## Progress to date (2026-08-21)
 
 The schema/validation/grammar/persistence layer is partially implemented and
 being hardened after the independent fresh-context review failed with
@@ -28,12 +28,13 @@ Implemented modules:
 - `app/analysis/task0258_v2_pipeline_cli.py` — full pipeline orchestration (registry→candidate→bundle→result).
 - `app/analysis/task0258_v2_worker_runner.py` — worker subprocess isolation runner.
 - `app/analysis/task0258_v2_capabilities.py` — review-only synthetic contexts,
-  no-follow canonical-byte loaders, and durable run-history loader; these
+  no-follow canonical-byte loaders, durable run-history replay, admission
+  claim/admission/completion replay, and terminal result/failure replay; these
   contexts cannot authorize production publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 191 TASK-0258 tests pass and the AGU Harness
-structural gate passes. The full repository suite reports 2,059 passed, 5
+Current working-tree verification: 194 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The full repository suite reports 2,062 passed, 5
 skipped, and 15 warnings. Scoped Ruff/format checks are clean after the P0 and
 P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45

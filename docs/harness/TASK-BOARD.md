@@ -37,7 +37,7 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 ## In Progress
 
-> TASK-0258 latest local remediation note (2026-08-21): candidate bundle loading now replays the real absolute `candidate_v2` directory, verifies exact generation coverage, recomputes all ten member receipts, and fails closed on member drift. The current verification result is 191 focused tests and 2,059 full-suite tests; this supersedes the older 190/2,058 counts in the long status row below. This remains review-only local evidence and does not claim Apple platform proof, P5 readiness, or a v2 terminal/result artifact.
+> TASK-0258 latest local remediation note (2026-08-21): candidate bundle loading now replays the real absolute `candidate_v2` directory, verifies exact generation coverage, recomputes all ten member receipts, and fails closed on member drift; admission loading now replays claim/admission/completion receipt edges and physical CAS; terminal loading replays exactly one result/failure topology and binds history, admission, bundle, and candidate-member receipts. The current verification result is 194 focused tests and 2,062 full-suite tests; this supersedes the older 190/2,058 counts in the long status row below. This remains review-only local evidence and does not claim Apple platform proof, P5 readiness, or a v2 terminal/result artifact.
 
 | Task ID | Task Name | Phase | Owner | Blockers | Docs | Last Updated |
 | --- | --- | --- | --- | --- | --- | --- |

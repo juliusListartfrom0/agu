@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
+from pathlib import Path
 
 import pytest
 
 from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256, compact_canonical_json
+from app.analysis.task0258_run_history import ADMISSION_SCHEMA, CLAIM_SCHEMA, COMPLETION_SCHEMA, MODULE_ID
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_capabilities import (
     VerifiedImplementationReviewSandboxContext,
@@ -18,13 +21,22 @@ from app.analysis.task0258_v2_capabilities import (
     exercise_module_a_v2_state_machine_for_discovery,
     exercise_module_a_v2_state_machine_for_review,
     load_verified_candidate_receipt_bundle,
+    load_verified_run_admission,
+    load_verified_run_history_ledger,
+    load_verified_terminal_artifact,
     replay_module_a_read_traversal_for_discovery,
 )
 from app.analysis.task0258_v2_pipeline import (
     build_candidate_gate_payload,
     build_candidate_receipt_bundle_payload,
+    build_member_receipts,
+    build_postpublication_failure_payload,
+    build_postpublication_verification_payload,
     seal_candidate_v2,
+    seal_postverification_failure,
+    seal_verified_result,
 )
+from app.analysis.task0258_v2_registry import seal_run_consumption_claim, seal_run_consumption_completed
 
 
 def _receipt():
@@ -86,6 +98,184 @@ def _members():
             payload["artifact_sha256"] = canonical_artifact_sha256(payload)
             members[rel] = (compact_canonical_json(payload) + "\n").encode()
     return members
+
+
+def _payload_receipt(payload):
+    raw = (compact_canonical_json(payload) + "\n").encode()
+    return {"artifact_sha256": payload["artifact_sha256"], "file_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def _file_hashes(path, payload):
+    return payload["artifact_sha256"], hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _admission_fixture(tmp_path):
+    auth = "a" * 64
+    authorization_receipt = {"artifact_sha256": auth, "file_sha256": "b" * 64}
+    root = tmp_path / "vru_causal_temporal_retrospective_v2"
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    claim = {
+        "schema_version": CLAIM_SCHEMA,
+        "module_id": MODULE_ID,
+        "authorization_receipt": authorization_receipt,
+        "run_id": "run-1",
+        "output_root_absolute_path": str(root),
+        "nonce": "c" * 64,
+        "state": "claimed",
+        "created_at_utc": "2026-08-21T00:00:00Z",
+    }
+    claim["artifact_sha256"] = canonical_artifact_sha256(claim)
+    seal_run_consumption_claim(registry, auth, claim)
+    claim_path = registry / f"{auth}.claim.json"
+    admission = {
+        "schema_version": ADMISSION_SCHEMA,
+        "module_id": MODULE_ID,
+        "authorization_receipt": authorization_receipt,
+        "claim_receipt": _payload_receipt(claim),
+        "nonce": claim["nonce"],
+        "run_id": claim["run_id"],
+        "output_root_absolute_path": str(root),
+        "static_input_contract": {
+            "temporal_plan_artifact_sha256": "d" * 64,
+            "temporal_plan_file_sha256": "e" * 64,
+            "task0257_receipts_projection_sha256": "f" * 64,
+        },
+        "maximum_run_count": 1,
+        "admission_state": "admitted",
+        "module_b_authorized": False,
+        "created_at_utc": "2026-08-21T00:00:01Z",
+    }
+    admission["artifact_sha256"] = canonical_artifact_sha256(admission)
+    admission_bytes = (compact_canonical_json(admission) + "\n").encode()
+    root_lock = tmp_path / "output-root.lock"
+    from app.analysis.task0258_v2_fs import seal_generation_directory
+
+    seal_generation_directory(
+        root.parent,
+        root.name,
+        {"run_admission.json": admission_bytes},
+        ("run_admission.json",),
+        flock_path=root_lock,
+    )
+    admission_path = root / "run_admission.json"
+    root_stat = os.stat(root, follow_symlinks=False)
+    admission_stat = os.stat(admission_path, follow_symlinks=False)
+    completion = {
+        "schema_version": COMPLETION_SCHEMA,
+        "module_id": MODULE_ID,
+        "authorization_receipt": authorization_receipt,
+        "claim_receipt": _payload_receipt(claim),
+        "admission_receipt": _payload_receipt(admission),
+        "nonce": claim["nonce"],
+        "run_id": claim["run_id"],
+        "output_root_absolute_path": str(root),
+        "consumption_count": 1,
+        "state": "completed",
+        "root_identity": {"device": root_stat.st_dev, "inode": root_stat.st_ino},
+        "admission_identity": {
+            "device": admission_stat.st_dev,
+            "inode": admission_stat.st_ino,
+            "size_bytes": admission_stat.st_size,
+            "internal_sha256": admission["artifact_sha256"],
+            "file_sha256": hashlib.sha256(admission_path.read_bytes()).hexdigest(),
+        },
+        "created_at_utc": "2026-08-21T00:00:02Z",
+    }
+    completion["artifact_sha256"] = canonical_artifact_sha256(completion)
+    seal_run_consumption_completed(registry, auth, completion)
+    completion_path = registry / f"{auth}.completed.json"
+    review = bind_implementation_review_sandbox_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+    claim_sha, claim_file_sha = _file_hashes(claim_path, claim)
+    admission_sha, admission_file_sha = _file_hashes(admission_path, admission)
+    completion_sha, completion_file_sha = _file_hashes(completion_path, completion)
+    loaded = load_verified_run_admission(
+        execution_context=review,
+        claim_path=claim_path,
+        admission_path=admission_path,
+        completion_path=completion_path,
+        expected_authorization_sha256=auth,
+        expected_claim_artifact_sha256=claim_sha,
+        expected_claim_file_sha256=claim_file_sha,
+        expected_admission_artifact_sha256=admission_sha,
+        expected_admission_file_sha256=admission_file_sha,
+        expected_completion_artifact_sha256=completion_sha,
+        expected_completion_file_sha256=completion_file_sha,
+    )
+    history = load_verified_run_history_ledger(registry_directory=registry, authorization_sha256=auth)
+    return {
+        "auth": auth,
+        "root": root,
+        "registry": registry,
+        "lock": root_lock,
+        "review": review,
+        "admission": loaded,
+        "history": history,
+    }
+
+
+def _candidate_bundle_fixture(fixture):
+    root = fixture["root"]
+    candidate = seal_candidate_v2(root, _members(), flock_path=fixture["lock"])
+    admission = fixture["admission"].admission
+    history = fixture["history"]
+    history_contract = {
+        "run_identity_receipt": _payload_receipt(history.payloads[1]),
+        "head_receipt": _payload_receipt(history.payloads[-1]),
+        "marker_count": len(history.payloads) - 2,
+    }
+    candidate_rows = build_member_receipts(candidate)
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=admission.payload["authorization_receipt"],
+        run_identity_receipt=history_contract["run_identity_receipt"],
+        run_admission_receipt=_payload_receipt(admission.payload),
+        static_input_contract=admission.payload["static_input_contract"],
+        candidate_published_history_head_receipt=history_contract["head_receipt"],
+        candidate_dir=candidate,
+        observed_at_utc="2026-08-21T00:00:03Z",
+    )
+    bundle_parent = root.parent / "bundle-parent"
+    bundle_parent.mkdir()
+    bundle_path = bundle_parent / "candidate-receipt-bundle.json"
+    bundle_raw = (compact_canonical_json(bundle) + "\n").encode()
+    bundle_path.write_bytes(bundle_raw)
+    member_by_path = {row["relative_path"]: row for row in candidate_rows}
+    result = build_postpublication_verification_payload(
+        error_bounds_pass=True,
+        authorization_receipts={
+            "parent_spec_approval": _receipt(),
+            "amendment_implementation_approval": _receipt(),
+            "amended_implementation_review": _receipt(),
+            "rerun_authorization": admission.payload["authorization_receipt"],
+        },
+        run_history_contract_receipt=history_contract,
+        run_admission_receipt=_payload_receipt(admission.payload),
+        static_input_contract=admission.payload["static_input_contract"],
+        candidate_receipt_bundle_receipt={
+            "artifact_sha256": bundle["artifact_sha256"],
+            "file_sha256": hashlib.sha256(bundle_raw).hexdigest(),
+        },
+        candidate_member_receipts=candidate_rows,
+        prior_attempt_receipts=[],
+        producer_embedding_receipt=member_by_path["producer_tiled_swin_embeddings.json"],
+        verification_embedding_receipt=member_by_path["verification_tiled_swin_embeddings.json"],
+        verification_attempt_receipt=member_by_path["verification_attempt/attempt_record.json"],
+        error_bound_result={},
+        evaluator_receipts={
+            "baseline": member_by_path["baseline_final_evaluator.json"],
+            "candidate": member_by_path["candidate_final_evaluator.json"],
+        },
+    )
+    return {
+        **fixture,
+        "candidate": candidate,
+        "bundle": bundle,
+        "bundle_path": bundle_path,
+        "bundle_file_sha": hashlib.sha256(bundle_raw).hexdigest(),
+        "result": result,
+    }
 
 
 def test_review_contexts_are_opaque_and_distinct():
@@ -238,6 +428,14 @@ def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_pat
             expected_artifact_sha256=bundle["artifact_sha256"],
             expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
         )
+    with pytest.raises(ValueError):
+        load_verified_candidate_receipt_bundle(
+            execution_context=review,
+            bundle_path=bundle_path,
+            candidate_dir=Path("/private/etc/candidate_v2"),
+            expected_artifact_sha256=bundle["artifact_sha256"],
+            expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
+        )
 
 
 def test_candidate_bundle_loader_rejects_candidate_member_drift(tmp_path):
@@ -279,3 +477,123 @@ def test_candidate_bundle_loader_rejects_candidate_member_drift(tmp_path):
             expected_artifact_sha256=bundle["artifact_sha256"],
             expected_file_sha256=hashlib.sha256(bundle_raw).hexdigest(),
         )
+
+
+def test_run_admission_loader_replays_physical_receipt_spine(tmp_path):
+    fixture = _admission_fixture(tmp_path)
+    loaded = fixture["admission"]
+    assert loaded.admission.payload["admission_state"] == "admitted"
+    assert loaded.completion.payload["admission_identity"]["internal_sha256"] == loaded.admission.artifact_sha256
+    with pytest.raises(PermissionError):
+        load_verified_run_admission(
+            execution_context=object(),
+            claim_path=loaded.claim.path,
+            admission_path=loaded.admission.path,
+            completion_path=loaded.completion.path,
+            expected_authorization_sha256=fixture["auth"],
+            expected_claim_artifact_sha256=loaded.claim.artifact_sha256,
+            expected_claim_file_sha256=loaded.claim.file_sha256,
+            expected_admission_artifact_sha256=loaded.admission.artifact_sha256,
+            expected_admission_file_sha256=loaded.admission.file_sha256,
+            expected_completion_artifact_sha256=loaded.completion.artifact_sha256,
+            expected_completion_file_sha256=loaded.completion.file_sha256,
+        )
+
+
+def test_terminal_loader_replays_result_and_rejects_candidate_drift(tmp_path):
+    fixture = _candidate_bundle_fixture(_admission_fixture(tmp_path))
+    result_dir = seal_verified_result(fixture["root"], fixture["result"], flock_path=fixture["lock"])
+    loaded = load_verified_terminal_artifact(
+        execution_context=fixture["review"],
+        terminal_kind="verified_result",
+        output_root=fixture["root"],
+        candidate_dir=fixture["candidate"],
+        candidate_bundle_path=fixture["bundle_path"],
+        expected_candidate_bundle_artifact_sha256=fixture["bundle"]["artifact_sha256"],
+        expected_candidate_bundle_file_sha256=fixture["bundle_file_sha"],
+        run_admission=fixture["admission"],
+        run_history=fixture["history"],
+        terminal_path=result_dir / "verification_registry.json",
+        expected_terminal_artifact_sha256=fixture["result"]["artifact_sha256"],
+        expected_terminal_file_sha256=hashlib.sha256(
+            (result_dir / "verification_registry.json").read_bytes()
+        ).hexdigest(),
+    )
+    assert loaded.payload["decision"] == "mechanical_pass"
+    mutated = fixture["candidate"] / "temporal_retrospective.json"
+    mutated.write_bytes(mutated.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="member receipts"):
+        load_verified_terminal_artifact(
+            execution_context=fixture["review"],
+            terminal_kind="verified_result",
+            output_root=fixture["root"],
+            candidate_dir=fixture["candidate"],
+            candidate_bundle_path=fixture["bundle_path"],
+            expected_candidate_bundle_artifact_sha256=fixture["bundle"]["artifact_sha256"],
+            expected_candidate_bundle_file_sha256=fixture["bundle_file_sha"],
+            run_admission=fixture["admission"],
+            run_history=fixture["history"],
+            terminal_path=result_dir / "verification_registry.json",
+            expected_terminal_artifact_sha256=fixture["result"]["artifact_sha256"],
+            expected_terminal_file_sha256=hashlib.sha256(
+                (result_dir / "verification_registry.json").read_bytes()
+            ).hexdigest(),
+        )
+
+
+def test_terminal_loader_replays_postverification_failure(tmp_path):
+    case = tmp_path / "failure-case"
+    case.mkdir()
+    fixture = _candidate_bundle_fixture(_admission_fixture(case))
+    history_contract = {
+        "run_identity_receipt": _payload_receipt(fixture["history"].payloads[1]),
+        "head_receipt": _payload_receipt(fixture["history"].payloads[-1]),
+        "marker_count": len(fixture["history"].payloads) - 2,
+    }
+    admission = fixture["admission"].admission
+    bundle_receipt = {
+        "artifact_sha256": fixture["bundle"]["artifact_sha256"],
+        "file_sha256": fixture["bundle_file_sha"],
+    }
+    slots = [
+        {"provider": "parent_spec_approval", "verification_state": "verified", "receipt": _receipt()},
+        {"provider": "amendment_implementation_approval", "verification_state": "verified", "receipt": _receipt()},
+        {"provider": "amended_implementation_review", "verification_state": "verified", "receipt": _receipt()},
+        {
+            "provider": "exact_v2_rerun_authorization",
+            "verification_state": "verified",
+            "receipt": admission.payload["authorization_receipt"],
+        },
+        {"provider": "run_history_ledger", "verification_state": "verified", "receipt": history_contract},
+        {
+            "provider": "run_admission",
+            "verification_state": "verified",
+            "receipt": _payload_receipt(admission.payload),
+        },
+        {
+            "provider": "static_inputs",
+            "verification_state": "verified",
+            "receipt": admission.payload["static_input_contract"],
+        },
+        {"provider": "candidate_receipt_bundle", "verification_state": "verified", "receipt": bundle_receipt},
+    ]
+    failure = build_postpublication_failure_payload(
+        failed_check_name="retrospective",
+        dependency_provider_slots=slots,
+    )
+    failure_dir = seal_postverification_failure(fixture["root"], failure, flock_path=fixture["lock"])
+    loaded = load_verified_terminal_artifact(
+        execution_context=fixture["review"],
+        terminal_kind="postverification_failure",
+        output_root=fixture["root"],
+        candidate_dir=fixture["candidate"],
+        candidate_bundle_path=fixture["bundle_path"],
+        expected_candidate_bundle_artifact_sha256=fixture["bundle"]["artifact_sha256"],
+        expected_candidate_bundle_file_sha256=fixture["bundle_file_sha"],
+        run_admission=fixture["admission"],
+        run_history=fixture["history"],
+        terminal_path=failure_dir / "failure.json",
+        expected_terminal_artifact_sha256=failure["artifact_sha256"],
+        expected_terminal_file_sha256=hashlib.sha256((failure_dir / "failure.json").read_bytes()).hexdigest(),
+    )
+    assert loaded.payload["failed_check_name"] == "retrospective"

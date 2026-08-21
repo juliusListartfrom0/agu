@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `191 passed` (including the local simulation command,
+- TASK-0258 focused suite: `194 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the candidate-loader hardening: `2,059 passed, 5
+- Full repository pytest after the admission/terminal-loader hardening: `2,062 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -53,6 +53,17 @@
   `candidate_v2` directory, reopens exact member coverage, recomputes all ten
   member receipts, and rejects candidate-byte drift. It remains a review-only
   loader and supplies no production admission or kernel evidence.
+- The review-only run-admission loader now replays canonical claim,
+  `run_admission.json`, and completion bytes, binds their receipt edges, and
+  compares the completion's root/admission physical CAS to the reopened
+  temporary files. The terminal loader then replays the candidate bundle and
+  exactly one `verified_result_v2` or `postverification_failure_v2` sibling,
+  binding history, admission, static-input, authorization, bundle, and member
+  receipts. These loaders remain diagnostic-only.
+- Canonical JSON reopening restores the schema's fixed authorization-provider
+  iteration order only after canonical bytes and the internal artifact hash
+  have been verified; this avoids treating JSON serializer key sorting as
+  receipt drift.
 - `verified_result_v2` and `postverification_failure_v2` sealing now derive
   deterministic stage-directory names from the rerun-authorization SHA, reject
   pre-existing stage residue, publish no-clobber, and reopen exact member

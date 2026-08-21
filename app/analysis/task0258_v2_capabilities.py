@@ -18,13 +18,26 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from app.analysis.task0258_module_a_v2 import (
+    AUTHORIZATION_PROVIDER_ORDER,
     compact_canonical_json,
     is_safe_slug,
     is_sha256,
     verify_internal_artifact_hash,
 )
-from app.analysis.task0258_run_history import replay_run_history_registry
-from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS, verify_candidate_receipt_bundle
+from app.analysis.task0258_run_history import (
+    claim_filename,
+    completion_filename,
+    replay_run_history_registry,
+    verify_run_admission,
+    verify_run_consumption_claim,
+    verify_run_consumption_completed,
+)
+from app.analysis.task0258_v2_artifacts import (
+    CANDIDATE_MEMBER_PATHS,
+    verify_candidate_receipt_bundle,
+    verify_postpublication_failure,
+    verify_postpublication_verification,
+)
 from app.analysis.task0258_v2_fs import verify_generation_directory
 from app.analysis.task0258_v2_pipeline import build_member_receipts
 
@@ -34,6 +47,7 @@ _SYNTHETIC_DISCOVERY_TOKEN = object()
 _SYNTHETIC_REVIEW_TOKEN = object()
 _JSON_ARTIFACT_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
+_RUN_ADMISSION_TOKEN = object()
 
 _REVIEW_CHECKS = frozenset({"focused_pytest", "full_pytest"})
 _MAX_VERIFIED_FILE_BYTES = 67_108_864
@@ -126,6 +140,29 @@ class VerifiedRunHistoryLedger:
         self.payloads = tuple(kwargs["payloads"])
 
 
+class VerifiedReviewRunAdmission:
+    """Review-only replay of claim, admission, and completion bytes.
+
+    This deliberately is not a production admission capability.  It exists
+    so local adversarial tests can prove the three-file receipt spine and
+    physical output-root identity before a future OS-bound runner is present.
+    """
+
+    __slots__ = ("_token", "claim", "admission", "completion", "root_identity")
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _RUN_ADMISSION_TOKEN:
+            raise TypeError("VerifiedReviewRunAdmission cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        self._token = token
+        self.claim = kwargs["claim"]
+        self.admission = kwargs["admission"]
+        self.completion = kwargs["completion"]
+        self.root_identity = kwargs["root_identity"]
+
+
 def _verify_sha(value: object, name: str) -> str:
     if not is_sha256(value):
         raise ValueError(f"{name} must be a lowercase SHA-256")
@@ -159,6 +196,18 @@ def _verify_absolute_no_symlink_path(path: Path) -> None:
                 raise ValueError(f"path contains a symlinked component: {current}")
         except OSError as exc:
             raise ValueError(f"cannot inspect path component: {current}") from exc
+
+
+def _verify_review_temp_directory(path: Path) -> tuple[int, int]:
+    """Require a canonical real directory inside the OS temporary root."""
+    path = Path(path)
+    _verify_absolute_no_symlink_path(path)
+    identity = _verify_real_directory(path)
+    try:
+        path.relative_to(Path(tempfile.gettempdir()).resolve())
+    except ValueError as exc:
+        raise ValueError("review-only path must be under the OS temporary directory") from exc
+    return identity
 
 
 def _verify_temp_ancestor(path: Path) -> tuple[int, int]:
@@ -422,6 +471,14 @@ def _load_verified_json_artifact(
         raise ValueError("verified artifact is not JSON") from exc
     if not isinstance(payload, Mapping) or raw != (compact_canonical_json(payload) + "\n").encode("utf-8"):
         raise ValueError("verified artifact is not canonical JSON")
+    payload = dict(payload)
+    # Canonical JSON sorts object keys on disk; restore the schema's fixed
+    # provider iteration order only after the canonical bytes are accepted.
+    authorization_receipts = payload.get("authorization_receipts")
+    if isinstance(authorization_receipts, Mapping) and set(authorization_receipts) == set(AUTHORIZATION_PROVIDER_ORDER):
+        payload["authorization_receipts"] = {
+            provider: authorization_receipts[provider] for provider in AUTHORIZATION_PROVIDER_ORDER
+        }
     verify_internal_artifact_hash(payload)
     if payload["artifact_sha256"] != _verify_sha(expected_artifact_sha256, "artifact hash"):
         raise ValueError("verified artifact hash does not match")
@@ -431,6 +488,138 @@ def _load_verified_json_artifact(
         payload=dict(payload),
         artifact_sha256=expected_artifact_sha256,
         file_sha256=expected_file_sha256,
+    )
+
+
+def _artifact_file_receipt(artifact: VerifiedJsonArtifact) -> dict[str, str]:
+    return {
+        "artifact_sha256": artifact.artifact_sha256,
+        "file_sha256": artifact.file_sha256,
+    }
+
+
+def _payload_file_receipt(payload: Mapping[str, object]) -> dict[str, str]:
+    raw = (compact_canonical_json(payload) + "\n").encode("utf-8")
+    artifact_sha256 = payload.get("artifact_sha256")
+    if not is_sha256(artifact_sha256):
+        raise ValueError("history payload artifact hash is invalid")
+    return {"artifact_sha256": artifact_sha256, "file_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def _history_contract(ledger: VerifiedRunHistoryLedger) -> dict[str, object]:
+    if type(ledger) is not VerifiedRunHistoryLedger or len(ledger.payloads) < 2:
+        raise TypeError("verified run-history ledger is invalid")
+    completion = ledger.payloads[1]
+    head = ledger.payloads[-1]
+    return {
+        "run_identity_receipt": _payload_file_receipt(completion),
+        "head_receipt": _payload_file_receipt(head),
+        "marker_count": len(ledger.payloads) - 2,
+    }
+
+
+def load_verified_run_admission(
+    *,
+    execution_context: object,
+    claim_path: Path,
+    admission_path: Path,
+    completion_path: Path,
+    expected_authorization_sha256: str,
+    expected_claim_artifact_sha256: str,
+    expected_claim_file_sha256: str,
+    expected_admission_artifact_sha256: str,
+    expected_admission_file_sha256: str,
+    expected_completion_artifact_sha256: str,
+    expected_completion_file_sha256: str,
+) -> VerifiedReviewRunAdmission:
+    """Replay the claim/admission/completion spine in a review context.
+
+    The loader validates canonical bytes, receipt edges, output-root identity,
+    and the completion's admission CAS.  It remains review-only and cannot
+    issue the production admission capability described by the amendment.
+    """
+    if type(execution_context) is not VerifiedImplementationReviewSandboxContext:
+        raise PermissionError("run admission loader requires a verified review context")
+    authorization_sha256 = _verify_sha(expected_authorization_sha256, "authorization hash")
+    claim_path = Path(claim_path)
+    admission_path = Path(admission_path)
+    completion_path = Path(completion_path)
+    if claim_path.name != claim_filename(authorization_sha256):
+        raise ValueError("claim basename is not bound to the authorization")
+    if completion_path.name != completion_filename(authorization_sha256):
+        raise ValueError("completion basename is not bound to the authorization")
+    if claim_path.parent != completion_path.parent:
+        raise ValueError("claim and completion must share one registry directory")
+    if admission_path.name != "run_admission.json":
+        raise ValueError("admission basename is not authorized")
+
+    claim = _load_verified_json_artifact(
+        path=claim_path,
+        expected_artifact_sha256=expected_claim_artifact_sha256,
+        expected_file_sha256=expected_claim_file_sha256,
+    )
+    admission = _load_verified_json_artifact(
+        path=admission_path,
+        expected_artifact_sha256=expected_admission_artifact_sha256,
+        expected_file_sha256=expected_admission_file_sha256,
+    )
+    completion = _load_verified_json_artifact(
+        path=completion_path,
+        expected_artifact_sha256=expected_completion_artifact_sha256,
+        expected_file_sha256=expected_completion_file_sha256,
+    )
+    verify_run_consumption_claim(claim.payload)
+    verify_run_admission(admission.payload)
+    verify_run_consumption_completed(completion.payload)
+
+    for payload in (claim.payload, admission.payload, completion.payload):
+        authorization_receipt = payload["authorization_receipt"]
+        if authorization_receipt["artifact_sha256"] != authorization_sha256:
+            raise ValueError("run admission authorization binding drifted")
+        if payload["run_id"] != claim.payload["run_id"] or payload["nonce"] != claim.payload["nonce"]:
+            raise ValueError("run admission identity binding drifted")
+        if payload["output_root_absolute_path"] != claim.payload["output_root_absolute_path"]:
+            raise ValueError("run admission output-root binding drifted")
+
+    claim_receipt = _artifact_file_receipt(claim)
+    admission_receipt = _artifact_file_receipt(admission)
+    if admission.payload["claim_receipt"] != claim_receipt:
+        raise ValueError("admission claim receipt does not match claim bytes")
+    if completion.payload["claim_receipt"] != claim_receipt:
+        raise ValueError("completion claim receipt does not match claim bytes")
+    if completion.payload["admission_receipt"] != admission_receipt:
+        raise ValueError("completion admission receipt does not match admission bytes")
+
+    output_root = Path(admission.payload["output_root_absolute_path"])
+    if output_root != admission.path.parent:
+        raise ValueError("admission output root is not the loaded directory")
+    root_identity = _verify_review_temp_directory(output_root)
+    expected_root_identity = {
+        "device": root_identity[0],
+        "inode": root_identity[1],
+    }
+    if completion.payload["root_identity"] != expected_root_identity:
+        raise ValueError("completion root identity does not match the loaded output root")
+
+    admission_stat = admission.path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(admission_stat.st_mode):
+        raise ValueError("admission path is not a regular file")
+    expected_admission_identity = {
+        "device": admission_stat.st_dev,
+        "inode": admission_stat.st_ino,
+        "size_bytes": admission_stat.st_size,
+        "internal_sha256": admission.artifact_sha256,
+        "file_sha256": admission.file_sha256,
+    }
+    if completion.payload["admission_identity"] != expected_admission_identity:
+        raise ValueError("completion admission identity does not match the loaded admission bytes")
+
+    return VerifiedReviewRunAdmission(
+        _RUN_ADMISSION_TOKEN,
+        claim=claim,
+        admission=admission,
+        completion=completion,
+        root_identity=expected_root_identity,
     )
 
 
@@ -456,14 +645,132 @@ def load_verified_candidate_receipt_bundle(
     candidate_dir = Path(candidate_dir)
     if candidate_dir.name != "candidate_v2":
         raise ValueError("candidate bundle replay requires candidate_v2")
-    _verify_absolute_no_symlink_path(candidate_dir)
-    _verify_real_directory(candidate_dir)
+    _verify_review_temp_directory(candidate_dir)
     verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
     actual_member_receipts = build_member_receipts(candidate_dir)
     if list(artifact.payload["ordered_member_receipts"]) != actual_member_receipts:
         raise ValueError("candidate bundle member receipts do not match candidate_v2 bytes")
     verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
     return artifact
+
+
+def load_verified_terminal_artifact(
+    *,
+    execution_context: object,
+    terminal_kind: str,
+    output_root: Path,
+    candidate_dir: Path,
+    candidate_bundle_path: Path,
+    expected_candidate_bundle_artifact_sha256: str,
+    expected_candidate_bundle_file_sha256: str,
+    run_admission: VerifiedReviewRunAdmission,
+    run_history: VerifiedRunHistoryLedger,
+    terminal_path: Path,
+    expected_terminal_artifact_sha256: str,
+    expected_terminal_file_sha256: str,
+) -> VerifiedJsonArtifact:
+    """Replay one existing terminal generation and its trust-spine inputs.
+
+    Only the two locally implemented post-candidate terminal variants are
+    accepted.  The loader requires exactly one terminal sibling, replays the
+    candidate bundle against candidate bytes, and binds terminal receipts to
+    the loaded admission and durable history ledger.
+    """
+    if type(execution_context) is not VerifiedImplementationReviewSandboxContext:
+        raise PermissionError("terminal loader requires a verified review context")
+    if type(run_admission) is not VerifiedReviewRunAdmission:
+        raise TypeError("terminal loader requires a verified review-only admission")
+    if type(run_history) is not VerifiedRunHistoryLedger:
+        raise TypeError("terminal loader requires a verified run-history ledger")
+    targets = {
+        "verified_result": ("verified_result_v2", "verification_registry.json"),
+        "postverification_failure": ("postverification_failure_v2", "failure.json"),
+    }
+    if terminal_kind not in targets:
+        raise ValueError("terminal kind is not implemented by this review loader")
+    terminal_name, member_name = targets[terminal_kind]
+
+    output_root = Path(output_root)
+    candidate_dir = Path(candidate_dir)
+    terminal_path = Path(terminal_path)
+    _verify_review_temp_directory(output_root)
+    if candidate_dir != output_root / "candidate_v2":
+        raise ValueError("terminal candidate path is not bound to the output root")
+    _verify_review_temp_directory(candidate_dir)
+    verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
+    expected_terminal_dir = output_root / terminal_name
+    if terminal_path != expected_terminal_dir / member_name:
+        raise ValueError("terminal artifact path is not bound to its fixed generation")
+    for sibling in ("terminal_failure_v2", "verified_result_v2", "postverification_failure_v2"):
+        sibling_path = output_root / sibling
+        if sibling == terminal_name:
+            verify_generation_directory(sibling_path, (member_name,))
+        elif sibling_path.exists() or sibling_path.is_symlink():
+            raise ValueError("terminal topology contains a competing generation")
+    if terminal_path.is_symlink():
+        raise ValueError("terminal artifact cannot be a symlink")
+
+    bundle = load_verified_candidate_receipt_bundle(
+        execution_context=execution_context,
+        bundle_path=candidate_bundle_path,
+        candidate_dir=candidate_dir,
+        expected_artifact_sha256=expected_candidate_bundle_artifact_sha256,
+        expected_file_sha256=expected_candidate_bundle_file_sha256,
+    )
+    if bundle.path.is_relative_to(output_root):
+        raise ValueError("candidate receipt bundle must remain outside the output root")
+
+    admission_payload = run_admission.admission.payload
+    admission_receipt = _artifact_file_receipt(run_admission.admission)
+    history_contract = _history_contract(run_history)
+    if run_history.authorization_sha256 != bundle.payload["authorization_receipt"]["artifact_sha256"]:
+        raise ValueError("terminal history authorization is not bound to the bundle")
+    if bundle.payload["authorization_receipt"] != admission_payload["authorization_receipt"]:
+        raise ValueError("candidate bundle authorization is not bound to admission")
+    if bundle.payload["run_admission_receipt"] != admission_receipt:
+        raise ValueError("candidate bundle admission receipt is not bound to admission bytes")
+    if bundle.payload["static_input_contract"] != admission_payload["static_input_contract"]:
+        raise ValueError("candidate bundle static inputs are not bound to admission")
+    if bundle.payload["run_identity_receipt"] != history_contract["run_identity_receipt"]:
+        raise ValueError("candidate bundle run identity is not bound to history")
+    if bundle.payload["candidate_published_history_head_receipt"] != history_contract["head_receipt"]:
+        raise ValueError("candidate bundle history head is not bound to history")
+
+    terminal = _load_verified_json_artifact(
+        path=terminal_path,
+        expected_artifact_sha256=expected_terminal_artifact_sha256,
+        expected_file_sha256=expected_terminal_file_sha256,
+    )
+    bundle_receipt = _artifact_file_receipt(bundle)
+    if terminal_kind == "verified_result":
+        verify_postpublication_verification(terminal.payload)
+        result = terminal.payload
+        if result["run_history_contract_receipt"] != history_contract:
+            raise ValueError("verified result history contract is not bound to history")
+        if result["run_admission_receipt"] != admission_receipt:
+            raise ValueError("verified result admission receipt is not bound to admission")
+        if result["static_input_contract"] != admission_payload["static_input_contract"]:
+            raise ValueError("verified result static inputs are not bound to admission")
+        if result["authorization_receipts"]["rerun_authorization"] != bundle.payload["authorization_receipt"]:
+            raise ValueError("verified result authorization is not bound to the bundle")
+        if result["candidate_receipt_bundle_receipt"] != bundle_receipt:
+            raise ValueError("verified result bundle receipt does not match bundle bytes")
+        if result["candidate_member_receipts"] != bundle.payload["ordered_member_receipts"]:
+            raise ValueError("verified result candidate receipts do not match candidate bytes")
+    else:
+        verify_postpublication_failure(terminal.payload)
+        slots = {slot["provider"]: slot for slot in terminal.payload["dependency_provider_slots"]}
+        if slots["exact_v2_rerun_authorization"]["receipt"] != bundle.payload["authorization_receipt"]:
+            raise ValueError("postverification failure authorization is not bound to the bundle")
+        if slots["run_history_ledger"]["receipt"] != history_contract:
+            raise ValueError("postverification failure history is not bound to history")
+        if slots["run_admission"]["receipt"] != admission_receipt:
+            raise ValueError("postverification failure admission is not bound to admission")
+        if slots["static_inputs"]["receipt"] != admission_payload["static_input_contract"]:
+            raise ValueError("postverification failure static inputs are not bound to admission")
+        if slots["candidate_receipt_bundle"]["receipt"] != bundle_receipt:
+            raise ValueError("postverification failure bundle receipt does not match bundle bytes")
+    return terminal
 
 
 def load_verified_run_history_ledger(
@@ -488,6 +795,7 @@ __all__ = [
     "VerifiedSyntheticModuleATransactionContext",
     "VerifiedJsonArtifact",
     "VerifiedRunHistoryLedger",
+    "VerifiedReviewRunAdmission",
     "bind_implementation_review_discovery_context",
     "bind_implementation_review_sandbox_context",
     "replay_module_a_read_traversal_for_discovery",
@@ -495,6 +803,8 @@ __all__ = [
     "bind_synthetic_module_a_transaction_context",
     "exercise_module_a_v2_state_machine_for_discovery",
     "exercise_module_a_v2_state_machine_for_review",
+    "load_verified_run_admission",
     "load_verified_candidate_receipt_bundle",
+    "load_verified_terminal_artifact",
     "load_verified_run_history_ledger",
 ]
