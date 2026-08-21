@@ -149,8 +149,9 @@ model execution or readiness transition.
       gap detection; successful transcript finalization also flushes and
       `fsync`s the descriptor before close; the Python side now has a strict,
       bounded JSONL diagnostic parser that rejects duplicate fields, malformed
-      result projections, invalid paths, and retained-row sequence regressions;
-      it remains diagnostic-only and cannot mint an attestation. SDK
+      result projections, invalid paths, retained-row sequence regressions, and
+      rows over the C-aligned 512-byte single-row cap; it remains
+      diagnostic-only and cannot mint an attestation. SDK
       compilation remains local evidence only.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
