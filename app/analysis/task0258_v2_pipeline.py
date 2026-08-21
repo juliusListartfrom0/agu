@@ -25,6 +25,7 @@ from app.analysis.task0258_module_a_v2 import (
     verify_internal_artifact_hash,
 )
 from app.analysis.task0258_v2_artifacts import (
+    CANDIDATE_INPUT_RECEIPT_PROVIDERS,
     CANDIDATE_MEMBER_PATHS,
     verify_candidate_gate,
     verify_candidate_receipt_bundle,
@@ -87,14 +88,56 @@ def seal_candidate_v2(
     *,
     flock_path: Path,
 ) -> Path:
-    """Validate exact ten-member coverage and publish ``candidate_v2``."""
+    """Validate and publish ``candidate_v2`` with an authorization-bound stage.
+
+    The candidate gate's exact rerun authorization receipt freezes the
+    transaction name.  The stage is created and the terminal topology is
+    checked while holding the publication flock, so a stale stage or a
+    competing terminal generation fails closed before any candidate bytes are
+    published.
+    """
+    authorization_sha256 = _candidate_authorization_sha256(candidate_members)
+
+    def validate_topology() -> None:
+        _require_candidate_publication_topology(output_root)
+
     return seal_generation_directory(
         output_root,
         "candidate_v2",
         dict(candidate_members),
         CANDIDATE_MEMBER_PATHS,
         flock_path=flock_path,
+        stage_name=f".{authorization_sha256}.candidate-v2-stage",
+        pre_publish_validator=validate_topology,
     )
+
+
+def _candidate_authorization_sha256(candidate_members: Mapping[str, bytes]) -> str:
+    candidate_gate_bytes = candidate_members.get("candidate_gate.json")
+    if not isinstance(candidate_gate_bytes, bytes):
+        raise ValueError("candidate members must include byte-encoded candidate_gate.json")
+    try:
+        candidate_gate = json.loads(candidate_gate_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("candidate gate member is not valid JSON") from exc
+    if not isinstance(candidate_gate, Mapping):
+        raise ValueError("candidate gate member must be a JSON object")
+    verify_candidate_gate(candidate_gate)
+    input_receipts = candidate_gate["input_receipts"]
+    authorization_index = CANDIDATE_INPUT_RECEIPT_PROVIDERS.index("exact_v2_rerun_authorization")
+    authorization_slot = input_receipts[authorization_index]
+    if (
+        not isinstance(authorization_slot, Mapping)
+        or authorization_slot.get("provider") != "exact_v2_rerun_authorization"
+    ):
+        raise ValueError("candidate gate authorization slot is invalid")
+    authorization_receipt = authorization_slot.get("receipt")
+    if not isinstance(authorization_receipt, Mapping):
+        raise ValueError("candidate gate authorization receipt is invalid")
+    authorization_sha256 = authorization_receipt.get("artifact_sha256")
+    if not is_sha256(authorization_sha256):
+        raise ValueError("candidate gate authorization SHA is invalid")
+    return authorization_sha256
 
 
 def build_member_receipts(candidate_dir: Path) -> list[dict[str, object]]:
@@ -409,6 +452,19 @@ def _require_candidate_terminal_topology(output_root: Path, target_name: str) ->
             verify_absent(output_root / name)
     except (FileExistsError, ValueError) as exc:
         raise ValueError(f"terminal publication topology is invalid for {target_name}") from exc
+
+
+def _require_candidate_publication_topology(output_root: Path) -> None:
+    try:
+        for name in (
+            "candidate_v2",
+            "terminal_failure_v2",
+            "verified_result_v2",
+            "postverification_failure_v2",
+        ):
+            verify_absent(output_root / name)
+    except FileExistsError as exc:
+        raise ValueError("candidate publication topology is already occupied") from exc
 
 
 __all__ = [

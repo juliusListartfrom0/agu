@@ -92,6 +92,8 @@ def _make_members():
     for i, rel in enumerate(CANDIDATE_MEMBER_PATHS):
         if rel.endswith(".jsonl"):
             members[rel] = b'{"schema_version":"x"}\n'
+        elif rel == "candidate_gate.json":
+            members[rel] = (json.dumps(_gate()) + "\n").encode()
         else:
             payload = {"schema_version": "x"}
             payload["artifact_sha256"] = canonical_artifact_sha256(payload)
@@ -125,6 +127,51 @@ def test_seal_candidate_v2_and_member_receipts(tmp_path):
     for r in json_rows:
         assert len(r["artifact_sha256"]) == 64
         assert r["internal_sha256_field"] == "artifact_sha256"
+
+
+def test_candidate_publication_binds_authorization_stage_and_cleans_it(tmp_path):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / ".lock"
+    lock.write_text("")
+
+    final = seal_candidate_v2(out, members, flock_path=lock)
+
+    authorization_sha256 = _gate()["input_receipts"][3]["receipt"]["artifact_sha256"]
+    assert final == out / "candidate_v2"
+    assert not (out / f".{authorization_sha256}.candidate-v2-stage").exists()
+
+
+def test_candidate_publication_rejects_fixed_stage_residue(tmp_path):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / ".lock"
+    lock.write_text("")
+    authorization_sha256 = _gate()["input_receipts"][3]["receipt"]["artifact_sha256"]
+    stage = out / f".{authorization_sha256}.candidate-v2-stage"
+    stage.write_bytes(b"residue")
+
+    with pytest.raises(FileExistsError):
+        seal_candidate_v2(out, members, flock_path=lock)
+
+    assert not (out / "candidate_v2").exists()
+    assert stage.read_bytes() == b"residue"
+
+
+def test_candidate_publication_rejects_existing_terminal_generation(tmp_path):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = out / ".lock"
+    lock.write_text("")
+    (out / "verified_result_v2").mkdir()
+
+    with pytest.raises(ValueError, match="candidate publication topology"):
+        seal_candidate_v2(out, members, flock_path=lock)
+
+    assert not (out / "candidate_v2").exists()
 
 
 def test_candidate_receipt_bundle(tmp_path):

@@ -21,6 +21,7 @@ from app.analysis.task0258_v2_capabilities import (
     replay_module_a_read_traversal_for_discovery,
 )
 from app.analysis.task0258_v2_pipeline import (
+    build_candidate_gate_payload,
     build_candidate_receipt_bundle_payload,
     seal_candidate_v2,
 )
@@ -30,11 +31,56 @@ def _receipt():
     return {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64}
 
 
+def _trust_slots(providers):
+    out = []
+    for provider in providers:
+        if provider == "run_history_ledger":
+            receipt = {"run_identity_receipt": _receipt(), "head_receipt": _receipt(), "marker_count": 0}
+        elif provider == "static_inputs":
+            receipt = {
+                "temporal_plan_artifact_sha256": "0" * 64,
+                "temporal_plan_file_sha256": "0" * 64,
+                "task0257_receipts_projection_sha256": "0" * 64,
+            }
+        else:
+            receipt = _receipt()
+        out.append({"provider": provider, "verification_state": "verified", "receipt": receipt})
+    return out
+
+
+def _gate():
+    return build_candidate_gate_payload(
+        input_receipts=_trust_slots(
+            (
+                "parent_spec_approval",
+                "amendment_implementation_approval",
+                "amended_implementation_review",
+                "exact_v2_rerun_authorization",
+                "run_history_ledger",
+                "run_admission",
+                "static_inputs",
+                "producer_embedding",
+                "verification_embedding",
+                "verification_attempt",
+                "retrospective",
+                "baseline_evaluator",
+                "candidate_evaluator",
+            )
+        ),
+        producer_attempt_chain=[],
+        verification_attempt_receipt=_receipt(),
+        error_bound_result={},
+        candidate_metric_outcome="within_frozen_error_bounds",
+    )
+
+
 def _members():
     members = {}
     for rel in CANDIDATE_MEMBER_PATHS:
         if rel.endswith(".jsonl"):
             members[rel] = b'{"role":"test"}\n'
+        elif rel == "candidate_gate.json":
+            members[rel] = (compact_canonical_json(_gate()) + "\n").encode()
         else:
             payload = {"schema_version": "agu.test"}
             payload["artifact_sha256"] = canonical_artifact_sha256(payload)

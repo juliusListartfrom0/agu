@@ -4,16 +4,19 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `185 passed` (including the local simulation command,
+- TASK-0258 focused suite: `188 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
-  residue validation for bundle/result/failure publication).
+  residue validation for candidate/bundle/result/failure publication). Candidate
+  publication now validates and binds the candidate gate's exact rerun
+  authorization SHA to its fixed stage and checks terminal occupancy under the
+  output-root lock.
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the result/failure fixed-stage hardening: `2,053 passed, 5
+- Full repository pytest after the candidate fixed-stage hardening: `2,056 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
