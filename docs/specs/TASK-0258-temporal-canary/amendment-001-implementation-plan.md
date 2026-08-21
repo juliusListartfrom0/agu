@@ -4,12 +4,12 @@ Status: **IMPLEMENTATION AUTHORIZED — PARTIALLY IMPLEMENTED** (amendment fresh
 review Critical/Required 0/0, exact-SHA approval sealed 2026-08-17; see
 `amendment_implementation_approval.json`).
 
-## Progress to date (2026-08-21)
+## Progress to date (2026-08-22)
 
 The schema/validation/grammar/persistence layer is partially implemented and
 being hardened after the independent fresh-context review failed with
 `Critical=7 / Required=5 / Optional=3` (see
-`fresh-context-review-2026-08-20.md`). The remediation slice now has 209
+`fresh-context-review-2026-08-20.md`). The remediation slice now has 210
 focused tests passing and keeps unauthorized v2 publication fail-closed; it is
 not a passing implementation-review seal.
 Implemented modules:
@@ -31,14 +31,15 @@ Implemented modules:
   no-follow canonical-byte loaders, durable run-history replay, admission
   claim/admission/completion replay, candidate-gate schema/trust-spine replay,
   terminal result/failure replay, and read-isolation policy/attestation
-  cross-bound loading, plus complete verification-attempt replay; these
+  cross-bound loading, complete verification-attempt replay, and implementation
+  approval shape/root-identity replay; these
   contexts also bind the attempt to the loaded admission/history trust spine
   and provide a no-write preflight replay, but cannot authorize production
   publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 209 TASK-0258 tests pass and the AGU Harness
-structural gate passes. The full repository suite reports 2,077 passed, 5
+Current working-tree verification: 210 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The full repository suite reports 2,078 passed, 5
 skipped, and 15 warnings. Scoped Ruff/format checks are clean after the P0 and
 P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45

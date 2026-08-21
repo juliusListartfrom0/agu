@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_capabilities import (
     VerifiedImplementationReviewSandboxContext,
     VerifiedReviewDiscoveryContext,
+    VerifiedReviewImplementationApproval,
     VerifiedReviewNoWritePreflight,
     VerifiedReviewReadIsolationBinding,
     VerifiedReviewVerificationAttempt,
@@ -32,6 +34,7 @@ from app.analysis.task0258_v2_capabilities import (
     exercise_module_a_v2_state_machine_for_review,
     load_verified_candidate_receipt_bundle,
     load_verified_read_isolation_binding,
+    load_verified_review_implementation_approval,
     load_verified_run_admission,
     load_verified_run_history_ledger,
     load_verified_terminal_artifact,
@@ -531,6 +534,8 @@ def test_review_contexts_are_opaque_and_distinct():
     with pytest.raises(TypeError):
         VerifiedReviewNoWritePreflight()
     with pytest.raises(TypeError):
+        VerifiedReviewImplementationApproval()
+    with pytest.raises(TypeError):
         VerifiedReviewVerificationAttempt()
     with pytest.raises(TypeError):
         VerifiedReviewVerificationAttemptRunSpine()
@@ -569,6 +574,54 @@ def test_discovery_manifest_is_temp_bound_and_observation_only(tmp_path):
             operation_input_manifest_path=tmp_path.parent / "outside.json",
             expected_manifest_artifact_sha256=payload["artifact_sha256"],
             expected_manifest_file_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+
+
+def test_implementation_approval_loader_replays_closed_review_artifact(tmp_path):
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "analysis_outputs/public_research/task0258_module_a_amendment_approval"
+        / "amendment_implementation_approval.json"
+    )
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    repository_root = Path(__file__).resolve().parents[1]
+    payload["repository_root_device"] = repository_root.stat().st_dev
+    payload["repository_root_inode"] = repository_root.stat().st_ino
+    payload["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    )
+    raw = (compact_canonical_json(payload) + "\n").encode()
+    approval_path = tmp_path / "implementation-approval.json"
+    approval_path.write_bytes(raw)
+    review = bind_implementation_review_sandbox_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+
+    loaded = load_verified_review_implementation_approval(
+        execution_context=review,
+        approval_path=approval_path,
+        expected_artifact_sha256=payload["artifact_sha256"],
+        expected_file_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+    assert isinstance(loaded, VerifiedReviewImplementationApproval)
+    assert loaded.production_capability is False
+    assert loaded.repository_root_identity["device"] == payload["repository_root_device"]
+    assert loaded.artifact.payload["model_execution_authorized"] is False
+
+    drifted = dict(payload)
+    drifted["model_execution_authorized"] = True
+    drifted["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in drifted.items() if key != "artifact_sha256"}
+    )
+    drifted_raw = (compact_canonical_json(drifted) + "\n").encode()
+    approval_path.write_bytes(drifted_raw)
+    with pytest.raises(ValueError, match="execution flags"):
+        load_verified_review_implementation_approval(
+            execution_context=review,
+            approval_path=approval_path,
+            expected_artifact_sha256=drifted["artifact_sha256"],
+            expected_file_sha256=hashlib.sha256(drifted_raw).hexdigest(),
         )
 
 

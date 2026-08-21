@@ -20,8 +20,10 @@ from pathlib import Path
 from app.analysis.task0258_module_a_v2 import (
     AUTHORIZATION_PROVIDER_ORDER,
     compact_canonical_json,
+    is_rfc3339,
     is_safe_slug,
     is_sha256,
+    verify_artifact_file_receipt,
     verify_internal_artifact_hash,
 )
 from app.analysis.task0258_run_history import (
@@ -54,11 +56,33 @@ _READ_ISOLATION_TOKEN = object()
 _VERIFICATION_ATTEMPT_TOKEN = object()
 _ATTEMPT_SPINE_TOKEN = object()
 _PREFLIGHT_TOKEN = object()
+_IMPLEMENTATION_APPROVAL_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
 
 _REVIEW_CHECKS = frozenset({"focused_pytest", "full_pytest"})
 _MAX_VERIFIED_FILE_BYTES = 67_108_864
+_IMPLEMENTATION_APPROVAL_SCHEMA = "agu.task0258-module-a-amendment-implementation-approval.v1"
+_IMPLEMENTATION_APPROVAL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "repository_root_absolute_path",
+        "repository_root_device",
+        "repository_root_inode",
+        "parent_spec_approval_receipt",
+        "approved_parent_file_receipts",
+        "approved_amendment_file_receipt",
+        "amendment_fresh_review_receipt",
+        "implementation_scope_baseline_receipt",
+        "approval_scope",
+        "model_execution_authorized",
+        "module_b_authorized",
+        "approval_statement_sha256",
+        "approved_at_utc",
+        "artifact_sha256",
+    }
+)
 
 
 class VerifiedReviewDiscoveryContext:
@@ -227,6 +251,23 @@ class VerifiedReviewNoWritePreflight:
         self.registry_identity = kwargs["registry_identity"]
         self.candidate_bundle_path = kwargs["candidate_bundle_path"]
         self.planned_paths = tuple(kwargs["planned_paths"])
+        self.production_capability = False
+
+
+class VerifiedReviewImplementationApproval:
+    """Review-only replay of the sealed amendment implementation approval."""
+
+    __slots__ = ("_token", "artifact", "repository_root_identity", "production_capability")
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _IMPLEMENTATION_APPROVAL_TOKEN:
+            raise TypeError("VerifiedReviewImplementationApproval cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        self._token = token
+        self.artifact = kwargs["artifact"]
+        self.repository_root_identity = kwargs["repository_root_identity"]
         self.production_capability = False
 
 
@@ -593,6 +634,101 @@ def _load_verified_json_artifact(
         payload=dict(payload),
         artifact_sha256=expected_artifact_sha256,
         file_sha256=expected_file_sha256,
+    )
+
+
+def _verify_reviewed_file_receipt(value: object, *, basename_only: bool = False) -> None:
+    expected_fields = (
+        {"filename", "size_bytes", "file_sha256"}
+        if basename_only
+        else {
+            "path",
+            "size_bytes",
+            "file_sha256",
+        }
+    )
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise ValueError("reviewed file receipt shape is invalid")
+    path = value["filename"] if basename_only else value["path"]
+    if not isinstance(path, str) or not path or "\x00" in path or not is_sha256(value["file_sha256"]):
+        raise ValueError("reviewed file receipt path or hash is invalid")
+    if basename_only:
+        if Path(path).name != path or path in {".", ".."} or "/" in path or "\\" in path:
+            raise ValueError("reviewed parent file receipt filename is invalid")
+    else:
+        relative = Path(path)
+        if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+            raise ValueError("reviewed file receipt path is not a safe relative path")
+    size = value["size_bytes"]
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        raise ValueError("reviewed file receipt size is invalid")
+
+
+def _verify_implementation_approval_artifact(payload: Mapping[str, object]) -> tuple[Path, dict[str, int]]:
+    if set(payload) != _IMPLEMENTATION_APPROVAL_FIELDS:
+        raise ValueError("implementation approval field set is invalid")
+    if (
+        payload["schema_version"] != _IMPLEMENTATION_APPROVAL_SCHEMA
+        or payload["module_id"] != "existing-45-temporal-retrospective"
+    ):
+        raise ValueError("implementation approval identity is invalid")
+    root = Path(payload["repository_root_absolute_path"])
+    _verify_absolute_no_symlink_path(root)
+    root_device, root_inode = _verify_real_directory(root)
+    if payload["repository_root_device"] != root_device or payload["repository_root_inode"] != root_inode:
+        raise ValueError("implementation approval repository root identity drifted")
+    for field in (
+        "repository_root_device",
+        "repository_root_inode",
+    ):
+        value = payload[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"implementation approval {field} is invalid")
+    verify_artifact_file_receipt(payload["parent_spec_approval_receipt"])
+    verify_artifact_file_receipt(payload["amendment_fresh_review_receipt"])
+    verify_artifact_file_receipt(payload["implementation_scope_baseline_receipt"])
+    parent_receipts = payload["approved_parent_file_receipts"]
+    if not isinstance(parent_receipts, list) or len(parent_receipts) != 3:
+        raise ValueError("implementation approval parent file receipts are invalid")
+    for receipt in parent_receipts:
+        _verify_reviewed_file_receipt(receipt, basename_only=True)
+    _verify_reviewed_file_receipt(payload["approved_amendment_file_receipt"])
+    if payload["approval_scope"] != "amendment_implementation_only":
+        raise ValueError("implementation approval scope is invalid")
+    if payload["model_execution_authorized"] is not False or payload["module_b_authorized"] is not False:
+        raise ValueError("implementation approval execution flags must be false")
+    if not is_sha256(payload["approval_statement_sha256"]):
+        raise ValueError("implementation approval statement hash is invalid")
+    if not is_rfc3339(payload["approved_at_utc"]):
+        raise ValueError("implementation approval timestamp is invalid")
+    return root, {"device": root_device, "inode": root_inode}
+
+
+def load_verified_review_implementation_approval(
+    *,
+    execution_context: object,
+    approval_path: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+) -> VerifiedReviewImplementationApproval:
+    """Load the amendment approval as an opaque review-only artifact.
+
+    This validates the approval's closed local shape and repository-root CAS.
+    It does not replay the referenced specification files, issue a rerun
+    authorization, or provide a production admission capability.
+    """
+    if type(execution_context) is not VerifiedImplementationReviewSandboxContext:
+        raise PermissionError("implementation approval loader requires a verified review context")
+    artifact = _load_verified_json_artifact(
+        path=approval_path,
+        expected_artifact_sha256=expected_artifact_sha256,
+        expected_file_sha256=expected_file_sha256,
+    )
+    root, root_identity = _verify_implementation_approval_artifact(artifact.payload)
+    return VerifiedReviewImplementationApproval(
+        _IMPLEMENTATION_APPROVAL_TOKEN,
+        artifact=artifact,
+        repository_root_identity=root_identity,
     )
 
 
@@ -1148,6 +1284,7 @@ __all__ = [
     "VerifiedReviewVerificationAttempt",
     "VerifiedReviewVerificationAttemptRunSpine",
     "VerifiedReviewNoWritePreflight",
+    "VerifiedReviewImplementationApproval",
     "VerifiedRunHistoryLedger",
     "VerifiedReviewRunAdmission",
     "bind_implementation_review_discovery_context",
@@ -1162,6 +1299,7 @@ __all__ = [
     "load_verified_verification_attempt",
     "bind_verified_review_attempt_to_run_spine",
     "bind_verified_review_no_write_preflight",
+    "load_verified_review_implementation_approval",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",
     "load_verified_run_history_ledger",
