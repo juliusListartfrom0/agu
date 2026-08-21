@@ -29,8 +29,9 @@ Implemented modules:
 - `app/analysis/task0258_v2_worker_runner.py` — worker subprocess isolation runner.
 - `app/analysis/task0258_v2_capabilities.py` — review-only synthetic contexts,
   no-follow canonical-byte loaders, durable run-history replay, admission
-  claim/admission/completion replay, and terminal result/failure replay; these
-  contexts cannot authorize production publication.
+  claim/admission/completion replay, candidate-gate schema/trust-spine replay,
+  and terminal result/failure replay; these contexts cannot authorize
+  production publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
 Current working-tree verification: 194 TASK-0258 tests pass and the AGU Harness

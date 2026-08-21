@@ -66,7 +66,9 @@ model execution or readiness transition.
       receipt edges and physical CAS; the terminal loader replays exactly one
       result/failure topology and binds it to history, admission, bundle, and
       candidate-member receipts. The canonical JSON loader restores fixed
-      provider iteration order only after canonical-byte validation. The
+      provider iteration order only after canonical-byte validation. Candidate
+      bundle replay also validates `candidate_gate.json` and terminal replay
+      binds its trust-spine provider slots. The
       repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.

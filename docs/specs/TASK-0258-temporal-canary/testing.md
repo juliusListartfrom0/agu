@@ -60,6 +60,9 @@
   exactly one `verified_result_v2` or `postverification_failure_v2` sibling,
   binding history, admission, static-input, authorization, bundle, and member
   receipts. These loaders remain diagnostic-only.
+- Candidate bundle replay now also reopens and validates the candidate gate
+  schema; terminal replay binds its authorization, run-admission, static-input,
+  and run-history provider slots to the independently loaded trust spine.
 - Canonical JSON reopening restores the schema's fixed authorization-provider
   iteration order only after canonical bytes and the internal artifact hash
   have been verified; this avoids treating JSON serializer key sorting as

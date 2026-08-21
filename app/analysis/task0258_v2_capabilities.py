@@ -34,6 +34,7 @@ from app.analysis.task0258_run_history import (
 )
 from app.analysis.task0258_v2_artifacts import (
     CANDIDATE_MEMBER_PATHS,
+    verify_candidate_gate,
     verify_candidate_receipt_bundle,
     verify_postpublication_failure,
     verify_postpublication_verification,
@@ -518,6 +519,21 @@ def _history_contract(ledger: VerifiedRunHistoryLedger) -> dict[str, object]:
     }
 
 
+def _load_candidate_gate_artifact(
+    *, candidate_dir: Path, member_receipts: list[dict[str, object]]
+) -> VerifiedJsonArtifact:
+    gate_row = next((row for row in member_receipts if row["relative_path"] == "candidate_gate.json"), None)
+    if not isinstance(gate_row, Mapping) or gate_row["receipt_kind"] != "json":
+        raise ValueError("candidate gate member receipt is missing")
+    gate = _load_verified_json_artifact(
+        path=Path(candidate_dir) / "candidate_gate.json",
+        expected_artifact_sha256=gate_row["artifact_sha256"],
+        expected_file_sha256=gate_row["file_sha256"],
+    )
+    verify_candidate_gate(gate.payload)
+    return gate
+
+
 def load_verified_run_admission(
     *,
     execution_context: object,
@@ -650,6 +666,7 @@ def load_verified_candidate_receipt_bundle(
     actual_member_receipts = build_member_receipts(candidate_dir)
     if list(artifact.payload["ordered_member_receipts"]) != actual_member_receipts:
         raise ValueError("candidate bundle member receipts do not match candidate_v2 bytes")
+    _load_candidate_gate_artifact(candidate_dir=candidate_dir, member_receipts=actual_member_receipts)
     verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
     return artifact
 
@@ -723,6 +740,11 @@ def load_verified_terminal_artifact(
     admission_payload = run_admission.admission.payload
     admission_receipt = _artifact_file_receipt(run_admission.admission)
     history_contract = _history_contract(run_history)
+    candidate_gate = _load_candidate_gate_artifact(
+        candidate_dir=candidate_dir,
+        member_receipts=bundle.payload["ordered_member_receipts"],
+    ).payload
+    gate_receipts = {slot["provider"]: slot["receipt"] for slot in candidate_gate["input_receipts"]}
     if run_history.authorization_sha256 != bundle.payload["authorization_receipt"]["artifact_sha256"]:
         raise ValueError("terminal history authorization is not bound to the bundle")
     if bundle.payload["authorization_receipt"] != admission_payload["authorization_receipt"]:
@@ -735,6 +757,14 @@ def load_verified_terminal_artifact(
         raise ValueError("candidate bundle run identity is not bound to history")
     if bundle.payload["candidate_published_history_head_receipt"] != history_contract["head_receipt"]:
         raise ValueError("candidate bundle history head is not bound to history")
+    if gate_receipts["exact_v2_rerun_authorization"] != bundle.payload["authorization_receipt"]:
+        raise ValueError("candidate gate authorization is not bound to the bundle")
+    if gate_receipts["run_admission"] != admission_receipt:
+        raise ValueError("candidate gate admission is not bound to admission bytes")
+    if gate_receipts["static_inputs"] != admission_payload["static_input_contract"]:
+        raise ValueError("candidate gate static inputs are not bound to admission")
+    if gate_receipts["run_history_ledger"] != history_contract:
+        raise ValueError("candidate gate history is not bound to history")
 
     terminal = _load_verified_json_artifact(
         path=terminal_path,

@@ -86,13 +86,13 @@ def _gate():
     )
 
 
-def _members():
+def _members(*, gate=None):
     members = {}
     for rel in CANDIDATE_MEMBER_PATHS:
         if rel.endswith(".jsonl"):
             members[rel] = b'{"role":"test"}\n'
         elif rel == "candidate_gate.json":
-            members[rel] = (compact_canonical_json(_gate()) + "\n").encode()
+            members[rel] = (compact_canonical_json(gate or _gate()) + "\n").encode()
         else:
             payload = {"schema_version": "agu.test"}
             payload["artifact_sha256"] = canonical_artifact_sha256(payload)
@@ -107,6 +107,43 @@ def _payload_receipt(payload):
 
 def _file_hashes(path, payload):
     return payload["artifact_sha256"], hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _bound_gate(admission, history):
+    history_contract = {
+        "run_identity_receipt": _payload_receipt(history.payloads[1]),
+        "head_receipt": _payload_receipt(history.payloads[-1]),
+        "marker_count": len(history.payloads) - 2,
+    }
+    slots = _trust_slots(
+        (
+            "parent_spec_approval",
+            "amendment_implementation_approval",
+            "amended_implementation_review",
+            "exact_v2_rerun_authorization",
+            "run_history_ledger",
+            "run_admission",
+            "static_inputs",
+            "producer_embedding",
+            "verification_embedding",
+            "verification_attempt",
+            "retrospective",
+            "baseline_evaluator",
+            "candidate_evaluator",
+        )
+    )
+    by_provider = {slot["provider"]: slot for slot in slots}
+    by_provider["exact_v2_rerun_authorization"]["receipt"] = admission.admission.payload["authorization_receipt"]
+    by_provider["run_history_ledger"]["receipt"] = history_contract
+    by_provider["run_admission"]["receipt"] = _payload_receipt(admission.admission.payload)
+    by_provider["static_inputs"]["receipt"] = admission.admission.payload["static_input_contract"]
+    return build_candidate_gate_payload(
+        input_receipts=slots,
+        producer_attempt_chain=[],
+        verification_attempt_receipt=_receipt(),
+        error_bound_result={},
+        candidate_metric_outcome="within_frozen_error_bounds",
+    )
 
 
 def _admission_fixture(tmp_path):
@@ -218,9 +255,13 @@ def _admission_fixture(tmp_path):
 
 def _candidate_bundle_fixture(fixture):
     root = fixture["root"]
-    candidate = seal_candidate_v2(root, _members(), flock_path=fixture["lock"])
     admission = fixture["admission"].admission
     history = fixture["history"]
+    candidate = seal_candidate_v2(
+        root,
+        _members(gate=_bound_gate(fixture["admission"], history)),
+        flock_path=fixture["lock"],
+    )
     history_contract = {
         "run_identity_receipt": _payload_receipt(history.payloads[1]),
         "head_receipt": _payload_receipt(history.payloads[-1]),
