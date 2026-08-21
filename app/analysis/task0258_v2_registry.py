@@ -151,16 +151,34 @@ def append_run_history_marker(
     verify_run_history_marker(payload)
     lock_path = registry_dir / f".{auth_sha256}.history.lock"
     with exclusive_flock(lock_path):
-        replay_run_history_registry(registry_dir, auth_sha256)
+        replayed = replay_run_history_registry(registry_dir, auth_sha256)
+        claim = replayed[0]
+        completion = replayed[1]
+        authorization_receipt = claim["authorization_receipt"]
+        completion_receipt = _json_artifact_receipt(completion)
+        if payload["authorization_receipt"] != authorization_receipt:
+            raise ValueError("history marker authorization is not bound to the claim")
+        if payload["run_identity_receipt"] != completion_receipt:
+            raise ValueError("history marker run identity is not bound to completion")
+        if (
+            payload["run_id"] != claim["run_id"]
+            or payload["nonce"] != claim["nonce"]
+            or payload["output_root"] != claim["output_root_absolute_path"]
+        ):
+            raise ValueError("history marker run identity/root binding drifted")
         filenames = registry_history_filenames(registry_dir, auth_sha256)
         marker_names = filenames[2:]
         actual_prior = None
+        actual_prior_receipt = completion_receipt
         expected_ordinal = 1
         if marker_names:
             expected_ordinal, actual_prior = parse_history_filename(marker_names[-1], auth_sha256)
             expected_ordinal += 1
+            actual_prior_receipt = _json_artifact_receipt(replayed[-1])
         if prior_event != actual_prior:
             raise ValueError("caller prior_event does not match the durable registry head")
+        if payload["prior_marker_receipt"] != actual_prior_receipt:
+            raise ValueError("history marker predecessor receipt does not match the durable registry head")
         event = payload["event"]
         if actual_prior is None:
             verify_completed_successor(event)

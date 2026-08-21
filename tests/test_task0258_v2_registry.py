@@ -195,6 +195,48 @@ def test_append_marker_rejects_illegal_transition(tmp_path):
             ),
             None,
         )
+
+
+def test_append_marker_rejects_forged_predecessor_receipt(tmp_path):
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    completed = _completed()
+    seal_run_consumption_claim(reg, AUTH, _claim())
+    seal_run_consumption_completed(reg, AUTH, completed)
+    completed_receipt = _file_receipt(completed)
+    forged = _marker(
+        "producer_attempt_1_admitted",
+        prior_marker_receipt={"artifact_sha256": "1" * 64, "file_sha256": "1" * 64},
+        run_identity_receipt=completed_receipt,
+    )
+
+    with pytest.raises(ValueError, match="predecessor receipt"):
+        append_run_history_marker(reg, AUTH, forged, None)
+
+    assert not (reg / f"{AUTH}.history-01-producer_attempt_1_admitted.json").exists()
+
+
+def test_append_marker_rejects_identity_binding_drift(tmp_path):
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    completed = _completed()
+    seal_run_consumption_claim(reg, AUTH, _claim())
+    seal_run_consumption_completed(reg, AUTH, completed)
+    completed_receipt = _file_receipt(completed)
+    forged = _marker(
+        "producer_attempt_1_admitted",
+        prior_marker_receipt=completed_receipt,
+        run_identity_receipt=completed_receipt,
+    )
+    forged["output_root"] = "/different-root"
+    forged["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in forged.items() if key != "artifact_sha256"}
+    )
+
+    with pytest.raises(ValueError, match="identity/root binding"):
+        append_run_history_marker(reg, AUTH, forged, None)
+
+    assert not (reg / f"{AUTH}.history-01-producer_attempt_1_admitted.json").exists()
     with pytest.raises(ValueError):
         append_run_history_marker(
             reg,
@@ -227,7 +269,16 @@ def test_append_marker_no_clobber(tmp_path):
         None,
     )
     with pytest.raises(ValueError, match="durable registry head"):
-        append_run_history_marker(reg, AUTH, _marker("producer_attempt_1_admitted"), None)
+        append_run_history_marker(
+            reg,
+            AUTH,
+            _marker(
+                "producer_attempt_1_admitted",
+                prior_marker_receipt=completed_receipt,
+                run_identity_receipt=completed_receipt,
+            ),
+            None,
+        )
 
 
 def test_append_marker_rejects_invalid_authorization_before_lock_path(tmp_path):

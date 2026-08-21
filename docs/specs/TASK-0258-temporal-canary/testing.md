@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check (2026-08-20)
 
-- TASK-0258 focused suite: `188 passed` (including the local simulation command,
+- TASK-0258 focused suite: `190 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or process-tree cleanup.
-- Full repository pytest after the candidate fixed-stage hardening: `2,056 passed, 5
+- Full repository pytest after the marker-chain hardening: `2,058 passed, 5
   skipped, 15 warnings`.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
@@ -31,6 +31,10 @@
 - Run-history marker append validates the authorization SHA before touching a
   lock path, so malformed authorization input cannot create a path outside the
   registry directory.
+- Marker append now replays the durable ledger under the registry lock and
+  requires the new marker's authorization, run identity, run-root/nonce, and
+  predecessor receipt to equal the durable claim/completion/head; forged
+  predecessor and identity-drift regressions fail before publication.
 - Shared v2 lock acquisition now creates/opens a regular lock file with
   `O_NOFOLLOW`/`O_CLOEXEC`/nonblocking flags; callers no longer pre-touch a
   potentially symlinked lock path.

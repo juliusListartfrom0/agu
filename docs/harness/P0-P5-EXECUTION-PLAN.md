@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 188 passed and
-      full suite is 2,056 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 190 passed and
+      full suite is 2,058 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -57,7 +57,9 @@ model execution or readiness transition.
       authorization/admission/history receipts to the actual admission and
       completion bytes, requires the bundle and result to share the same tuple
       and candidate-member receipts, and rejects mismatches before registry or
-      output writes. The repeatable
+      output writes. Run-history marker append now also binds the new marker's
+      authorization, run identity, root/nonce, and predecessor receipt to the
+      durable ledger head under the registry lock. The repeatable
       repository-local simulation command now passes the synthetic discovery
       and review state machine while explicitly returning `p5_ready=false`.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
