@@ -61,7 +61,9 @@ model execution or readiness transition.
       unless an external admission issuer is present; temporary end-to-end
       tests must opt into an explicit synthetic-only context. Run-history marker append now also binds the new marker's
       authorization, run identity, root/nonce, and predecessor receipt to the
-      durable ledger head under the registry lock. The review-only candidate
+      durable ledger head under the registry lock. Registry replay now opens
+      the directory once and reads members relative to an `O_NOFOLLOW` FD,
+      rejecting non-JSON residue and symlinked members. The review-only candidate
       bundle loader now requires an absolute `candidate_v2` directory and
       replays its exact ten member receipts, rejecting candidate drift. The
       review-only admission loader now replays claim/admission/completion

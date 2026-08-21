@@ -35,6 +35,10 @@
   requires the new marker's authorization, run identity, run-root/nonce, and
   predecessor receipt to equal the durable claim/completion/head; forged
   predecessor and identity-drift regressions fail before publication.
+- Durable registry replay now holds one opened directory FD, reads each member
+  with descriptor-relative `O_NOFOLLOW`, bounds member bytes, and rejects
+  non-JSON residue; regressions cover a symlinked completion member and an
+  unexpected temporary file.
 - Shared v2 lock acquisition now creates/opens a regular lock file with
   `O_NOFOLLOW`/`O_CLOEXEC`/nonblocking flags; callers no longer pre-touch a
   potentially symlinked lock path.

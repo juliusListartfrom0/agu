@@ -17,6 +17,7 @@ from app.analysis.task0258_run_history import (
     MODULE_ID,
     claim_filename,
     completion_filename,
+    replay_run_history_registry,
 )
 from app.analysis.task0258_v2_registry import (
     append_run_history_marker,
@@ -372,6 +373,16 @@ def test_create_run_history_registry(tmp_path):
     assert (reg / f"{AUTH}.completed.json").is_file()
     assert (out / "run_admission.json").is_file()
     assert json.loads((out / "run_admission.json").read_text())["admission_state"] == "admitted"
+    replay_run_history_registry(reg, AUTH)
+    (reg / "unexpected.tmp").write_text("residue")
+    with pytest.raises(ValueError, match="non-JSON residue"):
+        replay_run_history_registry(reg, AUTH)
+    (reg / "unexpected.tmp").unlink()
+    completion_path = reg / f"{AUTH}.completed.json"
+    completion_path.unlink()
+    completion_path.symlink_to(reg / f"{AUTH}.claim.json")
+    with pytest.raises(ValueError, match="without following links"):
+        replay_run_history_registry(reg, AUTH)
     # second creation must fail: claim no-clobber
     with pytest.raises(FileExistsError):
         create_run_history_registry(

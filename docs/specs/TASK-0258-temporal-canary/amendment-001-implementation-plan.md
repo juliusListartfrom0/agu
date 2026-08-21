@@ -15,7 +15,7 @@ not a passing implementation-review seal.
 Implemented modules:
 
 - `app/analysis/task0258_module_a_v2.py` — receipt primitives + exact field sets.
-- `app/analysis/task0258_run_history.py` — run-history events/graph/marker/claim/admission/completion schemas.
+- `app/analysis/task0258_run_history.py` — run-history events/graph/marker/claim/admission/completion schemas plus descriptor-relative no-follow durable replay.
 - `app/analysis/task0258_v2_gate.py` — candidate/result check sequences + failure matrix.
 - `app/analysis/task0258_v2_artifacts.py` — candidate/failure/bundle/result/failure artifact schemas + membership.
 - `app/analysis/task0258_v2_fs.py` — atomic publication primitives.

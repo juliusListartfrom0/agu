@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
@@ -299,34 +301,92 @@ def registry_history_filenames(registry_dir: Path, auth_sha256: str) -> list[str
     return ordered
 
 
+_MAX_REGISTRY_MEMBER_BYTES = 16_777_216
+
+
+def _registry_history_filenames_from_fd(directory_fd: int, auth_sha256: str) -> list[str]:
+    """Return the stable registry listing from one already-open directory FD."""
+    try:
+        names = os.listdir(directory_fd)
+    except OSError as exc:
+        raise ValueError("registry directory cannot be listed through its descriptor") from exc
+    allowed_lock_name = f".{auth_sha256}.history.lock"
+    if any(not isinstance(name, str) or (not name.endswith(".json") and name != allowed_lock_name) for name in names):
+        raise ValueError("registry contains non-JSON residue")
+    ordered = [claim_filename(auth_sha256), completion_filename(auth_sha256)]
+    markers = sorted(name for name in names if ".history-" in name)
+    unexpected = set(names) - set(ordered) - set(markers) - {allowed_lock_name}
+    if unexpected:
+        raise ValueError(f"registry contains unexpected files: {sorted(unexpected)!r}")
+    if any(required not in names for required in ordered):
+        raise ValueError("registry is missing claim or completion ledger")
+    ordered.extend(markers)
+    verify_registry_listing(ordered, auth_sha256)
+    return ordered
+
+
+def _read_registry_member_from_fd(directory_fd: int, filename: str) -> bytes:
+    """Read one bounded regular registry member without following the leaf link."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        member_fd = os.open(filename, flags, dir_fd=directory_fd)
+    except OSError as exc:
+        raise ValueError(f"registry member cannot be opened without following links: {filename}") from exc
+    try:
+        member_stat = os.fstat(member_fd)
+        if not stat.S_ISREG(member_stat.st_mode) or member_stat.st_size > _MAX_REGISTRY_MEMBER_BYTES:
+            raise ValueError(f"registry member is not a bounded regular file: {filename}")
+        remaining = member_stat.st_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(member_fd, min(1 << 20, remaining))
+            if not chunk:
+                raise ValueError(f"registry member ended before its recorded size: {filename}")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+    except OSError as exc:
+        raise ValueError(f"registry member cannot be read: {filename}") from exc
+    finally:
+        os.close(member_fd)
+
+
 def replay_run_history_registry(registry_dir: Path, auth_sha256: str) -> list[Mapping[str, object]]:
     """Load and replay every durable ledger/marker binding in order."""
-    filenames = registry_history_filenames(registry_dir, auth_sha256)
-    payloads: list[Mapping[str, object]] = []
-    for filename in filenames:
-        path = registry_dir / filename
-        if path.is_symlink() or not path.is_file():
-            raise ValueError(f"registry member is not a regular file: {filename}")
-        raw = path.read_bytes()
-        if not raw.endswith(b"\n"):
-            raise ValueError(f"registry member is missing its final LF: {filename}")
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"registry member is not canonical JSON: {filename}") from exc
-        if not isinstance(payload, Mapping) or raw != (compact_canonical_json(payload) + "\n").encode("utf-8"):
-            raise ValueError(f"registry member bytes are not canonical: {filename}")
-        verify_internal_artifact_hash(payload)
-        if filename.endswith(".claim.json"):
-            verify_run_consumption_claim(payload)
-        elif filename.endswith(".completed.json"):
-            verify_run_consumption_completed(payload)
-        else:
-            verify_run_history_marker(payload)
-            ordinal, event = parse_history_filename(filename, auth_sha256)
-            if payload["sequence_ordinal"] != ordinal or payload["event"] != event:
-                raise ValueError(f"registry marker payload does not match its basename: {filename}")
-        payloads.append(payload)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        directory_fd = os.open(os.fspath(registry_dir), flags)
+    except OSError as exc:
+        raise ValueError("registry directory cannot be opened without following links") from exc
+    try:
+        directory_stat = os.fstat(directory_fd)
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            raise ValueError("registry path is not a directory")
+        filenames = _registry_history_filenames_from_fd(directory_fd, auth_sha256)
+        payloads: list[Mapping[str, object]] = []
+        for filename in filenames:
+            raw = _read_registry_member_from_fd(directory_fd, filename)
+            if not raw.endswith(b"\n"):
+                raise ValueError(f"registry member is missing its final LF: {filename}")
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"registry member is not canonical JSON: {filename}") from exc
+            if not isinstance(payload, Mapping) or raw != (compact_canonical_json(payload) + "\n").encode("utf-8"):
+                raise ValueError(f"registry member bytes are not canonical: {filename}")
+            verify_internal_artifact_hash(payload)
+            if filename.endswith(".claim.json"):
+                verify_run_consumption_claim(payload)
+            elif filename.endswith(".completed.json"):
+                verify_run_consumption_completed(payload)
+            else:
+                verify_run_history_marker(payload)
+                ordinal, event = parse_history_filename(filename, auth_sha256)
+                if payload["sequence_ordinal"] != ordinal or payload["event"] != event:
+                    raise ValueError(f"registry marker payload does not match its basename: {filename}")
+            payloads.append(payload)
+    finally:
+        os.close(directory_fd)
     claim = payloads[0]
     completion = payloads[1]
     auth_receipt = claim["authorization_receipt"]
