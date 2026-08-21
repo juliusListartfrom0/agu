@@ -708,10 +708,12 @@ def _verify_review_temp_directory(path: Path) -> tuple[int, int]:
 
 
 def _verify_temp_ancestor(path: Path) -> tuple[int, int]:
+    path = Path(path)
+    _verify_absolute_no_symlink_path(path)
     identity = _verify_real_directory(path)
     temp_root = Path(tempfile.gettempdir()).resolve()
     try:
-        path.resolve().relative_to(temp_root)
+        path.relative_to(temp_root)
     except ValueError as exc:
         raise ValueError("synthetic context must be under the OS temporary directory") from exc
     return identity
@@ -849,7 +851,7 @@ def _reopen_temp_context(context: object) -> Path:
         raise TypeError("synthetic context type is invalid")
     if context._token not in {_SYNTHETIC_DISCOVERY_TOKEN, _SYNTHETIC_REVIEW_TOKEN}:
         raise PermissionError("synthetic context token is invalid")
-    identity = _verify_real_directory(context.ancestor)
+    identity = _verify_temp_ancestor(context.ancestor)
     if identity != context.identity:
         raise ValueError("synthetic temporary ancestor identity changed")
     return context.ancestor

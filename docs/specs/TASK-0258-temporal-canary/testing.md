@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `260 passed` (including the local simulation command,
+- TASK-0258 focused suite: `262 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -16,7 +16,7 @@
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or OS-enforced process-tree cleanup.
-- Latest full repository pytest: `2,128 passed, 5
+- Latest full repository pytest: `2,130 passed, 5
   skipped, 15 warnings`.
 - The bounded fs_usage capture regression defers malformed stream input to
   `finish()` and records background iterator failures for the main caller;
@@ -63,6 +63,9 @@
   rejection. JSON manifest/bundle reads use bounded descriptor-relative
   no-follow traversal and reject symlinked temporary parents; they do not
   provide kernel-audit or production admission evidence.
+- Synthetic review contexts now canonicalize the macOS temporary-directory
+  alias before binding and reject symlinked ancestors both at bind time and on
+  every re-open; this is local path-integrity evidence only.
 - Run-history marker append validates the authorization SHA before touching a
   lock path, so malformed authorization input cannot create a path outside the
   registry directory.

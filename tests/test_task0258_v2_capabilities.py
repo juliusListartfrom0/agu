@@ -575,6 +575,48 @@ def test_review_contexts_are_opaque_and_distinct():
         bind_synthetic_module_a_transaction_context(review_sandbox=discovery, isolated_temp_ancestor=None)
 
 
+def test_synthetic_context_rejects_symlinked_temp_ancestor(tmp_path):
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    ancestor = real_parent / "ancestor"
+    ancestor.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    discovery = bind_implementation_review_discovery_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+    with pytest.raises(ValueError, match="symlink"):
+        bind_synthetic_module_a_discovery_context(
+            discovery_context=discovery,
+            isolated_temp_ancestor=linked_parent / ancestor.name,
+        )
+
+
+def test_synthetic_context_reopen_rejects_new_symlinked_ancestor(tmp_path):
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    ancestor = real_parent / "ancestor"
+    ancestor.mkdir()
+    discovery = bind_implementation_review_discovery_context(
+        expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+    )
+    context = bind_synthetic_module_a_discovery_context(
+        discovery_context=discovery,
+        isolated_temp_ancestor=ancestor,
+    )
+
+    moved_parent = tmp_path / "moved-parent"
+    real_parent.rename(moved_parent)
+    real_parent.symlink_to(moved_parent, target_is_directory=True)
+    scenario = {"scenario_id": "claim_then_publish", "steps": []}
+    with pytest.raises(ValueError, match="symlink"):
+        exercise_module_a_v2_state_machine_for_discovery(
+            synthetic_context=context,
+            scenario=scenario,
+        )
+
+
 def test_discovery_manifest_is_temp_bound_and_observation_only(tmp_path):
     discovery = bind_implementation_review_discovery_context(
         expected_check_name="focused_pytest", expected_command_sha256="0" * 64

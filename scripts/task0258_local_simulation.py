@@ -96,7 +96,10 @@ def build_local_simulation_report() -> dict[str, object]:
     """Exercise local synthetic paths and return an explicitly non-authorizing report."""
     command_sha256 = hashlib.sha256(b"task0258-local-simulation").hexdigest()
     with tempfile.TemporaryDirectory(prefix="agu-task0258-simulation-") as temporary_directory:
-        root = Path(temporary_directory)
+        # macOS may expose the temporary root through a `/var` symlink. The
+        # review-only context requires a canonical no-symlink path, so resolve
+        # the freshly created directory before binding it.
+        root = Path(temporary_directory).resolve()
         manifest_path, manifest_artifact_sha256, manifest_file_sha256 = _write_manifest(root)
         discovery = bind_implementation_review_discovery_context(
             expected_check_name="focused_pytest", expected_command_sha256=command_sha256

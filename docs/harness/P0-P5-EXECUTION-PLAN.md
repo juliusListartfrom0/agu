@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 260 passed and
-      full suite is 2,128 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 262 passed and
+      full suite is 2,130 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -122,6 +122,10 @@ model execution or readiness transition.
       repository-local simulation command now passes the synthetic discovery
       and review state machine, parses a C-shaped Endpoint Security event stream
       with clean finalization, and explicitly returns `p5_ready=false`.
+      The simulation canonicalizes macOS temporary paths before binding the
+      no-follow synthetic context, so the system `/var` alias cannot create a
+      false local failure while user-controlled symlinked ancestors remain
+      rejected.
       The read-only `inspect_endpoint_security_transcript.py` handoff command
       validates a real transcript's finalization and reports only
       `valid_diagnostic_transcript`; it cannot create P2/P5 evidence.
