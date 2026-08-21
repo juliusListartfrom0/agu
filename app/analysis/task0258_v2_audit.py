@@ -74,6 +74,7 @@ _ENDPOINT_SECURITY_EVENTS = frozenset(
 _ENDPOINT_SECURITY_BASE_FIELDS = frozenset(
     {"event", "pid", "pidversion", "ppid", "seq_num", "global_seq_num", "path", "result_type"}
 )
+MAXIMUM_ENDPOINT_SECURITY_ROW_BYTES = 512
 
 
 def _token_is_path(token: str) -> bool:
@@ -242,9 +243,12 @@ def parse_endpoint_security_transcript(
     last_seq_num: dict[str, int] = {}
     for line_number, line in enumerate(stream, start=1):
         try:
-            total_bytes += len(line.encode("utf-8"))
+            line_bytes = len(line.encode("utf-8"))
         except UnicodeEncodeError as exc:
             raise ValueError("Endpoint Security transcript must contain UTF-8 text") from exc
+        if line_bytes > MAXIMUM_ENDPOINT_SECURITY_ROW_BYTES:
+            raise ValueError("Endpoint Security transcript exceeds row byte cap")
+        total_bytes += line_bytes
         if total_bytes > maximum_bytes:
             raise ValueError("Endpoint Security transcript exceeds byte cap")
         if not line.strip():
@@ -366,6 +370,7 @@ __all__ = [
     "ExternalKernelAuditUnavailable",
     "MAXIMUM_READ_EVENT_BYTES",
     "MAXIMUM_READ_EVENT_ROWS",
+    "MAXIMUM_ENDPOINT_SECURITY_ROW_BYTES",
     "parse_fsusage_line",
     "parse_fsusage_transcript",
     "parse_endpoint_security_transcript",

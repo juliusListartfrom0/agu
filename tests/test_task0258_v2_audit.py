@@ -176,6 +176,17 @@ def test_parse_endpoint_security_transcript_enforces_bounds():
         parse_endpoint_security_transcript(io.StringIO(row), maximum_bytes=8)
 
 
+def test_parse_endpoint_security_transcript_rejects_rows_larger_than_c_projection():
+    oversized_path = "/" + ("x" * 600)
+    row = (
+        '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":1,'
+        f'"global_seq_num":1,"path":"{oversized_path}",'
+        '"result_type":"auth","result_auth":"allow"}\n'
+    )
+    with pytest.raises(ValueError, match="row byte cap"):
+        parse_endpoint_security_transcript(io.StringIO(row), maximum_bytes=4096)
+
+
 def test_attestation_allowed_only():
     events = [ReadEvent("open", "/allowed/data.json", None), ReadEvent("stat", "/allowed/data.json", None)]
     with pytest.raises(ValueError):
