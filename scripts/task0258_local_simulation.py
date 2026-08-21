@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import tempfile
 from pathlib import Path
 
 from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256, compact_canonical_json
+from app.analysis.task0258_v2_audit import parse_endpoint_security_transcript
 from app.analysis.task0258_v2_capabilities import (
     bind_implementation_review_discovery_context,
     bind_implementation_review_sandbox_context,
@@ -62,6 +64,34 @@ def _diagnostic_platform_boundary(report: dict[str, object]) -> dict[str, object
     }
 
 
+def _simulate_endpoint_security_diagnostic() -> dict[str, object]:
+    """Exercise the C-shaped JSONL projection without claiming kernel evidence."""
+    event_rows = (
+        '{"event":"open","pid":42,"pidversion":7,"ppid":1,"seq_num":10,'
+        '"global_seq_num":100,"path":"/private/tmp/simulation-input.json",'
+        '"result_type":"auth","result_auth":"allow"}\n'
+        '{"event":"fork","pid":43,"pidversion":8,"ppid":42,"seq_num":11,'
+        '"global_seq_num":102,"path":null,"result_type":"flags","result_flags":3}\n'
+    )
+    finalization = {
+        "record_type": "final",
+        "rows": 2,
+        "bytes": len(event_rows.encode("utf-8")),
+        "overflow": False,
+        "sequence_gap": False,
+        "protocol_error": False,
+        "timed_out": False,
+    }
+    transcript = event_rows + json.dumps(finalization, separators=(",", ":")) + "\n"
+    events = parse_endpoint_security_transcript(io.StringIO(transcript))
+    return {
+        "event_count": len(events),
+        "finalization_verified": True,
+        "evidence_class": "diagnostic_only",
+        "production_capability": False,
+    }
+
+
 def build_local_simulation_report() -> dict[str, object]:
     """Exercise local synthetic paths and return an explicitly non-authorizing report."""
     command_sha256 = hashlib.sha256(b"task0258-local-simulation").hexdigest()
@@ -98,6 +128,7 @@ def build_local_simulation_report() -> dict[str, object]:
             "discovery_manifest": dict(discovery_observation),
             "discovery_state_machine": dict(discovery_state),
             "review_state_machine": dict(review_state),
+            "endpoint_security_diagnostic": _simulate_endpoint_security_diagnostic(),
             "evidence_class": "review_only_synthetic",
             "production_capability": False,
         },

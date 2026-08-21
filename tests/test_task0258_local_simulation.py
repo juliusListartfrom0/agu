@@ -28,6 +28,11 @@ def test_local_simulation_is_observation_only(monkeypatch):
     assert report["simulation"]["discovery_manifest"]["production_capability"] is False
     assert report["simulation"]["discovery_state_machine"]["production_capability"] is False
     assert report["simulation"]["review_state_machine"]["production_capability"] is False
+    endpoint_security = report["simulation"]["endpoint_security_diagnostic"]
+    assert endpoint_security["event_count"] == 2
+    assert endpoint_security["finalization_verified"] is True
+    assert endpoint_security["evidence_class"] == "diagnostic_only"
+    assert endpoint_security["production_capability"] is False
 
 
 def test_local_simulation_never_marks_p5_ready_even_if_probe_is_ready(monkeypatch):
