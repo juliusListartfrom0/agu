@@ -49,7 +49,7 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > Required=0` receipt fields. It is a handoff only; it does not claim a passing
 > review or authorize P2/P3/P4/P5.
 
-> Follow-up verification (2026-08-22): the amended-implementation-review, static-input, authorization-binding, run-admission-binding, terminal-binding, real bootstrap-launcher integration, bounded `fs_usage` diagnostic parser/capture, worker launch-input validation, synthetic no-follow context hardening, and local Endpoint Security client/probe hardening are local, review-only evidence; current totals are 262 TASK-0258 tests and 2,130 full-suite tests. The independent fresh-context review still must be externally issued/repeated; Apple Developer access remains optional for this local work and external for the real Endpoint Security gate.
+> Follow-up verification (2026-08-22): the amended-implementation-review, static-input, authorization-binding, run-admission-binding, terminal-binding, real bootstrap-launcher integration, bounded `fs_usage` diagnostic parser/capture, worker launch-input validation, synthetic no-follow context hardening, diagnostic CLI path hardening, and local Endpoint Security client/probe hardening are local, review-only evidence; current totals are 264 TASK-0258 tests and 2,132 full-suite tests. The independent fresh-context review still must be externally issued/repeated; Apple Developer access remains optional for this local work and external for the real Endpoint Security gate.
 
 > Local audit/worker hardening (2026-08-22): `parse_fsusage_transcript()` and the
 > UTF-8 transcript bytes and parsed event rows against the v2 read-event caps,

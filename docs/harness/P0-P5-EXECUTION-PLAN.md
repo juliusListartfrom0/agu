@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 262 passed and
-      full suite is 2,130 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 264 passed and
+      full suite is 2,132 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -151,6 +151,9 @@ model execution or readiness transition.
       its own process group and terminates/reaps both observer and worker on
       observer-start, drain-cleanup, and worker-timeout failures; this remains
       local cleanup evidence only.
+      Its CLI now reads the policy through the bounded no-follow file reader
+      and writes any future provider output with no-clobber atomic JSON; a
+      symlinked policy or output cannot cross that diagnostic boundary.
       The Endpoint Security capability probe now rejects entitlement claims
       from adhoc/unknown signatures and canonicalizes the selected artifact
       before strict codesign inspection. Its C client uses strict PID parsing,

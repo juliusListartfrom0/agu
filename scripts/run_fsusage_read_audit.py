@@ -28,6 +28,7 @@ from app.analysis.task0258_v2_audit import (
     build_read_isolation_attestation,
     parse_fsusage_transcript,
 )
+from app.analysis.task0258_v2_fs import atomic_write_json, read_regular_file_no_follow
 from app.analysis.task0258_v2_worker_runner import (
     WorkerTimeoutError,
     sanitized_worker_env,
@@ -231,7 +232,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    policy = json.loads(args.policy.read_text())
+    policy_raw = read_regular_file_no_follow(args.policy)
+    try:
+        policy = json.loads(policy_raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("policy must be UTF-8 JSON") from exc
+    if not isinstance(policy, dict):
+        raise ValueError("policy must be a JSON object")
     receipt = {"artifact_sha256": args.sha, "file_sha256": args.sha}
     inputs = {
         "policy_artifact_sha256": args.sha,
@@ -254,7 +261,7 @@ def main() -> int:
         attestation_inputs=inputs,
         sudo_password=__import__("os").environ.get("AGU_SUDO_PASSWORD"),
     )
-    args.out.write_text(json.dumps(attestation, indent=2) + "\n")
+    atomic_write_json(args.out, attestation)
     print(f"events={len(events)} denied={attestation['denied_read_attempt_count']}")
     print(f"projection={attestation['read_event_projection_sha256']}")
     print(f"attestation written to {args.out}")

@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 
 import pytest
 
 from app.analysis.task0258_v2_worker_runner import WorkerTimeoutError, sanitized_worker_env
+from scripts import run_fsusage_read_audit as audit_script
 from scripts.run_fsusage_read_audit import (
     _BoundedTextCapture,
     _drain_text_stream,
@@ -261,6 +263,61 @@ def test_run_read_audit_rejects_invalid_worker_timeout_before_spawn(monkeypatch)
     monkeypatch.setattr(subprocess, "Popen", fail_popen)
     with pytest.raises(ValueError, match="worker timeout"):
         run_read_audit(worker_argv=["worker"], worker_timeout_seconds=0, policy_payload={}, attestation_inputs={})
+
+
+def test_cli_rejects_symlinked_policy_and_does_not_start_audit(monkeypatch, tmp_path):
+    policy_target = tmp_path / "policy-target.json"
+    policy_target.write_text("{}\n", encoding="utf-8")
+    policy_link = tmp_path / "policy.json"
+    policy_link.symlink_to(policy_target)
+    monkeypatch.setattr(audit_script, "run_read_audit", lambda **kwargs: pytest.fail("audit started"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_fsusage_read_audit",
+            "--worker-argv",
+            "worker",
+            "--policy",
+            str(policy_link),
+            "--out",
+            str(tmp_path / "out.json"),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="without following links"):
+        audit_script.main()
+
+
+def test_cli_does_not_clobber_symlinked_output(monkeypatch, tmp_path):
+    policy = tmp_path / "policy.json"
+    policy.write_text("{}\n", encoding="utf-8")
+    target = tmp_path / "target.json"
+    target.write_text("sentinel\n", encoding="utf-8")
+    output_link = tmp_path / "out.json"
+    output_link.symlink_to(target)
+    monkeypatch.setattr(
+        audit_script,
+        "run_read_audit",
+        lambda **kwargs: ({"safe": True, "denied_read_attempt_count": 0}, []),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_fsusage_read_audit",
+            "--worker-argv",
+            "worker",
+            "--policy",
+            str(policy),
+            "--out",
+            str(output_link),
+        ],
+    )
+
+    with pytest.raises(OSError):
+        audit_script.main()
+    assert target.read_text(encoding="utf-8") == "sentinel\n"
 
 
 def test_wait_for_worker_kills_and_reaps_timed_out_process_group(monkeypatch):
