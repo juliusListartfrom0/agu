@@ -75,7 +75,9 @@ supplied "verified" rows. The current review-only
   before recognizing the entitlement, and the C client applies no-follow/
   exclusive transcript output, bounded fork/pidversion lineage,
   path-truncation rejection, JSON-safe path encoding, strict decimal
-  PID/timeout parsing, and bounded target-exit/timeout shutdown; the
+  PID/timeout parsing, bounded target-exit/timeout shutdown, exact
+  notify-result serialization, and fail-closed notification-sequence gap
+  detection; the
   full production proof boundary is not
   sealed. The pipeline CLI now refuses production execution unless a future
   external admission issuer is bound; its end-to-end tests require an explicit

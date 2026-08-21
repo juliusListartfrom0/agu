@@ -32,6 +32,11 @@
   default 120-second lifetime with timeout exit code `4`; this prevents an
   unbounded local observer but remains unsigned diagnostic code, not platform
   authorization or kernel evidence.
+- Each diagnostic row now carries the Endpoint Security notification result
+  (`auth`/`flags`) plus available per-event and global sequence numbers. A
+  sequence gap, non-notify message, or unknown result type fails closed with
+  diagnostic exit code `5`; this detects client-side event loss but remains
+  local evidence only.
 - The bootstrap regression coverage now pins the four exact parent review
   command arrays, the fixed request/source FD map `202/203`, and no-follow
   canonical reopening of the standalone runtime contract through a
@@ -205,7 +210,8 @@ read-isolation attestation. The probe now accepts
   C client passes strict warning compilation with no-follow/exclusive output,
   bounded fork/pidversion lineage, path-truncation rejection, JSON-safe path
   encoding, strict decimal PID/timeout parsing, and bounded target-exit/timeout
-  shutdown. Without that option it intentionally reports the temporary
+  shutdown, exact notify-result serialization, and fail-closed notification
+  sequence-gap detection. Without that option it intentionally reports the temporary
   ad-hoc compile and cannot observe an installed system extension.
 
 ## Repository-local simulation

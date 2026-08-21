@@ -144,8 +144,9 @@ model execution or readiness transition.
       before strict codesign inspection. Its C client uses strict PID parsing,
       no-follow/exclusive output creation, bounded fork/pidversion lineage,
       path-truncation rejection, JSON escaping, strict decimal PID/timeout
-      parsing, target EXIT handling, and a bounded default client lifetime;
-      SDK compilation remains local evidence only.
+      parsing, target EXIT handling, bounded default client lifetime, exact
+      notify-result serialization, and fail-closed `seq_num`/`global_seq_num`
+      gap detection; SDK compilation remains local evidence only.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
 
@@ -155,7 +156,8 @@ model execution or readiness transition.
       but the temporary client is only ad-hoc signed and lacks the required
       entitlement; the probe correctly remains fail-closed. The client also
       passes strict `clang -Wall -Wextra -Werror` syntax compilation and has a
-      bounded timeout/target-exit shutdown path. Once a signed
+      bounded timeout/target-exit shutdown path and fail-closed notification
+      sequence/result capture. Once a signed
       executable or `.systemextension` exists, pass it explicitly with
       `scripts/task0258_endpoint_security_capability.py --signed-artifact
       <path> --json`; the default probe intentionally continues to inspect its
