@@ -8,13 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256, compact_canonical_json
+from app.analysis.task0258_module_a_v2 import (
+    VERIFICATION_ATTEMPT_SCHEMA_V2,
+    canonical_artifact_sha256,
+    compact_canonical_json,
+)
 from app.analysis.task0258_run_history import ADMISSION_SCHEMA, CLAIM_SCHEMA, COMPLETION_SCHEMA, MODULE_ID
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_capabilities import (
     VerifiedImplementationReviewSandboxContext,
     VerifiedReviewDiscoveryContext,
     VerifiedReviewReadIsolationBinding,
+    VerifiedReviewVerificationAttempt,
     bind_implementation_review_discovery_context,
     bind_implementation_review_sandbox_context,
     bind_synthetic_module_a_discovery_context,
@@ -26,6 +31,7 @@ from app.analysis.task0258_v2_capabilities import (
     load_verified_run_admission,
     load_verified_run_history_ledger,
     load_verified_terminal_artifact,
+    load_verified_verification_attempt,
     replay_module_a_read_traversal_for_discovery,
 )
 from app.analysis.task0258_v2_pipeline import (
@@ -234,6 +240,70 @@ def _read_isolation_fixture(tmp_path):
         "attestation_path": attestation_path,
         "policy_file_sha": hashlib.sha256(policy_raw).hexdigest(),
         "attestation_file_sha": hashlib.sha256(attestation_raw).hexdigest(),
+    }
+
+
+def _verification_attempt_fixture(tmp_path):
+    read_isolation = _read_isolation_fixture(tmp_path)
+    authorization_receipts = {
+        "parent_spec_approval": _receipt(),
+        "amendment_implementation_approval": _receipt(),
+        "amended_implementation_review": _receipt(),
+        "rerun_authorization": _receipt(),
+    }
+    attempt = {
+        "schema_version": VERIFICATION_ATTEMPT_SCHEMA_V2,
+        "module_id": MODULE_ID,
+        "purpose": "development_diagnostic_only",
+        "runtime_consumable": False,
+        "training_consumable": False,
+        "formal_evaluation_eligible": False,
+        "promotion_eligible": False,
+        "promoted": False,
+        "verification_ordinal": 1,
+        "authorization_receipts": authorization_receipts,
+        "run_identity_receipt": _receipt(),
+        "history_head_receipt": _receipt(),
+        "run_admission_receipt": _receipt(),
+        "plan_receipt": _receipt(),
+        "task0257_input_receipts": [],
+        "checkpoint_receipt": _receipt(),
+        "source_video_receipts": [],
+        "producer_attempt_chain_receipts": [],
+        "producer_embedding_receipt": _receipt(),
+        "worker_request": {},
+        "child_observation": {},
+        "worker_payload": {},
+        "read_isolation_policy": read_isolation["policy"],
+        "read_isolation_attestation": read_isolation["attestation"],
+        "verification_embedding_slot": {
+            "provider": "verification_tiled_swin_embeddings",
+            "verification_state": "verified",
+            "receipt": _receipt(),
+        },
+        "resource_log_receipt": _receipt(),
+        "started_cumulative_active_runtime_nanoseconds": 0,
+        "ended_cumulative_active_runtime_nanoseconds": 0,
+        "started_cumulative_resource_samples": 0,
+        "ended_cumulative_resource_samples": 0,
+        "started_cumulative_resource_log_bytes": 0,
+        "ended_cumulative_resource_log_bytes": 0,
+        "computational_projection_sha256": "0" * 64,
+        "received_signal": None,
+        "disposition": "completed",
+        "stop_reason": None,
+    }
+    attempt["artifact_sha256"] = canonical_artifact_sha256(attempt)
+    attempt_path = tmp_path / "verification-attempt.json"
+    raw = (compact_canonical_json(attempt) + "\n").encode()
+    attempt_path.write_bytes(raw)
+    return {
+        "attempt": attempt,
+        "attempt_path": attempt_path,
+        "attempt_file_sha": hashlib.sha256(raw).hexdigest(),
+        "review": bind_implementation_review_sandbox_context(
+            expected_check_name="focused_pytest", expected_command_sha256="0" * 64
+        ),
     }
 
 
@@ -588,6 +658,47 @@ def test_read_isolation_loader_rejects_symlinked_parent(tmp_path):
             attestation_path=fixture["attestation_path"],
             expected_attestation_artifact_sha256=fixture["attestation"]["artifact_sha256"],
             expected_attestation_file_sha256=fixture["attestation_file_sha"],
+        )
+
+
+def test_verification_attempt_loader_replays_bound_read_isolation(tmp_path):
+    fixture = _verification_attempt_fixture(tmp_path)
+    loaded = load_verified_verification_attempt(
+        execution_context=fixture["review"],
+        attempt_path=fixture["attempt_path"],
+        expected_artifact_sha256=fixture["attempt"]["artifact_sha256"],
+        expected_file_sha256=fixture["attempt_file_sha"],
+    )
+
+    assert isinstance(loaded, VerifiedReviewVerificationAttempt)
+    assert loaded.artifact.payload["schema_version"] == VERIFICATION_ATTEMPT_SCHEMA_V2
+    assert (
+        loaded.artifact.payload["read_isolation_attestation"]["policy_artifact_sha256"]
+        == (loaded.artifact.payload["read_isolation_policy"]["artifact_sha256"])
+    )
+
+
+def test_verification_attempt_loader_rejects_nested_read_isolation_drift(tmp_path):
+    fixture = _verification_attempt_fixture(tmp_path)
+    drifted = dict(fixture["attempt"])
+    drifted_attestation = dict(drifted["read_isolation_attestation"])
+    drifted_attestation["worker_role"] = "producer-worker"
+    drifted_attestation["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in drifted_attestation.items() if key != "artifact_sha256"}
+    )
+    drifted["read_isolation_attestation"] = drifted_attestation
+    drifted["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in drifted.items() if key != "artifact_sha256"}
+    )
+    raw = (compact_canonical_json(drifted) + "\n").encode()
+    fixture["attempt_path"].write_bytes(raw)
+
+    with pytest.raises(ValueError, match="worker role"):
+        load_verified_verification_attempt(
+            execution_context=fixture["review"],
+            attempt_path=fixture["attempt_path"],
+            expected_artifact_sha256=drifted["artifact_sha256"],
+            expected_file_sha256=hashlib.sha256(raw).hexdigest(),
         )
 
 

@@ -42,6 +42,7 @@ from app.analysis.task0258_v2_artifacts import (
 from app.analysis.task0258_v2_fs import verify_generation_directory
 from app.analysis.task0258_v2_pipeline import build_member_receipts
 from app.analysis.task0258_v2_read_isolation import verify_read_isolation_binding
+from app.analysis.task0258_v2_verification import verify_verification_attempt
 
 _DISCOVERY_TOKEN = object()
 _SANDBOX_TOKEN = object()
@@ -49,6 +50,7 @@ _SYNTHETIC_DISCOVERY_TOKEN = object()
 _SYNTHETIC_REVIEW_TOKEN = object()
 _JSON_ARTIFACT_TOKEN = object()
 _READ_ISOLATION_TOKEN = object()
+_VERIFICATION_ATTEMPT_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
 
@@ -148,6 +150,26 @@ class VerifiedReviewReadIsolationBinding:
         self._token = token
         self.policy = kwargs["policy"]
         self.attestation = kwargs["attestation"]
+
+
+class VerifiedReviewVerificationAttempt:
+    """Review-only canonical verification-attempt artifact.
+
+    Loading this object proves only the local schema and nested read-isolation
+    binding. It is not a worker admission, kernel attestation, or production
+    execution capability.
+    """
+
+    __slots__ = ("_token", "artifact")
+
+    def __new__(cls, token: object = None, **kwargs: object):
+        if token is not _VERIFICATION_ATTEMPT_TOKEN:
+            raise TypeError("VerifiedReviewVerificationAttempt cannot be constructed directly")
+        return super().__new__(cls)
+
+    def __init__(self, token: object = None, **kwargs: object) -> None:
+        self._token = token
+        self.artifact = kwargs["artifact"]
 
 
 class VerifiedRunHistoryLedger:
@@ -556,6 +578,34 @@ def load_verified_read_isolation_binding(
     )
 
 
+def load_verified_verification_attempt(
+    *,
+    execution_context: object,
+    attempt_path: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+) -> VerifiedReviewVerificationAttempt:
+    """Reopen and validate one verification attempt in a review sandbox.
+
+    The attempt validator includes the policy↔attestation binder. This
+    function therefore verifies the complete canonical attempt bytes before
+    returning an opaque diagnostic object, while leaving production admission
+    and external kernel-audit provenance outside the local loader.
+    """
+    if (
+        type(execution_context) is not VerifiedImplementationReviewSandboxContext
+        or execution_context._token is not _SANDBOX_TOKEN
+    ):
+        raise PermissionError("verification attempt loader requires a verified review context")
+    artifact = _load_verified_json_artifact(
+        path=attempt_path,
+        expected_artifact_sha256=expected_artifact_sha256,
+        expected_file_sha256=expected_file_sha256,
+    )
+    verify_verification_attempt(artifact.payload)
+    return VerifiedReviewVerificationAttempt(_VERIFICATION_ATTEMPT_TOKEN, artifact=artifact)
+
+
 def _artifact_file_receipt(artifact: VerifiedJsonArtifact) -> dict[str, str]:
     return {
         "artifact_sha256": artifact.artifact_sha256,
@@ -889,6 +939,7 @@ __all__ = [
     "VerifiedSyntheticModuleATransactionContext",
     "VerifiedJsonArtifact",
     "VerifiedReviewReadIsolationBinding",
+    "VerifiedReviewVerificationAttempt",
     "VerifiedRunHistoryLedger",
     "VerifiedReviewRunAdmission",
     "bind_implementation_review_discovery_context",
@@ -900,6 +951,7 @@ __all__ = [
     "exercise_module_a_v2_state_machine_for_review",
     "load_verified_run_admission",
     "load_verified_read_isolation_binding",
+    "load_verified_verification_attempt",
     "load_verified_candidate_receipt_bundle",
     "load_verified_terminal_artifact",
     "load_verified_run_history_ledger",
