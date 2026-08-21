@@ -181,7 +181,6 @@ def seal_candidate_receipt_bundle(
     verify_candidate_receipt_bundle(bundle_payload)
     verify_absent(bundle_path)
     lock_path = bundle_path.parent / ".candidate-receipt-bundle.lock"
-    lock_path.touch(mode=0o600, exist_ok=True)
     with exclusive_flock(lock_path):
         verify_absent(bundle_path)
         atomic_write_json(bundle_path, bundle_payload, mode=0o600)

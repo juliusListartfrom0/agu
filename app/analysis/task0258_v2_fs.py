@@ -13,6 +13,7 @@ import errno
 import fcntl
 import os
 import secrets
+import stat
 import sys
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
@@ -35,10 +36,19 @@ def fsync_dir(path: Path) -> None:
 
 @contextmanager
 def exclusive_flock(path: Path):
-    """Hold a no-follow exclusive flock on a file for the context duration."""
+    """Create/open and hold a no-follow exclusive flock on a regular file."""
     _verify_no_symlink_ancestors(path.parent)
-    fd = os.open(os.fspath(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    flags = (
+        os.O_RDONLY
+        | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    fd = os.open(os.fspath(path), flags, 0o600)
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError(f"lock path is not a regular file: {path}")
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:

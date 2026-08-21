@@ -150,7 +150,6 @@ def append_run_history_marker(
         raise ValueError("history authorization SHA is invalid")
     verify_run_history_marker(payload)
     lock_path = registry_dir / f".{auth_sha256}.history.lock"
-    lock_path.touch(mode=0o600, exist_ok=True)
     with exclusive_flock(lock_path):
         replay_run_history_registry(registry_dir, auth_sha256)
         filenames = registry_history_filenames(registry_dir, auth_sha256)

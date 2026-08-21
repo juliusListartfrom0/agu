@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 import pytest
 
@@ -244,6 +245,29 @@ def test_append_marker_rejects_invalid_authorization_before_lock_path(tmp_path):
 
     assert not escaped_lock.exists()
     assert list(reg.iterdir()) == []
+
+
+def test_append_marker_rejects_symlinked_lock_without_touching_target(tmp_path):
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    claim = _claim()
+    completed = _completed()
+    seal_run_consumption_claim(reg, AUTH, claim)
+    seal_run_consumption_completed(reg, AUTH, completed)
+
+    target = tmp_path / "lock-target"
+    target.write_text("sentinel")
+    fixed_ns = 123456789000000000
+    os.utime(target, ns=(fixed_ns, fixed_ns))
+    lock_path = reg / f".{AUTH}.history.lock"
+    lock_path.symlink_to(target)
+
+    with pytest.raises(OSError):
+        append_run_history_marker(reg, AUTH, _marker("producer_attempt_1_admitted"), None)
+
+    assert target.read_text() == "sentinel"
+    assert target.stat().st_mtime_ns == fixed_ns
+    assert lock_path.is_symlink()
 
 
 def _admission(output_root="/x", claim_receipt=None):
