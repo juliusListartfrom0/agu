@@ -37,8 +37,8 @@ model execution or readiness transition.
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
-      and review-only loader findings; current focused suite is 243 passed and
-      full suite is 2,111 passed, 5 skipped, 15 warnings. The review-only JSON
+      and review-only loader findings; current focused suite is 251 passed and
+      full suite is 2,119 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock
@@ -147,8 +147,11 @@ model execution or readiness transition.
       parsing, target EXIT handling, bounded default client lifetime, exact
       notify-result serialization, and fail-closed `seq_num`/`global_seq_num`
       gap detection; successful transcript finalization also flushes and
-      `fsync`s the descriptor before close; SDK compilation remains local
-      evidence only.
+      `fsync`s the descriptor before close; the Python side now has a strict,
+      bounded JSONL diagnostic parser that rejects duplicate fields, malformed
+      result projections, invalid paths, and retained-row sequence regressions;
+      it remains diagnostic-only and cannot mint an attestation. SDK
+      compilation remains local evidence only.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
 
