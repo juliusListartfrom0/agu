@@ -33,6 +33,13 @@ def validate_worker_argv(argv: object) -> None:
         raise ValueError("worker argv is invalid")
 
 
+def validate_worker_launch_inputs(argv: object, timeout_seconds: object) -> None:
+    """Validate all worker launch inputs before crossing the process boundary."""
+    validate_worker_argv(argv)
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
+        raise ValueError("worker timeout must be a positive integer")
+
+
 @dataclass(frozen=True)
 class WorkerResult:
     exit_code: int
@@ -74,9 +81,7 @@ def run_worker_subprocess(
     On timeout the process group is hard-killed and ``WorkerTimeoutError`` is
     raised with the captured output.
     """
-    validate_worker_argv(argv)
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
-        raise ValueError("worker timeout must be a positive integer")
+    validate_worker_launch_inputs(argv, timeout_seconds)
     expected_env = sanitized_worker_env()
     if env is not None and env != expected_env:
         raise ValueError("worker environment must be the exact sanitized contract environment")
@@ -106,5 +111,6 @@ __all__ = [
     "WorkerTimeoutError",
     "sanitized_worker_env",
     "validate_worker_argv",
+    "validate_worker_launch_inputs",
     "run_worker_subprocess",
 ]

@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 
 import pytest
 
-from app.analysis.task0258_v2_worker_runner import sanitized_worker_env
+from app.analysis.task0258_v2_worker_runner import WorkerTimeoutError, sanitized_worker_env
 from scripts.run_fsusage_read_audit import (
     _BoundedTextCapture,
     _drain_text_stream,
     _join_diagnostic_drains,
+    _wait_for_worker,
     run_read_audit,
 )
 
@@ -87,6 +90,38 @@ def test_run_read_audit_uses_sanitized_worker_process_group(monkeypatch):
 
     assert calls[0][1]["env"] == sanitized_worker_env()
     assert calls[0][1]["start_new_session"] is True
+
+
+def test_run_read_audit_rejects_invalid_worker_timeout_before_spawn(monkeypatch):
+    def fail_popen(*args, **kwargs):
+        pytest.fail("invalid worker timeout reached Popen")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_popen)
+    with pytest.raises(ValueError, match="worker timeout"):
+        run_read_audit(worker_argv=["worker"], worker_timeout_seconds=0, policy_payload={}, attestation_inputs={})
+
+
+def test_wait_for_worker_kills_and_reaps_timed_out_process_group(monkeypatch):
+    class HangingProcess:
+        pid = 1234
+
+        def __init__(self):
+            self.reaped = False
+
+        def wait(self, timeout=None):
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(cmd=["worker"], timeout=timeout)
+            self.reaped = True
+
+    kill_calls = []
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: kill_calls.append((pid, sig)))
+    process = HangingProcess()
+
+    with pytest.raises(WorkerTimeoutError):
+        _wait_for_worker(process, ["worker"], timeout_seconds=3)
+
+    assert kill_calls == [(1234, signal.SIGKILL)]
+    assert process.reaped is True
 
 
 @pytest.mark.parametrize("maximum_bytes", [0, -1, True, 1.0])

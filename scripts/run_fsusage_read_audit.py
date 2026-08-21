@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 from pathlib import Path
 
@@ -26,7 +28,11 @@ from app.analysis.task0258_v2_audit import (
     build_read_isolation_attestation,
     parse_fsusage_transcript,
 )
-from app.analysis.task0258_v2_worker_runner import sanitized_worker_env, validate_worker_argv
+from app.analysis.task0258_v2_worker_runner import (
+    WorkerTimeoutError,
+    sanitized_worker_env,
+    validate_worker_launch_inputs,
+)
 
 _MAXIMUM_DIAGNOSTIC_TRANSCRIPT_BYTES = MAXIMUM_READ_EVENT_BYTES
 
@@ -87,6 +93,19 @@ def _join_diagnostic_drains(threads, *, timeout_seconds: float) -> None:
         raise RuntimeError("fs_usage diagnostic stream did not finish")
 
 
+def _wait_for_worker(proc, worker_argv: list[str], *, timeout_seconds: int) -> None:
+    """Wait for the worker or kill and reap its dedicated process group."""
+    try:
+        proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+        raise WorkerTimeoutError(worker_argv, timeout_seconds, "", "") from None
+
+
 def run_read_audit(
     *,
     worker_argv: list[str],
@@ -94,6 +113,7 @@ def run_read_audit(
     attestation_inputs: dict,
     fs_usage_extra_args: list[str] | None = None,
     sudo_password: str | None = None,
+    worker_timeout_seconds: int = 120,
 ) -> tuple[dict, list]:
     """Run the audit and return ``(attestation_payload, events)``.
 
@@ -106,7 +126,7 @@ def run_read_audit(
     import io
     import threading
 
-    validate_worker_argv(worker_argv)
+    validate_worker_launch_inputs(worker_argv, worker_timeout_seconds)
     proc = subprocess.Popen(
         worker_argv,
         env=sanitized_worker_env(),
@@ -143,12 +163,18 @@ def run_read_audit(
     t2 = threading.Thread(target=_drain_text_stream, args=(fs.stderr, err_capture, drain_errors), daemon=True)
     t1.start()
     t2.start()
-    proc.wait()
+    worker_error: Exception | None = None
+    try:
+        _wait_for_worker(proc, worker_argv, timeout_seconds=worker_timeout_seconds)
+    except Exception as exc:
+        worker_error = exc
     try:
         fs.terminate()
     except ProcessLookupError:
         pass
     _join_diagnostic_drains((t1, t2), timeout_seconds=5)
+    if worker_error is not None:
+        raise worker_error
     if drain_errors:
         raise RuntimeError("fs_usage diagnostic stream drain failed") from drain_errors[0]
     fs_out = out_capture.finish()
