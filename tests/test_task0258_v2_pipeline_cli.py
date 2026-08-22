@@ -264,7 +264,7 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
     out = tmp_path / "out"
     out.mkdir()
     root = out / "vru_causal_temporal_retrospective_v2"
-    lock2 = out / ".lock"
+    lock2 = out / ".task0258-output.lock"
     lock2.write_text("")
     bundle_path = tmp_path / "candidate-receipt-bundle.json"
     claim = _claim(str(root))
@@ -293,7 +293,7 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
     # receipts from the exact bytes the pipeline will publish.
     scratch = tmp_path / "scratch"
     scratch.mkdir()
-    lock = scratch / ".lock"
+    lock = scratch.parent / ".task0258-output.lock"
     lock.write_text("")
     pre_candidate = seal_candidate_v2(scratch, encoded, flock_path=lock)
 

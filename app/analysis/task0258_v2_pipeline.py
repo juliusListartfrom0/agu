@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -45,6 +46,22 @@ from app.analysis.task0258_v2_gate import (
     CANDIDATE_PREPUBLICATION_CHECKS,
     RESULT_ORDERED_CHECKS,
 )
+
+_OUTPUT_PARENT_FLOCK_NAME = ".task0258-output.lock"
+
+
+def output_parent_flock_path(output_root: Path) -> Path:
+    """Return the sole lock path allowed for a v2 output-root transaction."""
+    output_root = Path(output_root)
+    if not output_root.is_absolute() or os.path.normpath(os.fspath(output_root)) != os.fspath(output_root):
+        raise ValueError("v2 output root must be an absolute canonical path")
+    return output_root.parent / _OUTPUT_PARENT_FLOCK_NAME
+
+
+def _require_output_parent_flock(output_root: Path, flock_path: Path) -> None:
+    expected = output_parent_flock_path(output_root)
+    if Path(flock_path) != expected:
+        raise ValueError("v2 output transaction must use the fixed output-parent lock")
 
 
 def build_candidate_gate_payload(
@@ -97,6 +114,7 @@ def seal_candidate_v2(
     competing terminal generation fails closed before any candidate bytes are
     published.
     """
+    _require_output_parent_flock(output_root, flock_path)
     authorization_sha256 = _candidate_authorization_sha256(candidate_members)
 
     def validate_topology() -> None:
@@ -240,6 +258,7 @@ def seal_candidate_receipt_bundle(
         raise ValueError("candidate receipt bundle basename is not authorized")
     if candidate_dir.name != "candidate_v2":
         raise ValueError("candidate bundle output-root binding is invalid")
+    _require_output_parent_flock(candidate_dir.parent, output_flock_path)
     if bundle_path.is_relative_to(candidate_dir.parent):
         raise ValueError("candidate receipt bundle must be outside the output root")
     if output_flock_path.is_relative_to(candidate_dir):
@@ -370,6 +389,7 @@ def seal_verified_result(
     """No-clobber publish ``verified_result_v2/verification_registry.json``."""
     if not isinstance(registry_payload, Mapping):
         raise ValueError("verified result must be an object")
+    _require_output_parent_flock(output_root, flock_path)
     verify_postpublication_verification(registry_payload)
     authorization_receipts = registry_payload["authorization_receipts"]
     if not isinstance(authorization_receipts, Mapping) or not isinstance(
@@ -438,6 +458,7 @@ def seal_postverification_failure(
     """No-clobber publish ``postverification_failure_v2/failure.json``."""
     if not isinstance(failure_payload, Mapping):
         raise ValueError("postverification failure must be an object")
+    _require_output_parent_flock(output_root, flock_path)
     verify_postpublication_failure(failure_payload)
     dependency_slots = failure_payload["dependency_provider_slots"]
     if not isinstance(dependency_slots, (list, tuple)) or len(dependency_slots) < 4:
@@ -494,6 +515,7 @@ def _require_candidate_publication_topology(output_root: Path) -> None:
 
 __all__ = [
     "build_candidate_gate_payload",
+    "output_parent_flock_path",
     "seal_candidate_v2",
     "build_member_receipts",
     "read_published_candidate_receipt_bundle",

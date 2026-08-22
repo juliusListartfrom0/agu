@@ -114,7 +114,7 @@ def test_seal_candidate_v2_and_member_receipts(tmp_path, monkeypatch):
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
-    lock = out / ".lock"
+    lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
     final = seal_candidate_v2(out, members, flock_path=lock)
     assert final == out / "candidate_v2"
@@ -139,7 +139,7 @@ def test_candidate_publication_binds_authorization_stage_and_cleans_it(tmp_path)
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
-    lock = out / ".lock"
+    lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
 
     final = seal_candidate_v2(out, members, flock_path=lock)
@@ -153,7 +153,7 @@ def test_candidate_publication_rejects_fixed_stage_residue(tmp_path):
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
-    lock = out / ".lock"
+    lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
     authorization_sha256 = _gate()["input_receipts"][3]["receipt"]["artifact_sha256"]
     stage = out / f".{authorization_sha256}.candidate-v2-stage"
@@ -170,7 +170,7 @@ def test_candidate_publication_rejects_existing_terminal_generation(tmp_path):
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
-    lock = out / ".lock"
+    lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
     (out / "verified_result_v2").mkdir()
 
@@ -184,7 +184,7 @@ def test_candidate_receipt_bundle(tmp_path):
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
-    lock = out / ".lock"
+    lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
     final = seal_candidate_v2(out, members, flock_path=lock)
     bundle = build_candidate_receipt_bundle_payload(
@@ -225,7 +225,7 @@ def test_published_candidate_receipt_bundle_rejects_path_and_payload_drift(tmp_p
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
-    lock = out / ".lock"
+    lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
     final = seal_candidate_v2(out, members, flock_path=lock)
     bundle = build_candidate_receipt_bundle_payload(
@@ -265,7 +265,7 @@ def test_candidate_receipt_bundle_rejects_locked_candidate_drift(tmp_path):
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
-    lock = out / ".lock"
+    lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
     final = seal_candidate_v2(out, members, flock_path=lock)
     bundle = build_candidate_receipt_bundle_payload(
@@ -293,11 +293,39 @@ def test_candidate_receipt_bundle_rejects_locked_candidate_drift(tmp_path):
         )
 
 
+def test_candidate_receipt_bundle_rejects_noncanonical_output_lock(tmp_path):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    canonical_lock = tmp_path / ".task0258-output.lock"
+    final = seal_candidate_v2(out, members, flock_path=canonical_lock)
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=final,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    with pytest.raises(ValueError, match="output-parent lock"):
+        seal_candidate_receipt_bundle(
+            tmp_path / "candidate-receipt-bundle.json",
+            bundle,
+            candidate_dir=final,
+            output_flock_path=out / ".caller-selected.lock",
+        )
+
+
 def test_candidate_receipt_bundle_rejects_fixed_stage_residue(tmp_path):
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
-    lock = out / ".lock"
+    lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
     final = seal_candidate_v2(out, members, flock_path=lock)
     bundle = build_candidate_receipt_bundle_payload(
@@ -390,7 +418,7 @@ def test_seal_verified_result_and_postverification_failure(tmp_path):
 
     out = tmp_path / "out"
     out.mkdir()
-    lock = out / ".lock"
+    lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
     candidate = seal_candidate_v2(out, _make_members(), flock_path=lock)
     assert candidate == out / "candidate_v2"
@@ -437,7 +465,7 @@ def test_seal_verified_result_and_postverification_failure(tmp_path):
 
     failure_out = tmp_path / "failure-out"
     failure_out.mkdir()
-    failure_lock = failure_out / ".lock"
+    failure_lock = failure_out.parent / ".task0258-output.lock"
     failure_lock.write_text("")
     seal_candidate_v2(failure_out, _make_members(), flock_path=failure_lock)
     fail_dir = seal_postverification_failure(failure_out, failure, flock_path=failure_lock)

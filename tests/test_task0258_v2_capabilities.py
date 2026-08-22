@@ -438,7 +438,7 @@ def _admission_fixture(tmp_path):
     }
     admission["artifact_sha256"] = canonical_artifact_sha256(admission)
     admission_bytes = (compact_canonical_json(admission) + "\n").encode()
-    root_lock = tmp_path / "output-root.lock"
+    root_lock = tmp_path / ".task0258-output.lock"
     from app.analysis.task0258_v2_fs import seal_generation_directory
 
     seal_generation_directory(
@@ -1725,7 +1725,7 @@ def test_synthetic_context_reopens_and_rejects_identity_drift(tmp_path):
 def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_path):
     root = tmp_path / "output"
     root.mkdir()
-    lock = root / ".lock"
+    lock = root.parent / ".task0258-output.lock"
     lock.write_text("")
     candidate = seal_candidate_v2(root, _members(), flock_path=lock)
     bundle = build_candidate_receipt_bundle_payload(
@@ -1844,7 +1844,7 @@ def test_run_admission_loader_can_bind_to_replayed_static_input_contract(tmp_pat
 def test_candidate_bundle_loader_rejects_candidate_member_drift(tmp_path):
     root = tmp_path / "output"
     root.mkdir()
-    lock = root / ".lock"
+    lock = root.parent / ".task0258-output.lock"
     lock.write_text("")
     candidate = seal_candidate_v2(root, _members(), flock_path=lock)
     bundle = build_candidate_receipt_bundle_payload(
