@@ -19,6 +19,12 @@ P3, P4, and P5 must not be marked complete.
 There is no free individual route that satisfies the real P2 gate. The
 available zero-cost options have narrower meanings:
 
+The dated source audit is recorded at
+[`docs/specs/TASK-0258-temporal-canary/p2-free-route-audit-2026-08-22.md`](../specs/TASK-0258-temporal-canary/p2-free-route-audit-2026-08-22.md).
+Apple currently lists the Developer Program at USD 99 per membership year,
+but payment alone does not grant Endpoint Security: the managed capability must
+still be requested and assigned by Apple.
+
 1. A free Apple Account / Personal Team can be used for ordinary app
    development and limited device testing, but it does not grant the managed
    Endpoint Security client entitlement. Apple documents that entitlement as

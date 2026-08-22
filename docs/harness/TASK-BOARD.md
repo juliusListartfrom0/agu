@@ -36,6 +36,16 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 ## In Progress
 
+> P2 free-route audit (2026-08-22): the official Apple review confirms that a
+> free Apple Account/Personal Team, local ad-hoc signing, and SIP-disabled
+> debugging can support development diagnostics but cannot provide the managed
+> Endpoint Security entitlement or the P2 OS/kernel evidence. Apple lists the
+> paid Developer Program at USD 99/year, but payment alone does not guarantee
+> the entitlement. The only no-new-fee routes that can potentially reach P2 are
+> an Apple-approved fee waiver for an eligible organization or sponsorship by
+> an already enrolled organization; both require a real authorized team. See
+> `docs/specs/TASK-0258-temporal-canary/p2-free-route-audit-2026-08-22.md`.
+
 > Local Endpoint Security transcript handoff (2026-08-22):
 > `scripts/inspect_endpoint_security_transcript.py` safely validates an
 > absolute regular non-symlink C JSONL transcript and its clean finalization,
