@@ -168,6 +168,12 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > review-only with no production capability. Exact-SHA authorization is still
 > blocked by P2, so P4/P5 remain prohibited.
 
+> P3 branch lifecycle (2026-08-22):
+> `codex/agu-p3-review-only-audit@2160262` was pushed and merged into
+> `main@5c1f560`; post-merge review-only focused tests (`7 passed, 43
+> deselected`) and Harness passed. This closes only the local replay handoff;
+> exact-SHA authorization remains unissued because P2 is incomplete.
+
 > Latest P1 remediation (2026-08-22): commit `b18c784` closes the output-root
 > replacement finding from the `afbfef0` review by binding both
 > `candidate_dir.parent` and `candidate_dir` to stable output-root/candidate

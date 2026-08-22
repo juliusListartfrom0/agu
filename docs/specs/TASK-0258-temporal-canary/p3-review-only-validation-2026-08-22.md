@@ -4,6 +4,8 @@ Status: **not authorized / waiting on P2**
 
 - Branch: `codex/agu-p3-review-only-audit`
 - Base: `main` merge commit `7109fa9`
+- Branch commit: `2160262` (pushed to the remote branch)
+- Documentation merge: `main@5c1f560`
 - P2 prerequisite: not satisfied; platform status remains
   `blocked_external_authorization`
 
