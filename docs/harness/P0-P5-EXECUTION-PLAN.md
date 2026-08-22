@@ -14,10 +14,11 @@ model execution or readiness transition.
 - Treat the no-sudo ad-hoc Endpoint Security probe and all synthetic contexts as
   diagnostics only. They must not mint a kernel read-isolation attestation,
   user-approval evidence, a v2 rerun authorization, or a product result.
-- Keep P1/P2 open where they require an OS-enforced review sandbox, a real
-  Endpoint Security entitlement, external approval, and authenticated kernel
-  observation. Keep P3/P4/P5 and readiness incomplete until those gates are
-  satisfied.
+- P1 is closed at the exact target `46c35e6` by the sealed independent
+  `Critical=0 / Required=0` receipt in the TASK-0258 temporal-canary spec.
+  Keep P2 open because it still requires a real Endpoint Security entitlement,
+  external approval, and authenticated kernel observation. Keep P3/P4/P5 and
+  readiness incomplete until those gates are satisfied.
 - The exact external handoff procedure is recorded in
   [`TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`](TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md).
 
@@ -33,13 +34,14 @@ model execution or readiness transition.
 ### P1 — Independent implementation review
 
 - [x] Review the exact current implementation from a different fresh context.
-- [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
+- [x] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
-- [ ] Seal the amended implementation-review receipt.
-- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@46c35e6` against
+- [x] Seal the amended implementation-review receipt in
+      `docs/specs/TASK-0258-temporal-canary/fresh-context-review-receipt-2026-08-22.md`.
+- [x] Fresh-review target was `codex/agu-p1-remediation-2@46c35e6` against
       `c5157f2`, with 46 changed files and diff SHA
       `3a962603f008ec2214c9cb8c324c48f1c3471b6bcacd8e957199920c0c62f488`;
-      the exact independent `Critical=0 / Required=0` receipt is still open.
+      the exact independent sealed `Critical=0 / Required=0` receipt is recorded.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 280 passed and
       full suite is 2,148 passed, 5 skipped, 15 warnings. The review-only JSON
@@ -215,11 +217,9 @@ model execution or readiness transition.
       full suite is 2,165 passed, 5 skipped, 15 warnings. This
       is local evidence only and is not yet an independent sealed review
       receipt.
-- [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
-      repeat the independent review to obtain `Critical=0 / Required=0`.
-- [ ] Repeat the fresh review against `46c35e6` after the persistent lock-leaf
-      and parent-path identity findings were remediated; the exact review must
-      return a sealed `Critical=0 / Required=0` receipt before P1 can close.
+- [x] Close P1 with the exact-SHA independent sealed `Critical=0 / Required=0`
+      receipt. The OS-enforced review-sandbox/Endpoint Security/admission gaps
+      remain tracked under P2 and are not satisfied by this receipt.
 
 ### P2 — Platform isolation gate
 

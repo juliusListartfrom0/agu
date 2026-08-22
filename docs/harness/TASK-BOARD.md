@@ -18,9 +18,9 @@ Update this file when a task uses the full workflow, changes public behavior, or
 ## Active P0–P5 execution
 
 The user-authorized sequence is tracked in
-[`docs/harness/P0-P5-EXECUTION-PLAN.md`](P0-P5-EXECUTION-PLAN.md). P1 is the
-current remediation phase after the independent fresh-context review failed
-with `Critical=7 / Required=5 / Optional=3`; see
+[`docs/harness/P0-P5-EXECUTION-PLAN.md`](P0-P5-EXECUTION-PLAN.md). P1 is now
+closed by the sealed independent fresh-context review receipt; the historical
+failed review had `Critical=7 / Required=5 / Optional=3`; see
 `docs/specs/TASK-0258-temporal-canary/fresh-context-review-2026-08-20.md`.
 Each phase must be verified on its own `codex/agu-pN` branch, pushed, merged
 into `main`, and re-verified after the merge. P0 does not authorize TASK-0258
@@ -30,8 +30,8 @@ The 2026-08-22 operating decision is to continue repository-local code,
 review-only synthetic scenarios, capability probes, pytest, and Harness checks
 without Apple Developer Program access. The ad-hoc/no-sudo probe remains
 diagnostic only; it cannot supply Endpoint Security entitlement, user approval,
-kernel read-isolation evidence, rerun authorization, or P5 readiness. P1/P2
-external gates and P3–P5 therefore remain open. The post-team handoff is
+kernel read-isolation evidence, rerun authorization, or P5 readiness. P2 and
+P3–P5 therefore remain open; P1 is sealed. The post-team handoff is
 documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 ## In Progress
@@ -125,6 +125,14 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > simulation, and capability-probe checks passing. A fresh exact independent
 > review is required; P1 remains open, P2 remains externally blocked, and no
 > platform proof or P5 readiness is claimed.
+
+> Final independent P1 receipt (2026-08-22): the exact target `46c35e6` was
+> reviewed read-only by a fresh context against `c5157f2`, with 46 total files,
+> 36 Python files, and diff SHA `3a962603…`. The sealed receipt reports
+> `scope_complete=true`, `sealed_receipt=true`, Critical=0, Required=0, and
+> Optional=0. P1 is closed. Local verification is 320 focused TASK-0258 tests
+> and 2,188 full-suite tests; P2 remains `blocked_external_authorization` and
+> no Apple platform proof or P5 readiness is claimed.
 
 > Latest P1 remediation (2026-08-22): commit `b18c784` closes the output-root
 > replacement finding from the `afbfef0` review by binding both
@@ -225,7 +233,7 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 | Task ID | Task Name | Phase | Owner | Blockers | Docs | Last Updated |
 | --- | --- | --- | --- | --- | --- | --- |
 | TASK-0041 | Implement raw-only official box score pipeline | W4 Development | Codex | Frozen CHI-UTA v11 completed 390/390 and was sealed before truth reveal, but fails: fixed eight-type count-only F1 upper bound is 0.5339 and automatic-confirmed upper bound is 0.0053. Post-reveal development expands candidate coverage to 8/8 event types and the complete-scope count-only upper bound to 0.6322. Four disjoint hash-bound ball-release review rounds now cover 128 hard windows and lift four-game shot-validity pooled F1 from 0.786 to 0.844, but weakest-game precision remains 0.727. Label-free RapidOCR broadcast-state evidence raises pooled F1 to 0.853, but weakest-game precision is still only 0.733. The 110-event, 24-position causal review feeds a directly trained MobileNet temporal convolution with 0.732 pooled and 0.694 weakest-game balanced accuracy. Per-position ball/rim/player geometry raises pooled F1 to 0.773 but leaves the weakest game at 0.688. Full causal-window detection fills the sampling grid to 2,640/2,640 positions but raises actual ball visibility only from 975 to 1,047; raw-box and supported-track fusion reach just 0.625 and 0.656 weakest-game balanced accuracy. A hash-bound MUVY audit retained 177/373 proposed small-ball boxes, but COCO transfer still loses to BODD on an event-held screen: P/R/mAP50 0.424/0.182/0.217 versus 0.452/0.364/0.232. The immediate blocker remains higher-quality, game-diverse small-ball recall/precision with hard negatives, followed by rim/court-constrained trajectory normalization; assist/steal/turnover recall, timing, actor identity, causal links and two fresh blind games also remain open. Runtime Codex answers remain forbidden; CHI-UTA is development-only and HOU-ORL G1/G2 remain sealed. | `docs/specs/TASK-0041-raw-only-official-box-score/`, `docs/specs/TASK-0044-public-research-data/`, wiki `agu-complete-box-score-plan-2026-07-13` | 2026-07-30 |
-| TASK-0258 | Screen one frozen tiled-Swin temporal variable | W5 Code Review | Codex | Amendment-001 implementation approval is sealed, but independent fresh-context reviews remain unsealed (`Critical=0`, Required findings still being remediated). The current remediation target is `codex/agu-p1-remediation-2@46c35e6`, baseline `c5157f2`, 46 files, diff SHA `3a962603…`; it closes the no-directory-FD parent-identity and post-flock parent-path race findings on top of the prior lock-leaf, lock-parent, worker-descendant, CLI, bootstrap, descriptor-only replay, topology, and generation-stage hardening. The focused suite is 320 passed and the full suite is 2,188 passed, 5 skipped, 15 warnings; a new independent sealed review remains open, P2 remains externally blocked, and no passing review, platform proof, exact rerun authorization, or v2 terminal/result artifact is claimed. Module B, runtime, promotion, readiness, and blind inference remain unauthorized/unchanged. | `app/analysis/task0258_v2_artifacts.py`, `app/analysis/task0258_v2_fs.py`, `app/analysis/task0258_v2_pipeline.py`, `app/analysis/task0258_v2_read_isolation.py`, `app/analysis/task0258_v2_registry.py`, `app/analysis/task0258_v2_pipeline_cli.py`, `scripts/task0258_module_a_verified_bootstrap.py`, `scripts/task0258_endpoint_security_capability.py`, `docs/specs/TASK-0258-temporal-canary/fresh-context-review-handoff-2026-08-22.md`, `docs/harness/P0-P5-EXECUTION-PLAN.md`, wiki `agu` | 2026-08-22 |
+| TASK-0258 | Screen one frozen tiled-Swin temporal variable | Blocked | Codex | P1 is closed by the sealed independent fresh-context receipt for `codex/agu-p1-remediation-2@46c35e6` (`scope_complete=true`, `sealed_receipt=true`, Critical=0, Required=0, Optional=0). Local verification is 320 focused TASK-0258 tests and 2,188 full-suite tests, 5 skipped, 15 warnings. P2 remains externally blocked: the local ad-hoc probe is diagnostic-only and no Apple Endpoint Security entitlement, external approval, kernel read-isolation evidence, exact rerun authorization, or P5 readiness is claimed. Module B, runtime, promotion, readiness, and blind inference remain unauthorized/unchanged. | `app/analysis/task0258_v2_artifacts.py`, `app/analysis/task0258_v2_fs.py`, `app/analysis/task0258_v2_pipeline.py`, `app/analysis/task0258_v2_read_isolation.py`, `app/analysis/task0258_v2_registry.py`, `app/analysis/task0258_v2_pipeline_cli.py`, `scripts/task0258_module_a_verified_bootstrap.py`, `scripts/task0258_endpoint_security_capability.py`, `docs/specs/TASK-0258-temporal-canary/fresh-context-review-handoff-2026-08-22.md`, `docs/specs/TASK-0258-temporal-canary/fresh-context-review-receipt-2026-08-22.md`, `docs/harness/P0-P5-EXECUTION-PLAN.md`, wiki `agu` | 2026-08-22 |
 
 | TASK-0091 | Freeze MUVS dense multi-frame source protocol | W4 Development | Codex | Full 110-frame remote materialization is slow: one remote-seek smoke sequence took about 19 minutes. A sequential-download slice now validates 2 coordinates/10 frames, but it is too small for a model screen; no runtime promotion. | `app/analysis/muvs_dense_sequence.py`, dense-sequence CLIs, `analysis_outputs/public_research/muvs_dense_sequence_dev_v1/`, `docs/current-solution.md`, `docs/datasets.md`, wiki `agu-complete-box-score-plan-2026-07-13` | 2026-07-31 |
 

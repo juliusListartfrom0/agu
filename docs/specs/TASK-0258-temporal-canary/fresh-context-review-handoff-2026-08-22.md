@@ -9,11 +9,11 @@ Changed-file count: 46
 ## Purpose
 
 This file is a handoff for a genuinely separate fresh-context implementation
-review of the current remediation. It is not a review receipt, does not claim
-`Critical=0 / Required=0`, and does not authorize P2, P3, P4, or P5. The review
-can be performed without Apple Developer Program access; the real Endpoint
-Security entitlement, user approval, and kernel read-isolation proof remain a
-separate P2 platform gate.
+review of the current remediation. The resulting sealed receipt is recorded in
+`fresh-context-review-receipt-2026-08-22.md`; it closes P1 only and does not
+authorize P2, P3, P4, or P5. The review can be performed without Apple
+Developer Program access; the real Endpoint Security entitlement, user
+approval, and kernel read-isolation proof remain a separate P2 platform gate.
 
 ## Required reviewer inputs
 
@@ -172,8 +172,15 @@ The reviewer must produce a new sealed receipt that records:
 4. `Critical=0 / Required=0` only if every such finding is actually closed;
 5. reviewer/fresh-context provenance and review timestamp.
 
-Until that independent receipt exists, the prior `Critical=7 / Required=5 /
-Optional=3` review and the subsequent unsealed `Critical=1 / Required=1`
-re-review remain failed review evidence, regardless of the green local test
-suite. No v2 rerun, production admission, runtime promotion, readiness
-transition, or blind inference is authorized by this handoff.
+Before the final receipt below, the prior `Critical=7 / Required=5 / Optional=3`
+review and the subsequent unsealed `Critical=1 / Required=1` re-review were
+failed review evidence. No v2 rerun, production admission, runtime promotion,
+readiness transition, or blind inference is authorized by this handoff.
+
+## Final independent sealed receipt (2026-08-22)
+
+The exact target was reviewed read-only by a fresh context. The sealed receipt
+is [fresh-context-review-receipt-2026-08-22.md](fresh-context-review-receipt-2026-08-22.md)
+and reports `scope_complete=true`, `sealed_receipt=true`, `Critical=0`,
+`Required=0`, and `Optional=0`. P1 is closed. P2 remains
+`blocked_external_authorization`.
