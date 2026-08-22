@@ -159,6 +159,15 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > is CommandLineTools. This confirms the local external blocker; it does not
 > change the P2 status or authorize P3–P5.
 
+> P3 local review-only audit (2026-08-22): branch
+> `codex/agu-p3-review-only-audit` starts from `main@7109fa9` and records
+> static-input replay, per-use rerun-authorization binding, no-write preflight,
+> admission, and terminal checks in
+> `docs/specs/TASK-0258-temporal-canary/p3-review-only-validation-2026-08-22.md`.
+> The focused graph command passed `7 passed, 43 deselected`; it remains
+> review-only with no production capability. Exact-SHA authorization is still
+> blocked by P2, so P4/P5 remain prohibited.
+
 > Latest P1 remediation (2026-08-22): commit `b18c784` closes the output-root
 > replacement finding from the `afbfef0` review by binding both
 > `candidate_dir.parent` and `candidate_dir` to stable output-root/candidate
