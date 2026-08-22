@@ -110,7 +110,7 @@ def test_candidate_gate_payload():
     assert len(gate["artifact_sha256"]) == 64
 
 
-def test_seal_candidate_v2_and_member_receipts(tmp_path):
+def test_seal_candidate_v2_and_member_receipts(tmp_path, monkeypatch):
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
@@ -119,6 +119,11 @@ def test_seal_candidate_v2_and_member_receipts(tmp_path):
     final = seal_candidate_v2(out, members, flock_path=lock)
     assert final == out / "candidate_v2"
     assert final.is_dir()
+
+    def fail_path_read_bytes(_path):
+        raise AssertionError("candidate receipts must use bounded no-follow reads")
+
+    monkeypatch.setattr(type(final / CANDIDATE_MEMBER_PATHS[0]), "read_bytes", fail_path_read_bytes)
     rows = build_member_receipts(final)
     assert [r["relative_path"] for r in rows] == list(CANDIDATE_MEMBER_PATHS)
     jsonl = [r for r in rows if r["receipt_kind"] == "file_only"]

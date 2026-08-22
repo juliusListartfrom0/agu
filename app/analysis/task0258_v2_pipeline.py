@@ -150,7 +150,7 @@ def build_member_receipts(candidate_dir: Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for rel in CANDIDATE_MEMBER_PATHS:
         path = candidate_dir / rel
-        data = path.read_bytes()
+        data = read_regular_file_no_follow(path)
         file_sha = hashlib.sha256(data).hexdigest()
         if rel.endswith(".jsonl"):
             row: dict[str, object] = {

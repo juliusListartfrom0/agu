@@ -38,6 +38,7 @@ from app.analysis.task0258_v2_pipeline import (
     seal_verified_result,
 )
 from app.analysis.task0258_v2_registry import create_run_history_registry
+from app.analysis.task0258_v2_fs import exclusive_flock
 
 _SYNTHETIC_PIPELINE_CONTEXT_TOKENS: set[tuple[int, bytes]] = set()
 _SYNTHETIC_PIPELINE_CONTEXT_TOKEN = object()
@@ -159,7 +160,8 @@ def run_v2_pipeline(
         flock_path=flock_path,
     )
     candidate = seal_candidate_v2(output_root, encoded, flock_path=flock_path)
-    actual_member_receipts = build_member_receipts(candidate)
+    with exclusive_flock(flock_path):
+        actual_member_receipts = build_member_receipts(candidate)
     if list(bundle_payload["ordered_member_receipts"]) != actual_member_receipts:
         raise ValueError("candidate receipt bundle is not bound to the published candidate bytes")
     seal_candidate_receipt_bundle(
