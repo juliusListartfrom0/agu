@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -16,6 +17,7 @@ from app.analysis.task0258_v2_fs import (
     atomic_write_bytes,
     atomic_write_json,
     exclusive_flock,
+    exclusive_flock_at,
     publish_no_clobber,
     read_regular_file_no_follow,
     verify_absent,
@@ -241,6 +243,25 @@ def test_lock_handle_is_required_for_lock_bypass(tmp_path):
             held_lock=True,
         )
     assert not root.exists()
+
+
+def test_exclusive_flock_at_rejects_forged_path_parent_or_leaf(tmp_path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    directory_fd = fs._open_existing_directory_no_follow(left)
+    try:
+        with pytest.raises(ValueError, match="lock parent"):
+            with exclusive_flock_at(directory_fd, ".lock", right / ".lock"):
+                pass
+        with pytest.raises(ValueError, match="leaf"):
+            with exclusive_flock_at(directory_fd, ".lock-a", left / ".lock-b"):
+                pass
+    finally:
+        os.close(directory_fd)
+    assert not (left / ".lock").exists()
+    assert not (right / ".lock").exists()
 
 
 def test_bounded_read_rejects_post_read_metadata_drift(tmp_path, monkeypatch):

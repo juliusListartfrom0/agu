@@ -109,12 +109,12 @@ def _kill_process_group(proc) -> None:
 
 
 def _terminate_and_reap_process(proc, *, timeout_seconds: int = 5) -> None:
-    """Best-effort terminate, escalation, and reap for a harness child."""
+    """Terminate the entire harness child group, escalate, and reap its leader."""
     try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
         if proc.poll() is None:
             proc.terminate()
-    except ProcessLookupError:
-        pass
     try:
         proc.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:

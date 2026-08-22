@@ -66,6 +66,7 @@ class FlockHandle:
         try:
             os.fstat(self._fd)
             if directory_fd is not None:
+                _assert_directory_path_matches_fd(Path(path).parent, directory_fd, label="lock parent")
                 directory_stat = os.fstat(directory_fd)
                 if (directory_stat.st_dev, directory_stat.st_ino) != self._parent_identity:
                     raise ValueError("the supplied directory descriptor is not the lock parent")
@@ -237,6 +238,10 @@ def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
 def exclusive_flock_at(directory_fd: int, lock_name: str, path: Path) -> Iterator[FlockHandle]:
     """Hold a no-follow exclusive flock opened relative to a stable directory FD."""
     _validate_leaf_name(lock_name)
+    path = Path(path)
+    if path.name != lock_name:
+        raise ValueError("lock path leaf does not match the relative lock name")
+    _assert_directory_path_matches_fd(path.parent, directory_fd, label="lock parent")
     directory_stat = os.fstat(directory_fd)
     fd = os.open(lock_name, _flock_open_flags(), 0o600, dir_fd=directory_fd)
     with _hold_exclusive_flock(

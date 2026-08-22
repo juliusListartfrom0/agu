@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -15,6 +16,7 @@ from scripts.run_fsusage_read_audit import (
     _BoundedTextCapture,
     _drain_text_stream,
     _join_diagnostic_drains,
+    _terminate_and_reap_process,
     _wait_for_worker,
     run_read_audit,
 )
@@ -130,9 +132,38 @@ def test_run_read_audit_reaps_worker_when_fs_usage_cannot_start(monkeypatch):
     with pytest.raises(OSError, match="fs_usage unavailable"):
         run_read_audit(worker_argv=["worker"], policy_payload={}, attestation_inputs={})
 
-    assert worker.terminated is True
     assert worker.reaped is True
-    assert kill_calls == [(worker.pid, signal.SIGKILL)]
+    assert kill_calls == [(worker.pid, signal.SIGTERM), (worker.pid, signal.SIGKILL)]
+
+
+def test_terminate_and_reap_process_kills_worker_descendants(tmp_path):
+    child_pid_file = tmp_path / "child.pid"
+    child_code = "import time; time.sleep(30)"
+    parent_code = (
+        "import pathlib, subprocess, sys, time; "
+        f"child=subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
+        f"pathlib.Path({str(child_pid_file)!r}).write_text(str(child.pid)); time.sleep(30)"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", parent_code], start_new_session=True)
+    try:
+        for _ in range(40):
+            if child_pid_file.exists():
+                break
+            time.sleep(0.05)
+        child_pid = int(child_pid_file.read_text())
+        _terminate_and_reap_process(parent, timeout_seconds=1)
+        for _ in range(40):
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("worker descendant survived process-group cleanup")
+    finally:
+        if parent.poll() is None:
+            os.killpg(parent.pid, signal.SIGKILL)
+            parent.wait()
 
 
 def test_run_read_audit_reaps_fs_usage_after_worker_finishes(monkeypatch):
