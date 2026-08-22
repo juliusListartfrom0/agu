@@ -2831,6 +2831,10 @@ def _history_locked_review_operation(function):
         directory = Path(ledger.directory)
         if directory.is_symlink() or not directory.is_dir():
             return function(*args, **kwargs)
+        try:
+            _verify_absolute_no_symlink_path(directory)
+        except ValueError:
+            return function(*args, **kwargs)
         lock_path = directory / f".{ledger.authorization_sha256}.history.lock"
         with exclusive_flock(lock_path):
             return function(*args, **kwargs)
@@ -2960,7 +2964,11 @@ def bind_verified_review_no_write_preflight(
         raise TypeError("no-write preflight admission is invalid")
     if type(history) is not VerifiedRunHistoryLedger or history._token is not _RUN_HISTORY_TOKEN:
         raise TypeError("no-write preflight history is invalid")
-    _revalidate_run_history_ledger(history, lock_held=True)
+    _verify_run_admission_history_binding(
+        run_admission=admission,
+        run_history=history,
+        lock_held=True,
+    )
 
     output_root = Path(admission.admission.payload["output_root_absolute_path"])
     output_identity = _verify_review_temp_directory(output_root)

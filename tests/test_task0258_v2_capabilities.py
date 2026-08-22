@@ -1701,6 +1701,29 @@ def test_verification_attempt_rejects_registry_head_drift_after_load(tmp_path):
         )
 
 
+def test_review_no_write_preflight_rejects_mutated_admission_spine(tmp_path):
+    admission_fixture = _admission_fixture(tmp_path)
+    loaded_attempt = _load_bound_attempt_for_fixture(admission_fixture)
+    spine = bind_verified_review_attempt_to_run_spine(
+        attempt=loaded_attempt,
+        run_admission=admission_fixture["admission"],
+        run_history=admission_fixture["history"],
+    )
+    other_parent = tmp_path / "other-fixture"
+    other_parent.mkdir()
+    other_fixture = _admission_fixture(other_parent)
+    spine.run_admission = other_fixture["admission"]
+    candidate_bundle_path = tmp_path / "bundle-parent" / "candidate-receipt-bundle.json"
+    candidate_bundle_path.parent.mkdir()
+
+    with pytest.raises(ValueError, match="registry|history"):
+        bind_verified_review_no_write_preflight(
+            execution_context=admission_fixture["review"],
+            attempt_spine=spine,
+            candidate_bundle_path=candidate_bundle_path,
+        )
+
+
 def test_review_no_write_preflight_replays_identities_without_writing(tmp_path):
     admission_fixture = _admission_fixture(tmp_path)
     attempt_root = tmp_path / "attempt-artifacts"
