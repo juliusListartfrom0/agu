@@ -36,9 +36,9 @@ model execution or readiness transition.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
-- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@5549408` against
+- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@d8569a8` against
       `c5157f2`, with 46 changed files and diff SHA
-      `5e88f55058e0563eef1cc1505d864ba7920d196eccced7c30face6b93b331f08`;
+      `687babd2eb8857a37da21c09fecb617a4f04c6e0d7e3885cf27253879c735428`;
       the exact independent `Critical=0 / Required=0` receipt is still open.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 280 passed and
@@ -186,16 +186,18 @@ model execution or readiness transition.
       `5549408` additionally binds candidate-gate verification/producer-chain
       receipts to candidate bytes, binds held locks to their parent-directory
       identities, proves bootstrap execution is tied to FD203, and requires
-      complete allowed-read/event coverage. Focused TASK-0258 tests are 284
-      passed and the full suite is 2,152 passed, 5 skipped, 15 warnings. This
+      complete allowed-read/event coverage. The follow-up `313582b` binds
+      registry writes to the exact held directory FD and rejects caller-selected
+      output locks; `d8569a8` rejects non-Apple-anchored self-signed artifacts
+      in the capability probe. Focused TASK-0258 tests are 288 passed and the
+      full suite is 2,156 passed, 5 skipped, 15 warnings. This
       is local evidence only and is not yet an independent sealed review
       receipt.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
-- [ ] Repeat the fresh review in an environment that can reproduce the full
-      target-scope suite and Harness; the latest attempt returned
-      `scope_complete=false`, `sealed_receipt=false` because its isolated
-      snapshot lacked `.venv` and repository-local datasets/checkpoints.
+- [ ] Repeat the fresh review against `d8569a8` after the latest two Required
+      and one Optional findings were remediated; the previous review returned
+      `scope_complete=false`, `sealed_receipt=false` and did not authorize P1.
 
 ### P2 — Platform isolation gate
 

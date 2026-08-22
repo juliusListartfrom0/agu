@@ -1,9 +1,9 @@
 # TASK-0258 Amendment-001 — current fresh-context review handoff
 
-Review target: `codex/agu-p1-remediation-2` at commit `5549408`
+Review target: `codex/agu-p1-remediation-2` at commit `d8569a8`
 Baseline: `main` / `origin/main` at `c5157f2`
-Diff SHA-256 (`git diff --binary c5157f2...5549408`):
-`5e88f55058e0563eef1cc1505d864ba7920d196eccced7c30face6b93b331f08`
+Diff SHA-256 (`git diff --binary c5157f2...d8569a8`):
+`687babd2eb8857a37da21c09fecb617a4f04c6e0d7e3885cf27253879c735428`
 Changed-file count: 46
 
 ## Purpose
@@ -27,7 +27,7 @@ repository artifacts together with the code:
 - `docs/harness/P0-P5-EXECUTION-PLAN.md`
 - `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`
 
-Review the complete `c5157f2...5549408` scope, not only the latest local
+Review the complete `c5157f2...d8569a8` scope, not only the latest local
 fixes. In particular, adversarially review receipt/marker replay, publication
 locks and races, canonical/no-follow loaders, bootstrap and FD binding, worker
 process-tree cleanup, diagnostic-vs-production admission, and every place a
@@ -40,14 +40,14 @@ Use the canonical environment and record exact output:
 ```bash
 .venv/bin/python -m pytest -q tests/test_task0258_*.py
 .venv/bin/python -m pytest -q
-git diff --name-only c5157f2...5549408 -- '*.py' | \\
+git diff --name-only c5157f2...d8569a8 -- '*.py' | \\
   xargs .venv/bin/python -m ruff check
 .venv/bin/python scripts/verify_harness.py
 .venv/bin/python scripts/task0258_local_simulation.py --json
 .venv/bin/python scripts/task0258_endpoint_security_capability.py --json
 ```
 
-The current local evidence is 284 focused TASK-0258 tests and 2,152 full-suite
+The current local evidence is 288 focused TASK-0258 tests and 2,156 full-suite
 tests, with 5 skips and 15 warnings; the local service hook also reached
 `/health`/`/ready`, submitted a lightweight task, and observed `completed`.
 The latest remediation closes the prior re-review's mutable `FlockHandle` seal
@@ -61,7 +61,12 @@ checked separately. The follow-up remediation also binds the candidate gate's
 verification-attempt receipt and producer chain to candidate members, ties
 held locks to their parent-directory identities, proves the executed bootstrap
 script is the inherited source FD, and requires complete read-isolation
-allowlist/event coverage. The simulation and
+allowlist/event coverage. The registry write path now also binds a held
+history lock to the exact registry directory FD and rejects non-canonical
+output-parent locks. The capability probe now requires an Apple-anchored
+codesign designated requirement before classifying an artifact as signed, so
+an arbitrary self-signed Authority cannot satisfy `--require-capability`. The
+simulation and
 capability probe must remain explicitly diagnostic-only and must report no
 production capability.
 The repository-wide `ruff check app scripts tests` baseline currently reports
@@ -70,15 +75,16 @@ above passes, and this task does not silently modify unrelated files.
 
 ## Latest independent review attempt (2026-08-22)
 
-A fresh read-only reviewer inspected the exact `5549408` target and returned:
-`scope_complete=false`, `sealed_receipt=false`, `Critical=0`, `Required=0`,
-`Optional=0`, with no files modified. Focused TASK-0258 tests (`284 passed`),
-diff-scoped Ruff, and diff checks passed. Its isolated target snapshot could
-not run a complete full-suite/harness verification because the extracted
-snapshot lacked the canonical `.venv` and repository-local generated
-datasets/checkpoints; the current checkout separately passes `2,152 passed,
-5 skipped, 15 warnings` and Harness `--run-tests`. This is an incomplete
-review attempt, not a sealed 0/0 receipt; P1 remains open.
+A fresh read-only reviewer inspected the exact `5549408` target before the
+latest fixes and returned `scope_complete=false`, `sealed_receipt=false`,
+`Critical=0`, `Required=2`, `Optional=1`, with no files modified. The two
+Required findings were the missing registry-FD parent identity checks in
+`seal_run_consumption_claim`/`seal_run_consumption_completed` and acceptance
+of a caller-selected output lock in `create_run_history_registry`. The
+Optional finding was that an arbitrary self-signed `Authority=` could be
+classified as signed. These are now covered by the `313582b` and `d8569a8`
+fixes plus regression tests. This is not a sealed 0/0 receipt; P1 remains
+open pending a new review of `d8569a8`.
 
 ## Required review output
 
