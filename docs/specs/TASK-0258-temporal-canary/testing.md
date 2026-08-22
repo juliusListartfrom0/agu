@@ -4,6 +4,10 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
+- Local service curl hook passed: `/health` returned `{"status":"ok"}`,
+  `/ready` returned `{"status":"ready"}`, and the VLM-off 60-frame request
+  returned a task ID whose status reached `completed` with `progress=100` and
+  `error=null`.
 - TASK-0258 focused suite: `270 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
