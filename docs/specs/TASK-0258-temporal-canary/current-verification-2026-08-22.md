@@ -13,11 +13,15 @@ Purpose: record the current repository-local verification after the P2 free-rout
 | Source gate audit | `source_count=19`, `eligible_source_count=0`, audit SHA `24a5006505ed4d211659eb8e367b430ff369ee27172b53e32d446f084bf12b93` |
 | Endpoint Security capability probe | `compile_ok=true`, `signature_kind=adhoc`, entitlement/approval/kernel attestation all `false`, status `blocked_external_authorization` |
 | Local TASK-0258 simulation | `review_only_synthetic`, `production_capability=false`, `p5_ready=false`, clean finalization verified |
+| FastAPI local curl hook | `/health` and `/ready` returned HTTP 200; lightweight `/api/v1/analysis/run` returned HTTP 200 with `status=pending`; one status poll reached `status=completed`, `progress=100`, `error=null` in about 10.09 seconds |
 | Diff/worktree checks | `git diff --check` passed; worktree clean before this receipt |
 
 ## Interpretation
 
 The repository-local implementation and regression baseline remain healthy.
+The local FastAPI runtime path also completed a bounded example task; the
+runtime receipt is a smoke check only and does not promote model output or
+change the TASK-0258 evidence gates.
 The source gate and platform probe independently confirm that P5 and real P2
 are not complete. This receipt does not issue P3 authorization, run P4, publish
 a v2 result, or promote any runtime/model/default/blind-inference path.

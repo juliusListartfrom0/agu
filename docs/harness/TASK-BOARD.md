@@ -66,6 +66,13 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > `review_only_synthetic/production_capability=false/p5_ready=false`. See
 > `docs/specs/TASK-0258-temporal-canary/current-verification-2026-08-22.md`.
 
+> Local FastAPI smoke (2026-08-22): `/health` and `/ready` returned HTTP 200;
+> the bounded `examples/lebron_shoots.mp4` request was accepted and its status
+> reached `completed/progress=100/error=null` in about 10.09 seconds. The
+> response body was not copied into the task board because it contains large
+> per-record/embedding data; this is runtime smoke evidence only and does not
+> alter P2/P5 gates.
+
 > Codex memory guard (2026-08-22): added the read-only
 > `scripts/monitor_codex_memory.py` check and `docs/harness/CODEX-MEMORY-GUARD.md`.
 > It stops the workflow with exit code `2` at 8 GiB aggregate/largest-process
