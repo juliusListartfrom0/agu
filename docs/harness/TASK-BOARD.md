@@ -55,6 +55,14 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > is not promotion-ready. P2/P3/P4 authority is also still open. See
 > `docs/specs/TASK-0258-temporal-canary/p5-readiness-audit-2026-08-22.md`.
 
+> Current verification receipt (2026-08-22): the canonical full suite is
+> `2188 passed, 5 skipped, 15 warnings`; Harness and diff checks pass. A fresh
+> source-gate audit reports `19` candidates and `0` eligible, while the P2
+> capability probe remains ad-hoc with entitlement, approval, and kernel
+> attestation all false. Local simulation remains
+> `review_only_synthetic/production_capability=false/p5_ready=false`. See
+> `docs/specs/TASK-0258-temporal-canary/current-verification-2026-08-22.md`.
+
 > Local Endpoint Security transcript handoff (2026-08-22):
 > `scripts/inspect_endpoint_security_transcript.py` safely validates an
 > absolute regular non-symlink C JSONL transcript and its clean finalization,
