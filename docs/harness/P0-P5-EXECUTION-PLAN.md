@@ -36,9 +36,9 @@ model execution or readiness transition.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
-- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@db839e7` against
+- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@46c35e6` against
       `c5157f2`, with 46 changed files and diff SHA
-      `5ea95db7b32118e5df61e71e701a58e325db1737aa54218930a15368c3ab03e4`;
+      `3a962603f008ec2214c9cb8c324c48f1c3471b6bcacd8e957199920c0c62f488`;
       the exact independent `Critical=0 / Required=0` receipt is still open.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 280 passed and
@@ -217,9 +217,9 @@ model execution or readiness transition.
       receipt.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
-- [ ] Repeat the fresh review against `db839e7` after the persistent lock-leaf
-      identity finding was remediated; the exact review must return a sealed
-      `Critical=0 / Required=0` receipt before P1 can close.
+- [ ] Repeat the fresh review against `46c35e6` after the persistent lock-leaf
+      and parent-path identity findings were remediated; the exact review must
+      return a sealed `Critical=0 / Required=0` receipt before P1 can close.
 
 ### P2 — Platform isolation gate
 
