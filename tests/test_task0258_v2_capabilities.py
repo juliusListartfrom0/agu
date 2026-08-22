@@ -57,6 +57,7 @@ from app.analysis.task0258_v2_capabilities import (
     replay_module_a_read_traversal_for_discovery,
     replay_verified_module_a_static_inputs,
 )
+from app.analysis.task0258_v2_fs import _provision_lock_file
 from app.analysis.task0258_v2_pipeline import (
     build_candidate_gate_payload,
     build_candidate_receipt_bundle_payload,
@@ -688,7 +689,7 @@ def _candidate_bundle_fixture(fixture):
     bundle_path = bundle_parent / "candidate-receipt-bundle.json"
     bundle_raw = (compact_canonical_json(bundle) + "\n").encode()
     bundle_path.write_bytes(bundle_raw)
-    (bundle_parent / ".candidate-receipt-bundle.lock").write_text("")
+    _provision_lock_file(bundle_parent / ".candidate-receipt-bundle.lock")
     member_by_path = {row["relative_path"]: row for row in candidate_rows}
     result = build_postpublication_verification_payload(
         error_bounds_pass=True,
@@ -1872,7 +1873,7 @@ def test_verification_attempt_rejects_registry_identity_replacement(tmp_path):
     shutil.rmtree(registry)
     replacement.rename(registry)
 
-    with pytest.raises((ValueError, AttributeError), match="registry|history|mutated"):
+    with pytest.raises((ValueError, AttributeError), match="registry|history|mutated|persistent lock"):
         bind_verified_review_attempt_to_run_spine(
             attempt=loaded_attempt,
             run_admission=admission_fixture["admission"],
@@ -2089,7 +2090,7 @@ def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_pat
     bundle_path = bundle_parent / "bundle.json"
     bundle_raw = (compact_canonical_json(bundle) + "\n").encode()
     bundle_path.write_bytes(bundle_raw)
-    (bundle_parent / ".candidate-receipt-bundle.lock").write_text("")
+    _provision_lock_file(bundle_parent / ".candidate-receipt-bundle.lock")
     review = bind_implementation_review_sandbox_context(
         expected_check_name="focused_pytest", expected_command_sha256="0" * 64
     )
@@ -2209,7 +2210,7 @@ def test_candidate_bundle_loader_rejects_candidate_member_drift(tmp_path):
     bundle_path = bundle_parent / "bundle.json"
     bundle_raw = (compact_canonical_json(bundle) + "\n").encode()
     bundle_path.write_bytes(bundle_raw)
-    (bundle_parent / ".candidate-receipt-bundle.lock").write_text("")
+    _provision_lock_file(bundle_parent / ".candidate-receipt-bundle.lock")
     (candidate / "temporal_retrospective.json").write_bytes(
         (candidate / "temporal_retrospective.json").read_bytes() + b" "
     )

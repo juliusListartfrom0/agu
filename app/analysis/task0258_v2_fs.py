@@ -24,6 +24,7 @@ from typing import Iterator
 from app.analysis.task0258_module_a_v2 import compact_canonical_json, is_safe_slug
 
 _LOCK_CAPABILITY = object()
+_LOCK_IDENTITY_SUFFIX = ".identity"
 _ACTIVE_FLOCKS: ContextVar[dict[str, "FlockHandle"]] = ContextVar("task0258_active_flocks", default={})
 
 
@@ -94,6 +95,7 @@ class FlockHandle:
                     or (current_stat.st_dev, current_stat.st_ino) != self._leaf_identity
                 ):
                     raise ValueError("the supplied lock handle path leaf identity drifted")
+                _assert_lock_identity_at(parent_fd, Path(path).name, self._leaf_identity)
             finally:
                 if owns_parent_fd:
                     os.close(parent_fd)
@@ -252,6 +254,86 @@ def _flock_open_flags() -> int:
     return os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
 
 
+def _lock_identity_name(lock_name: str) -> str:
+    return f"{lock_name}{_LOCK_IDENTITY_SUFFIX}"
+
+
+def _lock_identity_bytes(identity: tuple[int, int]) -> bytes:
+    device, inode = identity
+    if (
+        not isinstance(device, int)
+        or isinstance(device, bool)
+        or device < 0
+        or not isinstance(inode, int)
+        or isinstance(inode, bool)
+        or inode < 0
+    ):
+        raise ValueError("lock leaf identity is invalid")
+    return f"{device}:{inode}\n".encode("ascii")
+
+
+def _parse_lock_identity(raw: bytes) -> tuple[int, int]:
+    if len(raw) > 128 or not raw.endswith(b"\n"):
+        raise ValueError("persistent lock identity is malformed")
+    try:
+        device_raw, inode_raw = raw[:-1].split(b":", 1)
+        device = int(device_raw.decode("ascii"), 10)
+        inode = int(inode_raw.decode("ascii"), 10)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("persistent lock identity is malformed") from exc
+    return device, inode
+
+
+def _read_lock_identity_at(directory_fd: int, lock_name: str) -> tuple[int, int]:
+    identity_fd = os.open(
+        _lock_identity_name(lock_name),
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+        dir_fd=directory_fd,
+    )
+    try:
+        identity_stat = os.fstat(identity_fd)
+        if not stat.S_ISREG(identity_stat.st_mode) or identity_stat.st_size > 128:
+            raise ValueError("persistent lock identity is not a bounded regular file")
+        raw = os.read(identity_fd, identity_stat.st_size + 1)
+        if len(raw) != identity_stat.st_size:
+            raise ValueError("persistent lock identity changed during read")
+        return _parse_lock_identity(raw)
+    finally:
+        os.close(identity_fd)
+
+
+def _assert_lock_identity_at(directory_fd: int, lock_name: str, leaf_identity: tuple[int, int]) -> None:
+    try:
+        expected = _read_lock_identity_at(directory_fd, lock_name)
+    except FileNotFoundError as exc:
+        raise ValueError("persistent lock identity is missing; refusing unanchored acquisition") from exc
+    if expected != leaf_identity:
+        raise ValueError("persistent lock leaf does not match its persistent identity")
+
+
+def _provision_lock_identity_at(directory_fd: int, lock_name: str, leaf_identity: tuple[int, int]) -> None:
+    identity_name = _lock_identity_name(lock_name)
+    raw = _lock_identity_bytes(leaf_identity)
+    try:
+        identity_fd = os.open(
+            identity_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
+    except FileExistsError:
+        _assert_lock_identity_at(directory_fd, lock_name, leaf_identity)
+        return
+    try:
+        offset = 0
+        while offset < len(raw):
+            offset += os.write(identity_fd, raw[offset:])
+        os.fsync(identity_fd)
+    finally:
+        os.close(identity_fd)
+    os.fsync(directory_fd)
+
+
 def _provision_lock_file(path: Path) -> None:
     """Create one persistent regular lock file during resource initialization."""
     path = Path(path)
@@ -270,6 +352,10 @@ def _provision_lock_file(path: Path) -> None:
                 raise ValueError("persistent lock path is not a regular file")
         else:
             os.close(fd)
+        current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(current.st_mode):
+            raise ValueError("persistent lock path is not a regular file")
+        _provision_lock_identity_at(parent_fd, path.name, (current.st_dev, current.st_ino))
     finally:
         os.close(parent_fd)
 
@@ -285,6 +371,12 @@ def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
             fd = os.open(path.name, _flock_open_flags(), 0o600, dir_fd=parent_fd)
         except FileNotFoundError as exc:
             raise ValueError("persistent lock leaf is missing; refusing to recreate it") from exc
+        try:
+            leaf_stat = os.fstat(fd)
+            _assert_lock_identity_at(parent_fd, path.name, (leaf_stat.st_dev, leaf_stat.st_ino))
+        except BaseException:
+            os.close(fd)
+            raise
     finally:
         os.close(parent_fd)
     with _hold_exclusive_flock(
@@ -308,6 +400,12 @@ def exclusive_flock_at(directory_fd: int, lock_name: str, path: Path) -> Iterato
         fd = os.open(lock_name, _flock_open_flags(), 0o600, dir_fd=directory_fd)
     except FileNotFoundError as exc:
         raise ValueError("persistent lock leaf is missing; refusing to recreate it") from exc
+    try:
+        leaf_stat = os.fstat(fd)
+        _assert_lock_identity_at(directory_fd, lock_name, (leaf_stat.st_dev, leaf_stat.st_ino))
+    except BaseException:
+        os.close(fd)
+        raise
     with _hold_exclusive_flock(
         Path(path),
         fd,

@@ -317,11 +317,16 @@ def _registry_history_filenames_from_fd(directory_fd: int, auth_sha256: str) -> 
     except OSError as exc:
         raise ValueError("registry directory cannot be listed through its descriptor") from exc
     allowed_lock_name = f".{auth_sha256}.history.lock"
-    if any(not isinstance(name, str) or (not name.endswith(".json") and name != allowed_lock_name) for name in names):
+    allowed_lock_identity_name = f"{allowed_lock_name}.identity"
+    if any(
+        not isinstance(name, str)
+        or (not name.endswith(".json") and name not in {allowed_lock_name, allowed_lock_identity_name})
+        for name in names
+    ):
         raise ValueError("registry contains non-JSON residue")
     ordered = [claim_filename(auth_sha256), completion_filename(auth_sha256)]
     markers = sorted(name for name in names if ".history-" in name)
-    unexpected = set(names) - set(ordered) - set(markers) - {allowed_lock_name}
+    unexpected = set(names) - set(ordered) - set(markers) - {allowed_lock_name, allowed_lock_identity_name}
     if unexpected:
         raise ValueError(f"registry contains unexpected files: {sorted(unexpected)!r}")
     if any(required not in names for required in ordered):

@@ -13,6 +13,7 @@ from app.analysis.task0258_module_a_v2 import (
     compact_canonical_json,
 )
 from app.analysis.task0258_v2_fs import (
+    _provision_lock_file,
     active_flock,
     atomic_write_bytes,
     atomic_write_json,
@@ -268,6 +269,7 @@ def test_exclusive_flock_at_rejects_forged_path_parent_or_leaf(tmp_path):
 def test_lock_leaf_replacement_invalidates_old_handle_and_refuses_recreation(tmp_path):
     lock = tmp_path / ".lock"
     lock.write_text("original")
+    _provision_lock_file(lock)
     directory_fd = fs._open_existing_directory_no_follow(tmp_path)
     try:
         with exclusive_flock_at(directory_fd, lock.name, lock) as old_handle:
@@ -284,10 +286,9 @@ def test_lock_leaf_replacement_invalidates_old_handle_and_refuses_recreation(tmp
             assert replacement_identity != original_identity
             with pytest.raises(ValueError, match="identity"):
                 old_handle.assert_held(lock, directory_fd=directory_fd)
-            with exclusive_flock_at(directory_fd, lock.name, lock) as replacement_handle:
-                replacement_handle.assert_held(lock, directory_fd=directory_fd)
-                with pytest.raises(ValueError, match="identity"):
-                    old_handle.assert_held(lock, directory_fd=directory_fd)
+            with pytest.raises(ValueError, match="persistent identity"):
+                with exclusive_flock_at(directory_fd, lock.name, lock):
+                    pass
     finally:
         os.close(directory_fd)
 
@@ -311,7 +312,7 @@ def test_bounded_read_rejects_post_read_metadata_drift(tmp_path, monkeypatch):
 
 def test_active_flock_is_scoped_and_verified(tmp_path):
     lock = tmp_path / ".lock"
-    lock.write_text("")
+    _provision_lock_file(lock)
     with exclusive_flock(lock) as handle:
         assert active_flock(lock) is handle
         handle.assert_held(lock)

@@ -3247,13 +3247,17 @@ def bind_verified_review_no_write_preflight(
     if registry == output_root or registry in output_root.parents or output_root in registry.parents:
         raise ValueError("no-write preflight registry and output root must be distinct")
     expected_registry_names = set(_registry_history_filenames_from_fd(registry_fd, history.authorization_sha256))
-    expected_registry_names_with_lock = expected_registry_names | {f".{history.authorization_sha256}.history.lock"}
+    history_lock_name = f".{history.authorization_sha256}.history.lock"
+    expected_registry_names_with_lock = expected_registry_names | {
+        history_lock_name,
+        f"{history_lock_name}.identity",
+    }
     actual_registry_names = os.listdir(registry_fd)
     if set(actual_registry_names) != expected_registry_names_with_lock:
         raise ValueError("no-write preflight registry contains unstable residue")
     for name in actual_registry_names:
         entry_stat = os.stat(name, dir_fd=registry_fd, follow_symlinks=False)
-        if name.endswith(".history.lock"):
+        if name.endswith(".history.lock") or name.endswith(".history.lock.identity"):
             if not stat.S_ISREG(entry_stat.st_mode):
                 raise ValueError("no-write preflight history lock is not regular")
         elif not stat.S_ISREG(entry_stat.st_mode):

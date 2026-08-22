@@ -20,7 +20,12 @@ from app.analysis.task0258_run_history import (
     completion_filename,
     replay_run_history_registry,
 )
-from app.analysis.task0258_v2_fs import _open_existing_directory_no_follow, exclusive_flock, exclusive_flock_at
+from app.analysis.task0258_v2_fs import (
+    _open_existing_directory_no_follow,
+    _provision_lock_file,
+    exclusive_flock,
+    exclusive_flock_at,
+)
 from app.analysis.task0258_v2_pipeline import output_parent_flock_path
 from app.analysis.task0258_v2_registry import (
     append_run_history_marker,
@@ -162,7 +167,7 @@ def test_registry_sealers_reject_lock_parent_fd_drift(tmp_path, sealer, payload_
     moved_registry = tmp_path / "moved-registry"
     locked_registry_fd = _open_existing_directory_no_follow(registry)
     lock_path = registry / f".{AUTH}.history.lock"
-    lock_path.write_text("")
+    _provision_lock_file(lock_path)
     try:
         with exclusive_flock_at(locked_registry_fd, lock_path.name, lock_path) as history_lock:
             registry.rename(moved_registry)
@@ -187,7 +192,7 @@ def test_registry_sealer_acquires_history_lock_when_not_supplied(tmp_path):
     registry = tmp_path / "registry"
     registry.mkdir()
     lock_path = registry / f".{AUTH}.history.lock"
-    lock_path.write_text("")
+    _provision_lock_file(lock_path)
     executor = ThreadPoolExecutor(max_workers=1)
     try:
         with exclusive_flock(lock_path):
