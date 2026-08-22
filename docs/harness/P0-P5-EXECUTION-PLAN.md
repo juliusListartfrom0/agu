@@ -36,9 +36,9 @@ model execution or readiness transition.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
-- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@b18c784` against
+- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@c219b22` against
       `c5157f2`, with 46 changed files and diff SHA
-      `9d4f4bddc87b288f8de0a5e5b6996a8b7e67d7e3aced9306b2568130bd30dcdf`;
+      `9960a48ecf69ae299e27ebefff3522a648407a03ab222e0f6ed91fa51ee26b6d`;
       the exact independent `Critical=0 / Required=0` receipt is still open.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 280 passed and
@@ -176,6 +176,14 @@ model execution or readiness transition.
       Diff-scoped Ruff over the TASK-0258 Python change set passes; a full
       repository Ruff audit still reports 52 pre-existing findings outside
       this scope and is not silently broadened into this phase.
+- [x] Close the follow-up publication-boundary findings locally: public
+      candidate-bundle replay is descriptor-only; bundle-parent identity is
+      checked before and after publication/replay; candidate/result/failure
+      topology validation is descriptor-relative; and generation staging keeps
+      a stable stage FD for nested member writes, identity checks, publication,
+      and cleanup. Current evidence is 314 focused TASK-0258 tests and 2,182
+      full-suite tests, with Harness/Ruff/simulation/probe checks passing. This
+      remains local review-only evidence.
 - [x] Harden the post-review candidate replay boundary: all ten candidate
       members are path-specific schema-validated, canonical JSON/JSONL checked,
       and bound to attempt resource-log receipts/counters; verification
@@ -195,8 +203,8 @@ model execution or readiness transition.
       receipt.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
-- [ ] Repeat the fresh review against `b18c784` after the latest output-root
-      Required finding was remediated; the previous review returned
+- [ ] Repeat the fresh review against `c219b22` after the latest publication
+      boundary findings were remediated; prior reviews returned
       `scope_complete=false`, `sealed_receipt=false` and did not authorize P1.
 
 ### P2 — Platform isolation gate
