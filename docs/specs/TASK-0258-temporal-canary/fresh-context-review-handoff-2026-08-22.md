@@ -1,9 +1,9 @@
 # TASK-0258 Amendment-001 — current fresh-context review handoff
 
-Review target: `codex/agu-p1-remediation-2` at commit `d8569a8`
+Review target: `codex/agu-p1-remediation-2` at commit `9fd347a`
 Baseline: `main` / `origin/main` at `c5157f2`
-Diff SHA-256 (`git diff --binary c5157f2...d8569a8`):
-`687babd2eb8857a37da21c09fecb617a4f04c6e0d7e3885cf27253879c735428`
+Diff SHA-256 (`git diff --binary c5157f2...9fd347a`):
+`572cb0f21895b2d1c7f865c29b753efb29e1cf34c5298f95a80c5ceedcebb7c5`
 Changed-file count: 46
 
 ## Purpose
@@ -27,7 +27,7 @@ repository artifacts together with the code:
 - `docs/harness/P0-P5-EXECUTION-PLAN.md`
 - `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`
 
-Review the complete `c5157f2...d8569a8` scope, not only the latest local
+Review the complete `c5157f2...9fd347a` scope, not only the latest local
 fixes. In particular, adversarially review receipt/marker replay, publication
 locks and races, canonical/no-follow loaders, bootstrap and FD binding, worker
 process-tree cleanup, diagnostic-vs-production admission, and every place a
@@ -40,14 +40,14 @@ Use the canonical environment and record exact output:
 ```bash
 .venv/bin/python -m pytest -q tests/test_task0258_*.py
 .venv/bin/python -m pytest -q
-git diff --name-only c5157f2...d8569a8 -- '*.py' | \\
+git diff --name-only c5157f2...9fd347a -- '*.py' | \\
   xargs .venv/bin/python -m ruff check
 .venv/bin/python scripts/verify_harness.py
 .venv/bin/python scripts/task0258_local_simulation.py --json
 .venv/bin/python scripts/task0258_endpoint_security_capability.py --json
 ```
 
-The current local evidence is 288 focused TASK-0258 tests and 2,156 full-suite
+The current local evidence is 290 focused TASK-0258 tests and 2,158 full-suite
 tests, with 5 skips and 15 warnings; the local service hook also reached
 `/health`/`/ready`, submitted a lightweight task, and observed `completed`.
 The latest remediation closes the prior re-review's mutable `FlockHandle` seal
@@ -73,7 +73,7 @@ The repository-wide `ruff check app scripts tests` baseline currently reports
 52 existing findings outside the TASK-0258 diff; the diff-scoped Python check
 above passes, and this task does not silently modify unrelated files.
 
-## Latest independent review attempt (2026-08-22)
+## Previous independent review attempt (2026-08-22)
 
 A fresh read-only reviewer inspected the exact `5549408` target before the
 latest fixes and returned `scope_complete=false`, `sealed_receipt=false`,
@@ -84,7 +84,27 @@ of a caller-selected output lock in `create_run_history_registry`. The
 Optional finding was that an arbitrary self-signed `Authority=` could be
 classified as signed. These are now covered by the `313582b` and `d8569a8`
 fixes plus regression tests. This is not a sealed 0/0 receipt; P1 remains
-open pending a new review of `d8569a8`.
+open pending a new review of `9fd347a`.
+
+## Current remediation and review status (2026-08-22)
+
+Commit `9fd347a` addresses the previous review's three Required findings:
+
+1. Candidate bundle publication and replay now hold stable parent-directory
+   FDs and use descriptor-relative lock, verification, read, and publication
+   operations; the CLI no longer passes a caller-held path lock into replay.
+2. Review-only capability objects now reject post-construction field mutation
+   and recursively freeze nested JSON mappings/sequences while preserving
+   `dict`/`list` verifier contracts.
+3. Run-history claim/completion sealers acquire the exact history lock when the
+   caller does not supply one, while still validating caller-held locks against
+   the exact registry-directory FD.
+
+`290` focused TASK-0258 tests, `2,158` full-suite tests, Harness, local service
+curl, simulation, and the capability probe pass. A clean archive replay of the
+exact target also passes `290` focused tests. A new independent reviewer is
+currently reviewing `9fd347a`; until its sealed receipt reports
+`scope_complete=true`, `Critical=0`, and `Required=0`, P1 remains open.
 
 ## Required review output
 
