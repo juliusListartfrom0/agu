@@ -101,6 +101,21 @@ def test_candidate_gate_payload():
     assert len(gate["artifact_sha256"]) == 64
 
 
+def test_candidate_gate_verification_receipt_is_bound_to_member_bytes():
+    members = _make_members()
+    gate = json.loads(members["candidate_gate.json"])
+    gate["verification_attempt_receipt"] = _receipt()
+    gate["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in gate.items() if key != "artifact_sha256"}
+    )
+    members["candidate_gate.json"] = (compact_canonical_json(gate) + "\n").encode()
+
+    from app.analysis.task0258_v2_pipeline_cli import assemble_candidate_members
+
+    with pytest.raises(ValueError, match="verification attempt receipt"):
+        assemble_candidate_members(members)
+
+
 def test_candidate_publication_rejects_schema_valid_but_unauthorized_member(tmp_path):
     members = _make_members()
     forged = {"schema_version": "agu.test-member.v1", "artifact_sha256": "0" * 64}

@@ -80,10 +80,7 @@ def test_parse_fsusage_transcript():
 
 
 def test_parse_fsusage_transcript_enforces_event_row_cap():
-    text = (
-        "06:02:18.189632  open  private/tmp/one.txt\n"
-        "06:02:18.189633  stat  private/tmp/two.txt\n"
-    )
+    text = "06:02:18.189632  open  private/tmp/one.txt\n06:02:18.189633  stat  private/tmp/two.txt\n"
     with pytest.raises(ValueError, match="event-row cap"):
         parse_fsusage_transcript(io.StringIO(text), maximum_rows=1)
 

@@ -216,6 +216,7 @@ def append_run_history_marker(
     prior_event: str | None,
     *,
     held_lock: FlockHandle | None = None,
+    registry_fd: int | None = None,
 ) -> Path:
     """Validate and no-clobber append a history marker.
 
@@ -229,18 +230,21 @@ def append_run_history_marker(
     verify_run_history_marker(payload)
     registry_dir = Path(registry_dir)
     lock_path = registry_dir / f".{auth_sha256}.history.lock"
-    if held_lock is None:
-        held_lock = active_flock(lock_path)
-    if held_lock is not None:
-        held_lock.assert_held(lock_path)
-    _ensure_directory_no_follow(registry_dir)
-    registry_fd = _open_existing_directory_no_follow(registry_dir)
-    if held_lock is None:
-        lock_context = exclusive_flock_at(registry_fd, lock_path.name, lock_path)
-    else:
-        lock_context = nullcontext(held_lock)
-    with lock_context as history_lock:
-        try:
+    owns_registry_fd = registry_fd is None
+    if owns_registry_fd:
+        _ensure_directory_no_follow(registry_dir)
+        registry_fd = _open_existing_directory_no_follow(registry_dir)
+    try:
+        assert registry_fd is not None
+        if held_lock is None:
+            held_lock = active_flock(lock_path)
+        if held_lock is not None:
+            held_lock.assert_held(lock_path, directory_fd=registry_fd)
+        if held_lock is None:
+            lock_context = exclusive_flock_at(registry_fd, lock_path.name, lock_path)
+        else:
+            lock_context = nullcontext(held_lock)
+        with lock_context as history_lock:
             replayed = replay_run_history_registry(
                 registry_dir,
                 auth_sha256,
@@ -284,7 +288,8 @@ def append_run_history_marker(
             final_name = history_filename(auth_sha256, expected_ordinal, event)
             atomic_write_json_at(registry_fd, final_name, payload)
             return registry_dir / final_name
-        finally:
+    finally:
+        if owns_registry_fd:
             os.close(registry_fd)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pytest
 from task0258_candidate_fixtures import candidate_members
@@ -204,7 +205,7 @@ def _json_member(name):
 def _members(candidate_gate=None):
     gate = candidate_gate or _gate()
     members = candidate_members(gate)
-    members["candidate_gate.json"] = gate
+    members["candidate_gate.json"] = json.loads(members["candidate_gate.json"])
     return members
 
 

@@ -405,7 +405,6 @@ def replay_run_history_registry(
                     )
             finally:
                 os.close(owned_directory_fd)
-    held_lock.assert_held(lock_path)
     if registry_fd is not None and not isinstance(registry_fd, int):
         raise ValueError("registry directory descriptor is invalid")
     owns_directory_fd = registry_fd is None
@@ -416,6 +415,7 @@ def replay_run_history_registry(
             raise ValueError("registry directory cannot be opened without following links") from exc
     try:
         assert registry_fd is not None
+        held_lock.assert_held(lock_path, directory_fd=registry_fd)
         directory_stat = os.fstat(registry_fd)
         if not stat.S_ISDIR(directory_stat.st_mode):
             raise ValueError("registry path is not a directory")

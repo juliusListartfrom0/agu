@@ -31,7 +31,7 @@ _BOOTSTRAP_TARGET_SOURCE_SHA256 = {
     "app/analysis/__init__.py": "5c2fc5f80f83f4e146ddb460ba922cb0eab5a9d14fdc4dbdc19bd544688ae65b",
     "app/analysis/task0258_module_a_v2.py": "24ce88717acc24f5a28bde690274db1172cbe1663a8bf0900c4cdbf280d3a06b",
     "app/analysis/task0258_v2_bootstrap.py": "c50ab5a67c259fe0f464e09a006ed42728face86ebac3beb043c08c9467279e5",
-    "scripts/task0258_module_a_verified_bootstrap.py": "8f0d7fc87b67199ffb0e4893f640836da6e3477b7545b7ef8abce6662d2908f4",
+    "scripts/task0258_module_a_verified_bootstrap.py": "12e539c2bb3d1c27f986376643268e880faf9fa6f64fd1459bbf18aac9b3b905",
 }
 
 
@@ -126,6 +126,20 @@ def test_bootstrap_closes_fds_when_preimport_validation_fails(monkeypatch):
     )
     assert bootstrap_script.main() == 2
     assert closed == [(202, 203)]
+
+
+def test_bootstrap_executed_source_must_match_source_fd(tmp_path, monkeypatch):
+    source = tmp_path / "source.py"
+    other = tmp_path / "other.py"
+    source.write_text("source\n")
+    other.write_text("other\n")
+    source_fd = os.open(source, os.O_RDONLY)
+    try:
+        monkeypatch.setattr(bootstrap_script, "__file__", str(other))
+        with pytest.raises(ValueError, match="not bound"):
+            bootstrap_script._preimport_validate_executed_source(source_fd)
+    finally:
+        os.close(source_fd)
 
 
 def test_build_sys_path_from_entries():

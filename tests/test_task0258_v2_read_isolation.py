@@ -203,6 +203,12 @@ def test_attestation_binding_replays_policy_and_event_identity():
     verify_read_isolation_binding(policy, attestation)
 
 
+def test_attestation_binding_rejects_empty_allowed_event_set():
+    policy = _policy()
+    with pytest.raises(ValueError, match="allowed reads"):
+        verify_read_isolation_binding(policy, _attestation(policy=policy))
+
+
 def test_attestation_binding_rejects_policy_tuple_drift():
     policy = _policy(allowed_rows=[_allowed_regular_row()])
     attestation = _attestation(policy=policy, events=[_allowed_regular_event()])

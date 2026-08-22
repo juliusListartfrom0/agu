@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from app.analysis.task0258_module_a_v2 import (
@@ -10,6 +12,7 @@ from app.analysis.task0258_module_a_v2 import (
     VERIFICATION_EMBEDDING_SCHEMA_V2,
     VERIFICATION_RESOURCE_SAMPLE_SCHEMA,
     canonical_artifact_sha256,
+    compact_canonical_json,
 )
 from app.analysis.task0258_v2_verification import (
     ROLE,
@@ -69,7 +72,7 @@ def _embedding():
 
 
 def _attempt(disposition="completed"):
-    policy = _policy()
+    policy = _policy(allowed_rows=[_allowed_regular_row()])
     p = _common(VERIFICATION_ATTEMPT_SCHEMA_V2)
     p.update(
         {
@@ -88,7 +91,7 @@ def _attempt(disposition="completed"):
             "child_observation": {},
             "worker_payload": {},
             "read_isolation_policy": policy,
-            "read_isolation_attestation": _attestation(policy=policy),
+            "read_isolation_attestation": _attestation(policy=policy, events=[_allowed_regular_event()]),
             "verification_embedding_slot": {
                 "provider": "verification_tiled_swin_embeddings",
                 "verification_state": "verified",
@@ -270,7 +273,7 @@ def test_build_verification_embedding_payload():
     assert len(payload["artifact_sha256"]) == 64
 
 
-def _policy():
+def _policy(*, allowed_rows=None):
     from app.analysis.task0258_v2_read_isolation import (
         MAXIMUM_POLICY_BYTES,
         MAXIMUM_READ_EVENT_BYTES,
@@ -299,7 +302,7 @@ def _policy():
             "runtime_manifest_receipt": _receipt(),
             "runtime_tree_projection_sha256": "0" * 64,
         },
-        "ordered_allowed_read_rows": [],
+        "ordered_allowed_read_rows": list(allowed_rows or []),
         "ordered_denied_read_rows": [],
         "read_event_projection_protocol": READ_EVENT_PROJECTION_PROTOCOL,
         "maximum_read_event_rows": MAXIMUM_READ_EVENT_ROWS,
@@ -310,7 +313,7 @@ def _policy():
     return payload
 
 
-def _attestation(*, policy=None):
+def _attestation(*, policy=None, events=None):
     from app.analysis.task0258_v2_read_isolation import READ_ISOLATION_ATTESTATION_SCHEMA
 
     payload = {
@@ -332,13 +335,61 @@ def _attestation(*, policy=None):
         "audit_started_before_spawn": True,
         "audit_ended_after_child_exit": True,
         "audit_overflow": False,
-        "ordered_observed_read_events": [],
-        "read_event_projection_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "ordered_observed_read_events": list(events or []),
+        "read_event_projection_sha256": "",
         "denied_read_attempt_count": 0,
         "unknown_read_attempt_count": 0,
     }
+    payload["read_event_projection_sha256"] = hashlib.sha256(
+        compact_canonical_json(payload["ordered_observed_read_events"]).encode()
+    ).hexdigest()
     payload["artifact_sha256"] = canonical_artifact_sha256(payload)
     return payload
+
+
+def _allowed_regular_row():
+    return {
+        "locator_kind": "path",
+        "path_role": "input_file",
+        "absolute_path": "/input.json",
+        "fd_number": None,
+        "match_kind": "exact_regular",
+        "entry_kind": "regular",
+        "expected_device": 1,
+        "expected_inode": 2,
+        "expected_size_bytes": 3,
+        "expected_file_sha256": "1" * 64,
+        "expected_symlink_target_text": None,
+        "expected_code_signature": None,
+        "ordered_allowed_operations": ["open"],
+    }
+
+
+def _allowed_regular_event():
+    return {
+        "ordinal": 1,
+        "operation": "open",
+        "path_role": "input_file",
+        "locator_kind": "path",
+        "normalized_path": "/input.json",
+        "fd_number": None,
+        "opened_fd_number": 3,
+        "follow_symlinks": False,
+        "access_mode": 0,
+        "access_granted": None,
+        "xattr_name": None,
+        "result_state": "success",
+        "errno": None,
+        "entry_kind": "regular",
+        "mode_bits": 0o600,
+        "device": 1,
+        "inode": 2,
+        "size_bytes": 3,
+        "file_sha256": "1" * 64,
+        "symlink_target_text": None,
+        "ordered_child_names": None,
+        "xattr_value_sha256": None,
+    }
 
 
 def test_verification_attempt_binds_read_isolation():

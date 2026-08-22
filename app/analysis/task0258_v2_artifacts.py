@@ -472,6 +472,60 @@ def verify_candidate_member_bytes(members: Mapping[str, bytes]) -> None:
     if verification_attempt["ended_cumulative_resource_log_bytes"] != len(verification_log):
         raise ValueError("candidate verification attempt log byte count is not bound to its log")
 
+    # The candidate gate carries two receipt edges that cannot be checked by
+    # validating the gate in isolation.  Bind them to the bytes in this exact
+    # ten-pack before publication; otherwise a well-shaped gate can cite an
+    # unrelated verification attempt or producer history chain.
+    candidate_gate = decoded["candidate_gate.json"]
+    verification_member_receipt = {
+        "artifact_sha256": verification_attempt["artifact_sha256"],
+        "file_sha256": sha256(members["verification_attempt/attempt_record.json"]).hexdigest(),
+    }
+    if candidate_gate["verification_attempt_receipt"] != verification_member_receipt:
+        raise ValueError("candidate gate verification attempt receipt is not bound to candidate bytes")
+
+    producer_embedding = decoded["producer_tiled_swin_embeddings.json"]
+    embedded_chain = producer_embedding["attempt_chain"]
+    gate_chain = candidate_gate["producer_attempt_chain"]
+    if len(gate_chain) != len(embedded_chain):
+        raise ValueError("candidate gate producer attempt chain is not bound to producer embedding")
+    for gate_row, embedded_row in zip(gate_chain, embedded_chain, strict=True):
+        if not isinstance(embedded_row, Mapping) or set(embedded_row) != {
+            "attempt_ordinal",
+            "attempt_record",
+            "resource_log",
+            "resume_output_cas",
+        }:
+            raise ValueError("candidate producer embedding attempt chain row is invalid")
+        if gate_row["attempt_ordinal"] != embedded_row["attempt_ordinal"]:
+            raise ValueError("candidate gate producer attempt ordinal is not bound to producer embedding")
+        if gate_row["attempt_record_receipt"] != embedded_row["attempt_record"]:
+            raise ValueError("candidate gate producer attempt receipt is not bound to producer embedding")
+        if gate_row["resource_log_receipt"] != embedded_row["resource_log"]:
+            raise ValueError("candidate gate producer resource receipt is not bound to producer embedding")
+        gate_resume = gate_row["resume_receipt"]
+        embedded_resume = embedded_row["resume_output_cas"]
+        if (gate_resume is None) != (embedded_resume is None):
+            raise ValueError("candidate gate producer resume receipt is not bound to producer embedding")
+        if gate_resume is not None:
+            if not isinstance(embedded_resume, Mapping) or set(embedded_resume) != {
+                "device",
+                "inode",
+                "size_bytes",
+                "internal_sha256",
+                "file_sha256",
+            }:
+                raise ValueError("candidate producer embedding resume CAS is invalid")
+            if any(
+                gate_resume[field] != embedded_resume[embedded_field]
+                for field, embedded_field in (
+                    ("size_bytes", "size_bytes"),
+                    ("internal_sha256", "internal_sha256"),
+                    ("file_sha256", "file_sha256"),
+                )
+            ):
+                raise ValueError("candidate gate producer resume receipt is not bound to producer embedding")
+
 
 def verify_failure_member_coverage(phase: str, paths: object) -> None:
     """Validate an exact terminal_failure_v2 member listing for ``phase``.

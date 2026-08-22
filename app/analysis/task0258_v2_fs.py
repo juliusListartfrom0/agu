@@ -30,33 +30,45 @@ _ACTIVE_FLOCKS: ContextVar[dict[str, "FlockHandle"]] = ContextVar("task0258_acti
 class FlockHandle:
     """Process-local capability for a currently-held fixed-path flock."""
 
-    __slots__ = ("_capability", "_fd", "_path", "_sealed")
+    __slots__ = ("_capability", "_fd", "_path", "_parent_identity", "_sealed")
 
     def __setattr__(self, name: str, value: object) -> None:
         if name == "_sealed" and hasattr(self, "_sealed"):
             raise AttributeError("FlockHandle seal state is immutable")
-        if getattr(self, "_sealed", False) and name in {"_capability", "_fd", "_path"}:
+        if getattr(self, "_sealed", False) and name in {"_capability", "_fd", "_path", "_parent_identity"}:
             raise AttributeError("FlockHandle fields are immutable")
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
-        if name in {"_capability", "_fd", "_path", "_sealed"} and hasattr(self, name):
+        if name in {"_capability", "_fd", "_path", "_parent_identity", "_sealed"} and hasattr(self, name):
             raise AttributeError("FlockHandle fields are immutable")
         object.__delattr__(self, name)
 
-    def __init__(self, path: Path, fd: int, capability: object) -> None:
+    def __init__(
+        self,
+        path: Path,
+        fd: int,
+        capability: object,
+        *,
+        parent_identity: tuple[int, int],
+    ) -> None:
         if capability is not _LOCK_CAPABILITY:
             raise TypeError("FlockHandle must be created by exclusive_flock")
         object.__setattr__(self, "_capability", capability)
         object.__setattr__(self, "_fd", fd)
         object.__setattr__(self, "_path", Path(path))
+        object.__setattr__(self, "_parent_identity", parent_identity)
         object.__setattr__(self, "_sealed", True)
 
-    def assert_held(self, path: Path) -> None:
+    def assert_held(self, path: Path, *, directory_fd: int | None = None) -> None:
         if self._capability is not _LOCK_CAPABILITY or self._fd < 0 or _lock_key(self._path) != _lock_key(path):
             raise ValueError("the supplied lock handle does not hold the required path")
         try:
             os.fstat(self._fd)
+            if directory_fd is not None:
+                directory_stat = os.fstat(directory_fd)
+                if (directory_stat.st_dev, directory_stat.st_ino) != self._parent_identity:
+                    raise ValueError("the supplied directory descriptor is not the lock parent")
         except OSError as exc:
             raise ValueError("the supplied lock handle is no longer active") from exc
 
@@ -163,8 +175,8 @@ def fsync_dir(path: Path) -> None:
 
 
 @contextmanager
-def _hold_exclusive_flock(path: Path, fd: int) -> Iterator[FlockHandle]:
-    handle = FlockHandle(path, fd, _LOCK_CAPABILITY)
+def _hold_exclusive_flock(path: Path, fd: int, *, parent_identity: tuple[int, int]) -> Iterator[FlockHandle]:
+    handle = FlockHandle(path, fd, _LOCK_CAPABILITY, parent_identity=parent_identity)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError(f"lock path is not a regular file: {path}")
@@ -185,21 +197,24 @@ def _hold_exclusive_flock(path: Path, fd: int) -> Iterator[FlockHandle]:
 
 
 def _flock_open_flags() -> int:
-    return (
-        os.O_RDONLY
-        | os.O_CREAT
-        | os.O_NOFOLLOW
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
+    return os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
 
 
 @contextmanager
 def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
     """Create/open and hold a no-follow exclusive flock on a regular file."""
     path = Path(path)
-    fd = _open_leaf_no_follow(path, _flock_open_flags(), 0o600)
-    with _hold_exclusive_flock(path, fd) as handle:
+    parent_fd = _open_existing_directory_no_follow(path.parent)
+    try:
+        parent_stat = os.fstat(parent_fd)
+        fd = os.open(path.name, _flock_open_flags(), 0o600, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+    with _hold_exclusive_flock(
+        path,
+        fd,
+        parent_identity=(parent_stat.st_dev, parent_stat.st_ino),
+    ) as handle:
         yield handle
 
 
@@ -207,8 +222,13 @@ def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
 def exclusive_flock_at(directory_fd: int, lock_name: str, path: Path) -> Iterator[FlockHandle]:
     """Hold a no-follow exclusive flock opened relative to a stable directory FD."""
     _validate_leaf_name(lock_name)
+    directory_stat = os.fstat(directory_fd)
     fd = os.open(lock_name, _flock_open_flags(), 0o600, dir_fd=directory_fd)
-    with _hold_exclusive_flock(Path(path), fd) as handle:
+    with _hold_exclusive_flock(
+        Path(path),
+        fd,
+        parent_identity=(directory_stat.st_dev, directory_stat.st_ino),
+    ) as handle:
         yield handle
 
 
@@ -393,13 +413,7 @@ def atomic_write_bytes(
 
 
 def _validate_leaf_name(name: str) -> None:
-    if (
-        not isinstance(name, str)
-        or not name
-        or name in {".", ".."}
-        or "/" in name
-        or "\\" in name
-    ):
+    if not isinstance(name, str) or not name or name in {".", ".."} or "/" in name or "\\" in name:
         raise ValueError("filesystem leaf name is invalid")
 
 
@@ -479,6 +493,7 @@ def build_generation_directory(
     members: dict[str, bytes],
     *,
     stage_name: str | None = None,
+    parent_fd: int | None = None,
 ) -> Path:
     """Create a private staging directory and write every member.
 
@@ -488,7 +503,14 @@ def build_generation_directory(
     written with :func:`atomic_write_bytes` (mode 0o600). Returns the stage
     directory path; the caller is responsible for publishing it.
     """
-    _ensure_directory_no_follow(parent)
+    owns_parent_fd = parent_fd is None
+    if owns_parent_fd:
+        _ensure_directory_no_follow(parent)
+        parent_fd = _open_existing_directory_no_follow(parent)
+    else:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            raise ValueError("generation parent descriptor is not a directory")
     for relpath, data in members.items():
         _validate_member_path(relpath)
         if not isinstance(data, bytes):
@@ -496,11 +518,12 @@ def build_generation_directory(
     if stage_name is not None:
         _validate_fixed_stage_name(stage_name)
     stage = parent / (stage_name or f".task0258-{secrets.token_hex(8)}")
-    parent_fd = _open_existing_directory_no_follow(parent)
     try:
+        assert parent_fd is not None
         os.mkdir(stage.name, 0o700, dir_fd=parent_fd)
     finally:
-        os.close(parent_fd)
+        if owns_parent_fd:
+            os.close(parent_fd)
     try:
         for relpath, data in members.items():
             target = stage / relpath
@@ -514,6 +537,15 @@ def build_generation_directory(
     return stage
 
 
+def _verify_absent_at(directory_fd: int, name: str) -> None:
+    _validate_leaf_name(name)
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    raise FileExistsError(f"target already exists: {name}")
+
+
 def _publish_generation_directory_locked(staged: Path, final: Path) -> None:
     verify_absent(final)
     if sys.platform != "darwin":
@@ -522,6 +554,14 @@ def _publish_generation_directory_locked(staged: Path, final: Path) -> None:
         # cooperative flock against an unrelated publisher.
         raise OSError("atomic no-clobber directory publication is unavailable on this platform")
     publish_no_clobber(staged, final)
+
+
+def _publish_generation_directory_locked_at(directory_fd: int, staged_name: str, final_name: str) -> None:
+    """Publish a generation using one stable parent descriptor."""
+    _verify_absent_at(directory_fd, final_name)
+    if sys.platform != "darwin":
+        raise OSError("atomic no-clobber directory publication is unavailable on this platform")
+    _publish_no_clobber_at(directory_fd, staged_name, final_name)
 
 
 def publish_generation_directory(
@@ -542,11 +582,19 @@ def publish_generation_directory(
         raise ValueError("staged generation must be a real directory")
     if not final.name or not is_safe_slug(final.name):
         raise ValueError("final generation name must be a safe slug")
+    if staged.parent != final.parent:
+        raise ValueError("staged and final generations must share one parent")
     _ensure_directory_no_follow(final.parent)
-    with exclusive_flock(flock_path):
-        if under_lock_validator is not None:
-            under_lock_validator()
-        _publish_generation_directory_locked(staged, final)
+    parent_fd = _open_existing_directory_no_follow(final.parent)
+    lock_parent_fd = _open_existing_directory_no_follow(Path(flock_path).parent)
+    try:
+        with exclusive_flock_at(lock_parent_fd, Path(flock_path).name, flock_path):
+            if under_lock_validator is not None:
+                under_lock_validator()
+            _publish_generation_directory_locked_at(parent_fd, staged.name, final.name)
+    finally:
+        os.close(lock_parent_fd)
+        os.close(parent_fd)
 
 
 def verify_generation_directory(final: Path, expected_paths: tuple[str, ...]) -> None:
@@ -610,6 +658,7 @@ def seal_generation_directory(
     stage_name: str | None = None,
     pre_publish_validator: Callable[[], None] | None = None,
     held_lock: FlockHandle | None = None,
+    parent_fd: int | None = None,
 ) -> Path:
     """Validate exact member coverage and atomically publish a generation.
 
@@ -631,29 +680,47 @@ def seal_generation_directory(
         _validate_member_path(relpath)
     if held_lock is not None and not isinstance(held_lock, FlockHandle):
         raise TypeError("held_lock must be an active FlockHandle")
-    _ensure_directory_no_follow(parent)
+    parent = Path(parent)
+    owns_parent_fd = parent_fd is None
+    if owns_parent_fd:
+        _ensure_directory_no_follow(parent)
+        parent_fd = _open_existing_directory_no_follow(parent)
+    else:
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            raise ValueError("generation parent descriptor is not a directory")
+    lock_parent_fd = _open_existing_directory_no_follow(Path(flock_path).parent)
     final = parent / final_name
-    if held_lock is None:
-        held_lock = active_flock(flock_path)
-    if held_lock is not None:
-        held_lock.assert_held(flock_path)
-    lock_context = nullcontext(held_lock) if held_lock is not None else exclusive_flock(flock_path)
-    with lock_context as _active_lock:
-        if pre_publish_validator is not None:
-            pre_publish_validator()
-        staged = build_generation_directory(parent, members, stage_name=stage_name)
-        try:
-            _publish_generation_directory_locked(staged, final)
-            verify_generation_directory(final, expected_paths)
-            if stage_name is not None and (staged.exists() or staged.is_symlink()):
-                raise ValueError("fixed generation stage remained after publication")
-        except BaseException:
-            if staged.exists() or staged.is_symlink():
-                import shutil
+    try:
+        if held_lock is None:
+            held_lock = active_flock(flock_path)
+        if held_lock is not None:
+            held_lock.assert_held(flock_path, directory_fd=lock_parent_fd)
+        lock_context = (
+            nullcontext(held_lock)
+            if held_lock is not None
+            else exclusive_flock_at(lock_parent_fd, Path(flock_path).name, flock_path)
+        )
+        with lock_context as _active_lock:
+            if pre_publish_validator is not None:
+                pre_publish_validator()
+            staged = build_generation_directory(parent, members, stage_name=stage_name, parent_fd=parent_fd)
+            try:
+                _publish_generation_directory_locked_at(parent_fd, staged.name, final_name)
+                verify_generation_directory(final, expected_paths)
+                if stage_name is not None and (staged.exists() or staged.is_symlink()):
+                    raise ValueError("fixed generation stage remained after publication")
+            except BaseException:
+                if staged.exists() or staged.is_symlink():
+                    import shutil
 
-                shutil.rmtree(staged, ignore_errors=True)
-            raise
-    return final
+                    shutil.rmtree(staged, ignore_errors=True)
+                raise
+        return final
+    finally:
+        os.close(lock_parent_fd)
+        if owns_parent_fd:
+            os.close(parent_fd)
 
 
 __all__ = [

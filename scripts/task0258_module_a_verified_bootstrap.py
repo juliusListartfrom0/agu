@@ -170,6 +170,33 @@ def _preimport_validate_fds(request_fd: int, source_fd: int) -> None:
         raise ValueError("pre-import source descriptor is not a single-link regular file")
 
 
+def _preimport_validate_executed_source(source_fd: int) -> None:
+    """Prove that the bootstrap bytes executed by Python are FD203 bytes.
+
+    Hashing an inherited source descriptor alone is insufficient when the
+    interpreter was invoked by a different path.  Bind the descriptor to the
+    script Python reports as executed, then the later source hash check binds
+    the request to those same bytes.
+    """
+    source_stat = os.fstat(source_fd)
+    executed_path = os.path.abspath(__file__)
+    try:
+        executed_stat = os.stat(executed_path, follow_symlinks=True)
+    except OSError as exc:
+        raise ValueError("executed bootstrap source cannot be identified") from exc
+    if executed_path == f"/dev/fd/{source_fd}":
+        # macOS presents /dev/fd through devfs, so its st_dev differs from the
+        # underlying file descriptor even though the inode is shared.
+        same_source = executed_stat.st_ino == source_stat.st_ino
+    else:
+        same_source = (source_stat.st_dev, source_stat.st_ino) == (
+            executed_stat.st_dev,
+            executed_stat.st_ino,
+        )
+    if not same_source:
+        raise ValueError("executed bootstrap source is not bound to the inherited source descriptor")
+
+
 def _preimport_read_request(request_fd: int) -> tuple[bytes, Mapping[str, object]]:
     request_stat = os.fstat(request_fd)
     if stat.S_ISREG(request_stat.st_mode):
@@ -277,6 +304,7 @@ def main() -> int:
     try:
         request_fd, source_fd = _preimport_parse_flags(sys.argv[1:])
         _preimport_validate_fds(request_fd, source_fd)
+        _preimport_validate_executed_source(source_fd)
         request_bytes, request = _preimport_read_request(request_fd)
         sys.path[:], runtime_path_fds = _preimport_runtime_sys_path(request)
     except (OSError, TypeError, ValueError):

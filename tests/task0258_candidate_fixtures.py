@@ -31,6 +31,51 @@ def _receipt() -> dict[str, str]:
     return {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64}
 
 
+def _allowed_read_row() -> dict[str, object]:
+    return {
+        "locator_kind": "path",
+        "path_role": "runtime_contract",
+        "absolute_path": "/runtime/contract.json",
+        "fd_number": None,
+        "match_kind": "exact_regular",
+        "entry_kind": "regular",
+        "expected_device": 1,
+        "expected_inode": 2,
+        "expected_size_bytes": 1,
+        "expected_file_sha256": "0" * 64,
+        "expected_symlink_target_text": None,
+        "expected_code_signature": None,
+        "ordered_allowed_operations": ["open"],
+    }
+
+
+def _allowed_read_event() -> dict[str, object]:
+    return {
+        "ordinal": 1,
+        "operation": "open",
+        "path_role": "runtime_contract",
+        "locator_kind": "path",
+        "normalized_path": "/runtime/contract.json",
+        "fd_number": None,
+        "opened_fd_number": 3,
+        "follow_symlinks": False,
+        "access_mode": 0,
+        "access_granted": True,
+        "xattr_name": None,
+        "result_state": "success",
+        "errno": None,
+        "entry_kind": "regular",
+        "mode_bits": 0o600,
+        "device": 1,
+        "inode": 2,
+        "size_bytes": 1,
+        "file_sha256": "0" * 64,
+        "symlink_target_text": None,
+        "ordered_child_names": None,
+        "xattr_value_sha256": None,
+    }
+
+
 def _auth() -> dict[str, dict[str, str]]:
     return {
         "parent_spec_approval": _receipt(),
@@ -74,7 +119,7 @@ def _policy() -> dict[str, object]:
             "runtime_manifest_receipt": _receipt(),
             "runtime_tree_projection_sha256": "0" * 64,
         },
-        "ordered_allowed_read_rows": [],
+        "ordered_allowed_read_rows": [_allowed_read_row()],
         "ordered_denied_read_rows": [],
         "read_event_projection_protocol": READ_EVENT_PROJECTION_PROTOCOL,
         "maximum_read_event_rows": MAXIMUM_READ_EVENT_ROWS,
@@ -105,11 +150,14 @@ def _attestation(policy: dict[str, object]) -> dict[str, object]:
         "audit_started_before_spawn": True,
         "audit_ended_after_child_exit": True,
         "audit_overflow": False,
-        "ordered_observed_read_events": [],
-        "read_event_projection_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "ordered_observed_read_events": [_allowed_read_event()],
+        "read_event_projection_sha256": "",
         "denied_read_attempt_count": 0,
         "unknown_read_attempt_count": 0,
     }
+    payload["read_event_projection_sha256"] = sha256(
+        compact_canonical_json(payload["ordered_observed_read_events"]).encode()
+    ).hexdigest()
     payload["artifact_sha256"] = canonical_artifact_sha256(payload)
     return payload
 
@@ -284,6 +332,16 @@ def candidate_members(candidate_gate: dict[str, object] | None = None) -> dict[s
     }
     if candidate_gate is None:
         raise ValueError("candidate fixture requires a caller-provided candidate gate")
+    bound_gate = dict(candidate_gate)
+    verification_bytes = (compact_canonical_json(payloads["verification_attempt/attempt_record.json"]) + "\n").encode()
+    bound_gate["verification_attempt_receipt"] = {
+        "artifact_sha256": payloads["verification_attempt/attempt_record.json"]["artifact_sha256"],
+        "file_sha256": sha256(verification_bytes).hexdigest(),
+    }
+    bound_gate["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bound_gate.items() if key != "artifact_sha256"}
+    )
+    payloads["candidate_gate.json"] = bound_gate
     return {
         relative_path: (
             terminal_log

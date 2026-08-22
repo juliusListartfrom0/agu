@@ -270,18 +270,31 @@ def verify_read_isolation_binding(policy: Mapping[str, object], attestation: Map
 
     allowed_rows = policy["ordered_allowed_read_rows"]
     denied_rows = policy["ordered_denied_read_rows"]
-    for event in attestation["ordered_observed_read_events"]:
+    observed_events = attestation["ordered_observed_read_events"]
+    if not allowed_rows:
+        raise ValueError("read-isolation policy must contain allowed reads")
+    if not observed_events:
+        raise ValueError("read-isolation attestation must contain observed allowed reads")
+
+    matched_allowed_rows: set[int] = set()
+    for event in observed_events:
         matching_denied = [row for row in denied_rows if _denied_row_matches_event(row, event)]
         if matching_denied:
             raise ValueError("denied read event matched the read-isolation policy")
 
-        matching_allowed = [row for row in allowed_rows if _allowed_row_matches_event(row, event)]
+        matching_allowed = [
+            (index, row) for index, row in enumerate(allowed_rows) if _allowed_row_matches_event(row, event)
+        ]
         if not matching_allowed:
             raise ValueError("unknown read event is not covered by the read-isolation policy")
-        selected = _select_unique_allowed_row(matching_allowed)
+        matched_allowed_rows.update(index for index, _row in matching_allowed)
+        selected = _select_unique_allowed_row([row for _index, row in matching_allowed])
         if event["path_role"] != selected["path_role"]:
             raise ValueError("read event path role does not match the policy row")
         _verify_event_against_allowed_row(event, selected)
+
+    if len(matched_allowed_rows) != len(allowed_rows):
+        raise ValueError("read-isolation attestation does not cover every allowed read row")
 
 
 def _verify_absolute_path(value: object, name: str) -> None:

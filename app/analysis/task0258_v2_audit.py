@@ -200,13 +200,9 @@ def _parse_endpoint_security_row(payload: object, line_number: int) -> EndpointS
     pidversion = _verify_json_integer(payload["pidversion"], f"line {line_number} pidversion")
     ppid = _verify_json_integer(payload["ppid"], f"line {line_number} ppid")
     seq_num = _verify_optional_json_integer(payload["seq_num"], f"line {line_number} seq_num")
-    global_seq_num = _verify_optional_json_integer(
-        payload["global_seq_num"], f"line {line_number} global_seq_num"
-    )
+    global_seq_num = _verify_optional_json_integer(payload["global_seq_num"], f"line {line_number} global_seq_num")
     path = payload["path"]
-    if path is not None and (
-        not isinstance(path, str) or not path.startswith("/") or "\x00" in path
-    ):
+    if path is not None and (not isinstance(path, str) or not path.startswith("/") or "\x00" in path):
         raise ValueError(f"line {line_number} path is invalid")
 
     result_auth: str | None = None

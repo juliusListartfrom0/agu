@@ -16,6 +16,7 @@ import json
 import os
 import secrets
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 from app.analysis.task0258_module_a_v2 import (
@@ -35,7 +36,12 @@ from app.analysis.task0258_v2_artifacts import (
     verify_candidate_receipt_bundle,
     verify_postpublication_verification,
 )
-from app.analysis.task0258_v2_fs import exclusive_flock, read_regular_file_no_follow
+from app.analysis.task0258_v2_fs import (
+    _open_existing_directory_no_follow,
+    exclusive_flock,
+    exclusive_flock_at,
+    read_regular_file_no_follow,
+)
 from app.analysis.task0258_v2_pipeline import (
     build_member_receipts,
     read_published_candidate_receipt_bundle,
@@ -47,6 +53,19 @@ from app.analysis.task0258_v2_registry import append_run_history_marker, create_
 
 _SYNTHETIC_PIPELINE_CONTEXT_TOKENS: set[tuple[int, bytes]] = set()
 _SYNTHETIC_PIPELINE_CONTEXT_TOKEN = object()
+
+
+@contextmanager
+def _exclusive_history_lock(registry_dir: Path, auth_sha256: str):
+    """Hold the history lock relative to the same stable registry directory FD."""
+    registry_dir = Path(registry_dir)
+    registry_fd = _open_existing_directory_no_follow(registry_dir)
+    lock_path = registry_dir / f".{auth_sha256}.history.lock"
+    try:
+        with exclusive_flock_at(registry_fd, lock_path.name, lock_path) as history_lock:
+            yield registry_fd, history_lock
+    finally:
+        os.close(registry_fd)
 
 
 class _SyntheticV2PipelineTestContext:
@@ -157,8 +176,7 @@ def run_v2_pipeline(
         output_root=output_root,
         flock_path=flock_path,
     )
-    history_lock_path = registry_dir / f".{auth_sha256}.history.lock"
-    with exclusive_flock(history_lock_path) as history_lock:
+    with _exclusive_history_lock(registry_dir, auth_sha256) as (registry_fd, history_lock):
         _append_synthetic_pipeline_markers(
             registry_dir=registry_dir,
             auth_sha256=auth_sha256,
@@ -170,10 +188,13 @@ def run_v2_pipeline(
                 "verification_attempt_completed_private",
             ),
             held_lock=history_lock,
+            registry_fd=registry_fd,
         )
         encoded = _rebind_candidate_gate_history(
             encoded,
-            _history_contract(replay_run_history_registry(registry_dir, auth_sha256, held_lock=history_lock)),
+            _history_contract(
+                replay_run_history_registry(registry_dir, auth_sha256, held_lock=history_lock, registry_fd=registry_fd)
+            ),
         )
         candidate = seal_candidate_v2(output_root, encoded, flock_path=flock_path)
         with exclusive_flock(flock_path) as output_lock:
@@ -185,9 +206,10 @@ def run_v2_pipeline(
             event="candidate_published",
             subject_receipts=_candidate_history_subject_receipts(actual_member_receipts),
             held_lock=history_lock,
+            registry_fd=registry_fd,
         )
         candidate_history = _history_contract(
-            replay_run_history_registry(registry_dir, auth_sha256, held_lock=history_lock)
+            replay_run_history_registry(registry_dir, auth_sha256, held_lock=history_lock, registry_fd=registry_fd)
         )
         bound_bundle = _bind_candidate_bundle_payload(
             bundle_payload,
@@ -239,6 +261,7 @@ def run_v2_pipeline(
                 }
             ],
             held_lock=history_lock,
+            registry_fd=registry_fd,
         )
     return {"candidate": candidate, "bundle": bundle_path, "result": result}
 
@@ -337,6 +360,7 @@ def _append_synthetic_pipeline_markers(
     output_root: Path,
     events: tuple[str, ...],
     held_lock=None,
+    registry_fd: int | None = None,
 ) -> None:
     for event in events:
         _append_synthetic_pipeline_marker(
@@ -345,6 +369,7 @@ def _append_synthetic_pipeline_markers(
             output_root=output_root,
             event=event,
             held_lock=held_lock,
+            registry_fd=registry_fd,
         )
 
 
@@ -356,8 +381,9 @@ def _append_synthetic_pipeline_marker(
     event: str,
     subject_receipts: list[dict[str, object]] | None = None,
     held_lock=None,
+    registry_fd: int | None = None,
 ) -> None:
-    history = replay_run_history_registry(registry_dir, auth_sha256, held_lock=held_lock)
+    history = replay_run_history_registry(registry_dir, auth_sha256, held_lock=held_lock, registry_fd=registry_fd)
     claim = history[0]
     completion = history[1]
     prior = history[-1]
@@ -434,7 +460,14 @@ def _append_synthetic_pipeline_marker(
         "created_at_utc": claim["created_at_utc"],
     }
     payload["artifact_sha256"] = canonical_artifact_sha256(payload)
-    append_run_history_marker(registry_dir, auth_sha256, payload, prior_event, held_lock=held_lock)
+    append_run_history_marker(
+        registry_dir,
+        auth_sha256,
+        payload,
+        prior_event,
+        held_lock=held_lock,
+        registry_fd=registry_fd,
+    )
 
 
 def _require_pipeline_receipt_bindings(
