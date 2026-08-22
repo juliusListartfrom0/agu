@@ -9,15 +9,23 @@ field set and every pinned constant field.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from hashlib import sha256
 
 from app.analysis.task0258_module_a_v2 import (
+    AUTHORIZATION_PROVIDER_ORDER,
     CANDIDATE_GATE_SCHEMA_V2,
     CANDIDATE_RECEIPT_BUNDLE_SCHEMA,
     MECHANICAL_FAILURE_SCHEMA_V2,
     MODULE_ID,
     POSTPUBLICATION_FAILURE_SCHEMA_V2,
     POSTPUBLICATION_VERIFICATION_SCHEMA_V2,
+    TILED_SWIN_ATTEMPT_SCHEMA_V2,
+    TILED_SWIN_EMBEDDING_SCHEMA_V2,
+    V2_PRODUCER_ATTEMPT_FIELDS,
+    V2_PRODUCER_EMBEDDING_FIELDS,
+    compact_canonical_json,
     is_sha256,
     verify_artifact_file_receipt,
     verify_authorization_receipts,
@@ -28,6 +36,7 @@ from app.analysis.task0258_module_a_v2 import (
     verify_provider_slots,
     verify_run_history_contract_receipt,
     verify_static_input_contract,
+    verify_v2_receipt_fields,
 )
 from app.analysis.task0258_v2_gate import (
     CANDIDATE_PREPUBLICATION_CHECKS,
@@ -223,6 +232,245 @@ def verify_candidate_member_coverage(paths: object) -> None:
     """Validate an exact candidate_v2 ten-member relative-path listing."""
     if not isinstance(paths, (list, tuple)) or tuple(paths) != CANDIDATE_MEMBER_PATHS:
         raise ValueError("candidate member coverage is invalid (must be the exact ten members in order)")
+
+
+_PARENT_ARTIFACT_COMMON_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "purpose",
+        "runtime_consumable",
+        "training_consumable",
+        "formal_evaluation_eligible",
+        "promotion_eligible",
+        "promoted",
+    }
+)
+_TEMPORAL_RETROSPECTIVE_FIELDS = _PARENT_ARTIFACT_COMMON_FIELDS | frozenset(
+    {
+        "input_receipts",
+        "selection_protocol",
+        "source_selection_limitation",
+        "outer_folds",
+        "per_fit_environment",
+        "held_label_invariance",
+        "archived_task0257_comparator",
+        "error_bound_result",
+        "temporal_hypothesis_decision",
+        "artifact_sha256",
+    }
+)
+_FINAL_EVALUATOR_FIELDS = _PARENT_ARTIFACT_COMMON_FIELDS | frozenset(
+    {
+        "evaluator_role",
+        "input_receipts",
+        "representation_candidates",
+        "ordered_training_rows",
+        "logo_selection",
+        "selected_evaluator",
+        "all_45_refit",
+        "conditional_downstream",
+        "artifact_sha256",
+    }
+)
+
+
+def _reject_duplicate_json_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("candidate member JSON contains duplicate keys")
+        result[key] = value
+    return result
+
+
+def _decode_canonical_json_member(relative_path: str, encoded: bytes) -> Mapping[str, object]:
+    if not encoded.endswith(b"\n"):
+        raise ValueError(f"candidate JSON member is missing its final newline: {relative_path}")
+    try:
+        payload = json.loads(
+            encoded[:-1].decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"candidate JSON member is invalid: {relative_path}") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"candidate JSON member must be an object: {relative_path}")
+    expected = (compact_canonical_json(payload) + "\n").encode("utf-8")
+    if encoded != expected:
+        raise ValueError(f"candidate JSON member is not canonical: {relative_path}")
+    return payload
+
+
+def _verify_parent_artifact(payload: Mapping[str, object], *, schema_version: str, fields: frozenset[str]) -> None:
+    verify_exact_field_set(payload, fields)
+    if payload.get("schema_version") != schema_version or payload.get("module_id") != MODULE_ID:
+        raise ValueError("candidate parent artifact identity is invalid")
+    if payload.get("purpose") != "development_diagnostic_only":
+        raise ValueError("candidate parent artifact purpose is invalid")
+    for field in (
+        "runtime_consumable",
+        "training_consumable",
+        "formal_evaluation_eligible",
+        "promotion_eligible",
+        "promoted",
+    ):
+        if payload.get(field) is not False:
+            raise ValueError("candidate parent artifact eligibility flags are invalid")
+    verify_internal_artifact_hash(payload)
+
+
+def _verify_candidate_producer_embedding(payload: Mapping[str, object]) -> None:
+    verify_exact_field_set(payload, V2_PRODUCER_EMBEDDING_FIELDS)
+    if payload.get("schema_version") != TILED_SWIN_EMBEDDING_SCHEMA_V2:
+        raise ValueError("candidate producer embedding schema is invalid")
+    _verify_parent_artifact(payload, schema_version=TILED_SWIN_EMBEDDING_SCHEMA_V2, fields=V2_PRODUCER_EMBEDDING_FIELDS)
+    verify_v2_receipt_fields(_ordered_v2_payload(payload))
+    verify_artifact_file_receipt(payload["plan_receipt"])
+    if type(payload.get("row_count")) is not int or payload["row_count"] != 45:
+        raise ValueError("candidate producer embedding row_count is invalid")
+    if not isinstance(payload.get("examples"), (list, tuple)):
+        raise ValueError("candidate producer embedding examples are invalid")
+    if not isinstance(payload.get("attempt_chain"), (list, tuple)):
+        raise ValueError("candidate producer embedding attempt_chain is invalid")
+
+
+def _verify_candidate_producer_attempt(payload: Mapping[str, object]) -> None:
+    _verify_parent_artifact(payload, schema_version=TILED_SWIN_ATTEMPT_SCHEMA_V2, fields=V2_PRODUCER_ATTEMPT_FIELDS)
+    verify_v2_receipt_fields(_ordered_v2_payload(payload))
+    verify_artifact_file_receipt(payload["plan_receipt"])
+    ordinal = payload.get("attempt_ordinal")
+    if type(ordinal) is not int or ordinal != 1 or payload.get("prior_attempt_receipt") is not None:
+        raise ValueError("candidate producer attempt ordinal/chain is invalid")
+    for field in (
+        "started_prefix_count",
+        "completed_prefix_count",
+        "new_rows_verified",
+        "cumulative_active_runtime_nanoseconds",
+        "cumulative_resource_samples",
+        "cumulative_resource_log_bytes",
+    ):
+        if type(payload.get(field)) is not int or payload[field] < 0:
+            raise ValueError(f"candidate producer attempt counter is invalid: {field}")
+    if payload["started_prefix_count"] > payload["completed_prefix_count"] or payload["completed_prefix_count"] > 45:
+        raise ValueError("candidate producer attempt prefix counters are invalid")
+    if payload["new_rows_verified"] != payload["completed_prefix_count"] - payload["started_prefix_count"]:
+        raise ValueError("candidate producer attempt new_rows_verified is invalid")
+    _verify_member_resource_receipt(payload["resource_log_receipt"])
+
+
+def _verify_member_resource_receipt(value: object) -> None:
+    if not isinstance(value, Mapping) or set(value) != {"size_bytes", "file_sha256"}:
+        raise ValueError("candidate resource log receipt shape is invalid")
+    if type(value["size_bytes"]) is not int or value["size_bytes"] < 0 or not is_sha256(value["file_sha256"]):
+        raise ValueError("candidate resource log receipt values are invalid")
+
+
+def _ordered_v2_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    """Normalize an object decoded from sorted canonical JSON for legacy order checks."""
+    normalized = dict(payload)
+    receipts = payload.get("authorization_receipts")
+    if isinstance(receipts, Mapping) and set(receipts) == set(AUTHORIZATION_PROVIDER_ORDER):
+        normalized["authorization_receipts"] = {
+            provider: receipts[provider] for provider in AUTHORIZATION_PROVIDER_ORDER
+        }
+    return normalized
+
+
+def _verify_candidate_json_member(relative_path: str, payload: Mapping[str, object]) -> None:
+    if relative_path == "candidate_gate.json":
+        verify_candidate_gate(payload)
+    elif relative_path == "terminal_attempt/attempt_record.json":
+        _verify_candidate_producer_attempt(payload)
+    elif relative_path == "producer_tiled_swin_embeddings.json":
+        _verify_candidate_producer_embedding(payload)
+    elif relative_path == "verification_attempt/attempt_record.json":
+        from app.analysis.task0258_v2_verification import verify_verification_attempt
+
+        verify_internal_artifact_hash(payload)
+        verify_verification_attempt(_ordered_v2_payload(payload))
+        _verify_member_resource_receipt(payload["resource_log_receipt"])
+    elif relative_path == "verification_tiled_swin_embeddings.json":
+        from app.analysis.task0258_v2_verification import verify_verification_embedding
+
+        verify_internal_artifact_hash(payload)
+        verify_verification_embedding(_ordered_v2_payload(payload))
+    elif relative_path == "temporal_retrospective.json":
+        from app.analysis.vru_causal_temporal_retrospective import TEMPORAL_RETROSPECTIVE_SCHEMA
+
+        _verify_parent_artifact(
+            payload, schema_version=TEMPORAL_RETROSPECTIVE_SCHEMA, fields=_TEMPORAL_RETROSPECTIVE_FIELDS
+        )
+    elif relative_path in {"baseline_final_evaluator.json", "candidate_final_evaluator.json"}:
+        from app.analysis.vru_causal_temporal_retrospective import FINAL_EVALUATOR_SCHEMA
+
+        _verify_parent_artifact(payload, schema_version=FINAL_EVALUATOR_SCHEMA, fields=_FINAL_EVALUATOR_FIELDS)
+        expected_role = "baseline" if relative_path.startswith("baseline_") else "candidate"
+        if payload.get("evaluator_role") != expected_role:
+            raise ValueError("candidate evaluator role is not bound to its member path")
+    else:
+        raise ValueError(f"candidate JSON member path is not authorized: {relative_path}")
+
+
+def _verify_candidate_terminal_resource_log(encoded: bytes) -> int:
+    from app.analysis.vru_causal_temporal_retrospective import verify_resource_log_bytes
+
+    samples, _ = verify_resource_log_bytes(
+        encoded,
+        expected_attempt_ordinal=1,
+        prior_cumulative_samples=0,
+        prior_consecutive_breach_count=None,
+    )
+    return samples
+
+
+def _verify_candidate_verification_resource_log(encoded: bytes) -> int:
+    from app.analysis.task0258_v2_verification import verify_verification_resource_sample
+
+    if encoded and not encoded.endswith(b"\n"):
+        raise ValueError("candidate verification resource log is truncated")
+    rows = encoded.splitlines(keepends=True)
+    for ordinal, line in enumerate(rows, start=1):
+        payload = _decode_canonical_json_member("verification_attempt/resource_guard.jsonl", line)
+        verify_verification_resource_sample(payload)
+        if payload["attempt_sample_ordinal"] != ordinal or payload["cumulative_sample_ordinal"] != ordinal:
+            raise ValueError("candidate verification resource sample ordinals are not contiguous")
+    return len(rows)
+
+
+def verify_candidate_member_bytes(members: Mapping[str, bytes]) -> None:
+    """Validate the exact candidate ten-pack, including schema and log bindings."""
+    verify_candidate_member_coverage(list(members))
+    if any(not isinstance(data, bytes) for data in members.values()):
+        raise ValueError("candidate members must be byte strings")
+    decoded: dict[str, Mapping[str, object]] = {}
+    terminal_samples = _verify_candidate_terminal_resource_log(members[CANDIDATE_MEMBER_PATHS[0]])
+    verification_samples = _verify_candidate_verification_resource_log(members[CANDIDATE_MEMBER_PATHS[3]])
+    for relative_path in CANDIDATE_MEMBER_PATHS:
+        if relative_path.endswith(".json"):
+            payload = _decode_canonical_json_member(relative_path, members[relative_path])
+            _verify_candidate_json_member(relative_path, payload)
+            decoded[relative_path] = payload
+    terminal_attempt = decoded["terminal_attempt/attempt_record.json"]
+    verification_attempt = decoded["verification_attempt/attempt_record.json"]
+    terminal_log = members["terminal_attempt/resource_guard.jsonl"]
+    verification_log = members["verification_attempt/resource_guard.jsonl"]
+    terminal_receipt = terminal_attempt["resource_log_receipt"]
+    verification_receipt = verification_attempt["resource_log_receipt"]
+    for receipt, encoded, samples in (
+        (terminal_receipt, terminal_log, terminal_samples),
+        (verification_receipt, verification_log, verification_samples),
+    ):
+        if receipt["size_bytes"] != len(encoded) or receipt["file_sha256"] != sha256(encoded).hexdigest():
+            raise ValueError("candidate attempt resource receipt is not bound to its log bytes")
+    if terminal_attempt["cumulative_resource_samples"] != terminal_samples:
+        raise ValueError("candidate terminal attempt sample count is not bound to its log")
+    if terminal_attempt["cumulative_resource_log_bytes"] != len(terminal_log):
+        raise ValueError("candidate terminal attempt log byte count is not bound to its log")
+    if verification_attempt["ended_cumulative_resource_samples"] != verification_samples:
+        raise ValueError("candidate verification attempt sample count is not bound to its log")
+    if verification_attempt["ended_cumulative_resource_log_bytes"] != len(verification_log):
+        raise ValueError("candidate verification attempt log byte count is not bound to its log")
 
 
 def verify_failure_member_coverage(phase: str, paths: object) -> None:
@@ -611,6 +859,7 @@ __all__ = [
     "verify_postpublication_verification",
     "verify_postpublication_failure",
     "verify_candidate_member_coverage",
+    "verify_candidate_member_bytes",
     "verify_failure_member_coverage",
     "verify_generation_member_receipt",
 ]

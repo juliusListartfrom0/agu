@@ -136,10 +136,15 @@ def seal_run_consumption_claim(
     registry_fd: int | None = None,
 ) -> Path:
     """Validate and no-clobber publish ``<AUTH_SHA>.claim.json``."""
+    if not is_sha256(auth_sha256):
+        raise ValueError("run-history authorization SHA is invalid")
     verify_run_consumption_claim(payload)
     if not isinstance(payload, dict):
         raise ValueError("claim payload must be a mutable JSON object")
     verify_internal_artifact_hash(payload)
+    authorization_receipt = payload.get("authorization_receipt")
+    if not isinstance(authorization_receipt, dict) or authorization_receipt.get("artifact_sha256") != auth_sha256:
+        raise ValueError("claim authorization is not bound to the registry name")
     registry_dir = Path(registry_dir)
     if registry_fd is None:
         _ensure_directory_no_follow(registry_dir)
@@ -172,10 +177,15 @@ def seal_run_consumption_completed(
     registry_fd: int | None = None,
 ) -> Path:
     """Validate and no-clobber publish ``<AUTH_SHA>.completed.json``."""
+    if not is_sha256(auth_sha256):
+        raise ValueError("run-history authorization SHA is invalid")
     verify_run_consumption_completed(payload)
     if not isinstance(payload, dict):
         raise ValueError("completion payload must be a mutable JSON object")
     verify_internal_artifact_hash(payload)
+    authorization_receipt = payload.get("authorization_receipt")
+    if not isinstance(authorization_receipt, dict) or authorization_receipt.get("artifact_sha256") != auth_sha256:
+        raise ValueError("completion authorization is not bound to the registry name")
     registry_dir = Path(registry_dir)
     if registry_fd is None:
         _ensure_directory_no_follow(registry_dir)

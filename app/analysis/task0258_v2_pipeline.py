@@ -30,6 +30,7 @@ from app.analysis.task0258_v2_artifacts import (
     CANDIDATE_INPUT_RECEIPT_PROVIDERS,
     CANDIDATE_MEMBER_PATHS,
     verify_candidate_gate,
+    verify_candidate_member_bytes,
     verify_candidate_receipt_bundle,
     verify_generation_member_receipt,
     verify_postpublication_failure,
@@ -118,6 +119,7 @@ def seal_candidate_v2(
     published.
     """
     _require_output_parent_flock(output_root, flock_path)
+    verify_candidate_member_bytes(candidate_members)
     authorization_sha256 = _candidate_authorization_sha256(candidate_members)
 
     def validate_topology() -> None:
@@ -168,10 +170,11 @@ def build_member_receipts(candidate_dir: Path) -> list[dict[str, object]]:
     Rows are in literal candidate order; JSONL members are ``file_only``, the
     eight canonical JSON members bind their ``artifact_sha256`` field.
     """
+    encoded_members = {rel: read_regular_file_no_follow(candidate_dir / rel) for rel in CANDIDATE_MEMBER_PATHS}
+    verify_candidate_member_bytes(encoded_members)
     rows: list[dict[str, object]] = []
     for rel in CANDIDATE_MEMBER_PATHS:
-        path = candidate_dir / rel
-        data = read_regular_file_no_follow(path)
+        data = encoded_members[rel]
         file_sha = hashlib.sha256(data).hexdigest()
         if rel.endswith(".jsonl"):
             row: dict[str, object] = {
@@ -326,7 +329,9 @@ def read_published_candidate_receipt_bundle(
                 payload = json.loads(bundle_bytes.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise ValueError("published candidate receipt bundle is not canonical JSON") from exc
-            if not isinstance(payload, Mapping) or bundle_bytes != (compact_canonical_json(payload) + "\n").encode("utf-8"):
+            if not isinstance(payload, Mapping) or bundle_bytes != (compact_canonical_json(payload) + "\n").encode(
+                "utf-8"
+            ):
                 raise ValueError("published candidate receipt bundle bytes are not canonical")
             verify_candidate_receipt_bundle(payload)
             if list(payload["ordered_member_receipts"]) != build_member_receipts(candidate_dir):

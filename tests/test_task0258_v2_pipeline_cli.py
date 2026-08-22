@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+from task0258_candidate_fixtures import candidate_members
 
 from app.analysis.task0258_module_a_v2 import MODULE_ID, canonical_artifact_sha256, compact_canonical_json
 from app.analysis.task0258_run_history import replay_run_history_registry
@@ -201,18 +202,10 @@ def _json_member(name):
 
 
 def _members(candidate_gate=None):
-    return {
-        "terminal_attempt/resource_guard.jsonl": b'{"attempt_role":"producer"}\n',
-        "terminal_attempt/attempt_record.json": _json_member("attempt"),
-        "producer_tiled_swin_embeddings.json": _json_member("embeddings"),
-        "verification_attempt/resource_guard.jsonl": b'{"attempt_role":"verification"}\n',
-        "verification_attempt/attempt_record.json": _json_member("verification-attempt"),
-        "verification_tiled_swin_embeddings.json": _json_member("verification-embeddings"),
-        "temporal_retrospective.json": _json_member("retrospective"),
-        "baseline_final_evaluator.json": _json_member("baseline-evaluator"),
-        "candidate_final_evaluator.json": _json_member("candidate-evaluator"),
-        "candidate_gate.json": candidate_gate or _gate(),
-    }
+    gate = candidate_gate or _gate()
+    members = candidate_members(gate)
+    members["candidate_gate.json"] = gate
+    return members
 
 
 def _result_payload(

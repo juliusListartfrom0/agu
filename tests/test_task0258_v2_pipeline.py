@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from task0258_candidate_fixtures import candidate_members
 
 from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256, compact_canonical_json
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
@@ -89,17 +90,7 @@ def _gate():
 
 
 def _make_members():
-    members = {}
-    for i, rel in enumerate(CANDIDATE_MEMBER_PATHS):
-        if rel.endswith(".jsonl"):
-            members[rel] = b'{"schema_version":"x"}\n'
-        elif rel == "candidate_gate.json":
-            members[rel] = (json.dumps(_gate()) + "\n").encode()
-        else:
-            payload = {"schema_version": "x"}
-            payload["artifact_sha256"] = canonical_artifact_sha256(payload)
-            members[rel] = (json.dumps(payload) + "\n").encode()
-    return members
+    return candidate_members(_gate())
 
 
 def test_candidate_gate_payload():
@@ -108,6 +99,21 @@ def test_candidate_gate_payload():
     assert gate["postpublication_verification_required"] is True
     assert len(gate["ordered_prepublication_check_results"]) == 24
     assert len(gate["artifact_sha256"]) == 64
+
+
+def test_candidate_publication_rejects_schema_valid_but_unauthorized_member(tmp_path):
+    members = _make_members()
+    forged = {"schema_version": "agu.test-member.v1", "artifact_sha256": "0" * 64}
+    forged["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in forged.items() if key != "artifact_sha256"}
+    )
+    members["temporal_retrospective.json"] = (compact_canonical_json(forged) + "\n").encode()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = tmp_path / ".task0258-output.lock"
+    lock.write_text("")
+    with pytest.raises(ValueError, match="artifact field set mismatch|parent artifact identity"):
+        seal_candidate_v2(out, members, flock_path=lock)
 
 
 def test_seal_candidate_v2_and_member_receipts(tmp_path, monkeypatch):
@@ -306,7 +312,7 @@ def test_candidate_receipt_bundle_rejects_locked_candidate_drift(tmp_path):
     mutated = final / "temporal_retrospective.json"
     mutated.write_bytes(mutated.read_bytes() + b" ")
 
-    with pytest.raises(ValueError, match="locked candidate bytes"):
+    with pytest.raises(ValueError, match="candidate JSON member|locked candidate bytes"):
         seal_candidate_receipt_bundle(
             tmp_path / "candidate-receipt-bundle.json",
             bundle,

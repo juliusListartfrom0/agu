@@ -31,7 +31,7 @@ _BOOTSTRAP_TARGET_SOURCE_SHA256 = {
     "app/analysis/__init__.py": "5c2fc5f80f83f4e146ddb460ba922cb0eab5a9d14fdc4dbdc19bd544688ae65b",
     "app/analysis/task0258_module_a_v2.py": "24ce88717acc24f5a28bde690274db1172cbe1663a8bf0900c4cdbf280d3a06b",
     "app/analysis/task0258_v2_bootstrap.py": "c50ab5a67c259fe0f464e09a006ed42728face86ebac3beb043c08c9467279e5",
-    "scripts/task0258_module_a_verified_bootstrap.py": "eced6830d98c47cbb3d9e2898da1a051409def61ea0a31bff8220b62dbc10c4f",
+    "scripts/task0258_module_a_verified_bootstrap.py": "8f0d7fc87b67199ffb0e4893f640836da6e3477b7545b7ef8abce6662d2908f4",
 }
 
 
@@ -121,7 +121,9 @@ def test_bootstrap_closes_fds_when_preimport_validation_fails(monkeypatch):
         raise ValueError("invalid pre-import descriptors")
 
     monkeypatch.setattr(bootstrap_script, "_preimport_validate_fds", fail_validation)
-    monkeypatch.setattr(bootstrap_script, "_close_bootstrap_fds", lambda request, source: closed.append((request, source)))
+    monkeypatch.setattr(
+        bootstrap_script, "_close_bootstrap_fds", lambda request, source: closed.append((request, source))
+    )
     assert bootstrap_script.main() == 2
     assert closed == [(202, 203)]
 

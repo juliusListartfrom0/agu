@@ -235,6 +235,17 @@ def _preimport_runtime_sys_path(request: Mapping[str, object]) -> tuple[list[str
         or os.path.normpath(runtime_root) != runtime_root
     ):
         raise ValueError("runtime root is invalid before import")
+    root_fd = _preimport_open_absolute_directory(runtime_root)
+    try:
+        root_stat = os.fstat(root_fd)
+        if (
+            not stat.S_ISDIR(root_stat.st_mode)
+            or root_stat.st_dev != contract.get("runtime_root_device")
+            or root_stat.st_ino != contract.get("runtime_root_inode")
+        ):
+            raise ValueError("runtime root identity is not bound to its opened descriptor")
+    finally:
+        os.close(root_fd)
     entries = contract.get("ordered_python_sys_path_entries")
     expected = (
         (1, "base_runtime", "lib/python3.11"),

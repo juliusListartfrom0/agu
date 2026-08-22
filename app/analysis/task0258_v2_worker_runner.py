@@ -95,13 +95,37 @@ def run_worker_subprocess(
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as timeout_exc:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        stdout, stderr = proc.communicate()
-        raise WorkerTimeoutError(argv, timeout_seconds, stdout, stderr) from None
+        partial_stdout = timeout_exc.stdout or ""
+        partial_stderr = timeout_exc.stderr or ""
+        if isinstance(partial_stdout, bytes):
+            partial_stdout = partial_stdout.decode(errors="replace")
+        if isinstance(partial_stderr, bytes):
+            partial_stderr = partial_stderr.decode(errors="replace")
+        timeout_error = WorkerTimeoutError(
+            argv,
+            timeout_seconds,
+            partial_stdout,
+            partial_stderr,
+        )
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+        stdout = ""
+        stderr = ""
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
+        raise timeout_error from None
     return WorkerResult(proc.returncode, stdout, stderr)
 
 

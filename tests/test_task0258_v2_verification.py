@@ -62,9 +62,9 @@ def _embedding():
             "source_video_receipts": [],
             "row_count": 45,
             "examples": [],
-            "artifact_sha256": "0" * 64,
         }
     )
+    p["artifact_sha256"] = canonical_artifact_sha256(p)
     return p
 
 
@@ -105,9 +105,9 @@ def _attempt(disposition="completed"):
             "received_signal": None,
             "disposition": disposition,
             "stop_reason": None,
-            "artifact_sha256": "0" * 64,
         }
     )
+    p["artifact_sha256"] = canonical_artifact_sha256(p)
     return p
 
 
@@ -143,6 +143,10 @@ def test_verification_embedding_valid():
     bad["role"] = "producer"
     with pytest.raises(ValueError):
         verify_verification_embedding(bad)
+    stale = _embedding()
+    stale["examples"].append({"tampered": True})
+    with pytest.raises(ValueError, match="artifact_sha256"):
+        verify_verification_embedding(stale)
     bad = _embedding()
     bad["row_count"] = 44
     with pytest.raises(ValueError):
@@ -157,6 +161,10 @@ def test_verification_attempt_completed_valid():
     bad["verification_embedding_slot"]["receipt"] = None
     with pytest.raises(ValueError):
         verify_verification_attempt(bad)
+    stale = _attempt("completed")
+    stale["worker_payload"]["tampered"] = True
+    with pytest.raises(ValueError, match="artifact_sha256"):
+        verify_verification_attempt(stale)
 
 
 def test_verification_attempt_terminal_failure():
@@ -164,11 +172,17 @@ def test_verification_attempt_terminal_failure():
     bad = _attempt("terminal_failure")
     bad["received_signal"] = None
     bad["stop_reason"] = "determinism_failure"
+    bad["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bad.items() if key != "artifact_sha256"}
+    )
     verify_verification_attempt(bad)
     # SIGINT -> external_sigint
     bad2 = _attempt("terminal_failure")
     bad2["received_signal"] = "SIGINT"
     bad2["stop_reason"] = "external_sigint"
+    bad2["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bad2.items() if key != "artifact_sha256"}
+    )
     verify_verification_attempt(bad2)
     # wrong pairing rejected
     bad3 = _attempt("terminal_failure")
@@ -342,6 +356,9 @@ def test_verification_attempt_rejects_read_isolation_tuple_drift():
     bad["read_isolation_attestation"]["worker_role"] = "producer"
     bad["read_isolation_attestation"]["artifact_sha256"] = canonical_artifact_sha256(
         {key: value for key, value in bad["read_isolation_attestation"].items() if key != "artifact_sha256"}
+    )
+    bad["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bad.items() if key != "artifact_sha256"}
     )
 
     with pytest.raises(ValueError, match="worker role"):

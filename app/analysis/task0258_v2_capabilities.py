@@ -16,6 +16,8 @@ import re
 import stat
 import tempfile
 from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict
 from functools import wraps
 from pathlib import Path, PurePosixPath
@@ -46,7 +48,13 @@ from app.analysis.task0258_v2_artifacts import (
     verify_postpublication_failure,
     verify_postpublication_verification,
 )
-from app.analysis.task0258_v2_fs import FlockHandle, active_flock, exclusive_flock, verify_generation_directory
+from app.analysis.task0258_v2_fs import (
+    FlockHandle,
+    _open_existing_directory_no_follow,
+    active_flock,
+    exclusive_flock_at,
+    verify_generation_directory,
+)
 from app.analysis.task0258_v2_pipeline import build_member_receipts, output_parent_flock_path
 from app.analysis.task0258_v2_read_isolation import verify_read_isolation_binding
 from app.analysis.task0258_v2_verification import verify_verification_attempt
@@ -77,6 +85,24 @@ _RERUN_AUTHORIZATION_TOKEN = object()
 _STATIC_INPUTS_TOKEN = object()
 _RUN_HISTORY_TOKEN = object()
 _RUN_ADMISSION_TOKEN = object()
+
+_ACTIVE_REVIEW_REGISTRY_FDS: ContextVar[dict[str, int]] = ContextVar("task0258_active_review_registry_fds", default={})
+
+
+@contextmanager
+def _exclusive_review_lock(lock_path: Path):
+    """Acquire a review lock relative to a stable descriptor for its parent."""
+    lock_path = Path(lock_path)
+    try:
+        parent_fd = _open_existing_directory_no_follow(lock_path.parent)
+    except OSError as exc:
+        raise ValueError("review lock parent is not a real directory") from exc
+    try:
+        with exclusive_flock_at(parent_fd, lock_path.name, lock_path) as handle:
+            yield handle
+    finally:
+        os.close(parent_fd)
+
 
 _REVIEW_CHECKS = frozenset({"focused_pytest", "full_pytest"})
 _MAX_VERIFIED_FILE_BYTES = 67_108_864
@@ -2796,6 +2822,22 @@ def _history_contract(ledger: VerifiedRunHistoryLedger) -> dict[str, object]:
     }
 
 
+def _history_contract_before_candidate_marker(
+    ledger: VerifiedRunHistoryLedger, candidate_marker_index: int | None
+) -> dict[str, object]:
+    """Return the pre-publication history contract carried by the candidate gate."""
+    if candidate_marker_index is None:
+        return _history_contract(ledger)
+    if candidate_marker_index < 2 or candidate_marker_index > len(ledger.payloads):
+        raise ValueError("candidate marker index is outside the history ledger")
+    prefix = ledger.payloads[:candidate_marker_index]
+    return {
+        "run_identity_receipt": _payload_file_receipt(prefix[1]),
+        "head_receipt": _payload_file_receipt(prefix[-1]),
+        "marker_count": len(prefix) - 2,
+    }
+
+
 def _replay_history_with_identity(
     *, directory: Path, authorization_sha256: str, held_lock: FlockHandle | None = None
 ) -> tuple[list[Mapping[str, object]], tuple[int, int]]:
@@ -2805,9 +2847,20 @@ def _replay_history_with_identity(
     relative replay. This prevents a loaded review object from silently using
     a duplicated registry or a changed durable head.
     """
-    def replay_locked(history_lock: FlockHandle) -> tuple[list[Mapping[str, object]], tuple[int, int]]:
+    directory_key = os.path.normpath(os.fspath(Path(directory)))
+    context_fd = _ACTIVE_REVIEW_REGISTRY_FDS.get().get(directory_key)
+
+    def replay_locked(
+        history_lock: FlockHandle,
+        registry_fd: int,
+    ) -> tuple[list[Mapping[str, object]], tuple[int, int]]:
         before = _verify_real_directory(directory)
-        payloads = replay_run_history_registry(directory, authorization_sha256, held_lock=history_lock)
+        payloads = replay_run_history_registry(
+            directory,
+            authorization_sha256,
+            held_lock=history_lock,
+            registry_fd=registry_fd,
+        )
         after = _verify_real_directory(directory)
         if before != after:
             raise ValueError("run history registry identity changed during replay")
@@ -2818,14 +2871,18 @@ def _replay_history_with_identity(
         held_lock = active_flock(lock_path)
     if held_lock is not None:
         held_lock.assert_held(lock_path)
-        return replay_locked(held_lock)
-    with exclusive_flock(lock_path) as acquired_lock:
-        return replay_locked(acquired_lock)
+        if context_fd is not None:
+            return replay_locked(held_lock, context_fd)
+        raise ValueError("held history lock is not paired with its stable registry directory descriptor")
+    registry_fd = _open_existing_directory_no_follow(directory)
+    try:
+        with exclusive_flock_at(registry_fd, lock_path.name, lock_path) as acquired_lock:
+            return replay_locked(acquired_lock, registry_fd)
+    finally:
+        os.close(registry_fd)
 
 
-def _revalidate_run_history_ledger(
-    ledger: VerifiedRunHistoryLedger, *, held_lock: FlockHandle | None = None
-) -> None:
+def _revalidate_run_history_ledger(ledger: VerifiedRunHistoryLedger, *, held_lock: FlockHandle | None = None) -> None:
     """Reject a stale, relocated, or mutated loaded history snapshot."""
     payloads, identity = _replay_history_with_identity(
         directory=Path(ledger.directory),
@@ -2840,6 +2897,7 @@ def _revalidate_run_history_ledger(
 
 def _history_locked_review_operation(function):
     """Hold one history lock across a review-only trust-spine operation."""
+
     @wraps(function)
     def wrapper(*args, **kwargs):
         ledger = kwargs.get("run_history")
@@ -2857,8 +2915,18 @@ def _history_locked_review_operation(function):
         except ValueError:
             return function(*args, **kwargs)
         lock_path = directory / f".{ledger.authorization_sha256}.history.lock"
-        with exclusive_flock(lock_path):
-            return function(*args, **kwargs)
+        registry_fd = _open_existing_directory_no_follow(directory)
+        try:
+            with exclusive_flock_at(registry_fd, lock_path.name, lock_path):
+                active = dict(_ACTIVE_REVIEW_REGISTRY_FDS.get())
+                active[os.path.normpath(os.fspath(directory))] = registry_fd
+                token = _ACTIVE_REVIEW_REGISTRY_FDS.set(active)
+                try:
+                    return function(*args, **kwargs)
+                finally:
+                    _ACTIVE_REVIEW_REGISTRY_FDS.reset(token)
+        finally:
+            os.close(registry_fd)
 
     return wrapper
 
@@ -3016,9 +3084,7 @@ def bind_verified_review_no_write_preflight(
         raise ValueError("no-write preflight registry and output root must be distinct")
     expected_registry_names = registry_history_filenames(registry, history.authorization_sha256)
     actual_registry_entries = list(registry.iterdir())
-    expected_registry_names_with_lock = set(expected_registry_names) | {
-        f".{history.authorization_sha256}.history.lock"
-    }
+    expected_registry_names_with_lock = set(expected_registry_names) | {f".{history.authorization_sha256}.history.lock"}
     if {entry.name for entry in actual_registry_entries} != expected_registry_names_with_lock:
         raise ValueError("no-write preflight registry contains unstable residue")
     if any(entry.is_symlink() or not entry.is_file() for entry in actual_registry_entries):
@@ -3223,7 +3289,7 @@ def load_verified_candidate_receipt_bundle(
         raise ValueError("candidate bundle replay requires candidate_v2")
     _verify_review_temp_directory(candidate_dir)
     output_lock = output_parent_flock_path(candidate_dir.parent)
-    with exclusive_flock(output_lock):
+    with _exclusive_review_lock(output_lock):
         return _load_verified_candidate_receipt_bundle_locked(
             execution_context=execution_context,
             bundle_path=bundle_path,
@@ -3243,7 +3309,7 @@ def _load_verified_candidate_receipt_bundle_locked(
 ) -> VerifiedJsonArtifact:
     """Replay a candidate bundle while the output-parent lock is held."""
     bundle_lock = Path(bundle_path).parent / ".candidate-receipt-bundle.lock"
-    with exclusive_flock(bundle_lock):
+    with _exclusive_review_lock(bundle_lock):
         return _load_verified_candidate_receipt_bundle_unlocked(
             execution_context=execution_context,
             bundle_path=bundle_path,
@@ -3285,6 +3351,7 @@ def _load_verified_candidate_receipt_bundle_unlocked(
     return artifact
 
 
+@_history_locked_review_operation
 def load_verified_terminal_artifact(
     *,
     output_root: Path,
@@ -3294,11 +3361,10 @@ def load_verified_terminal_artifact(
     output_root = Path(output_root)
     _verify_review_temp_directory(output_root)
     output_lock = output_parent_flock_path(output_root)
-    with exclusive_flock(output_lock):
+    with _exclusive_review_lock(output_lock):
         return _load_verified_terminal_artifact_unlocked(output_root=output_root, **kwargs)
 
 
-@_history_locked_review_operation
 def _load_verified_terminal_artifact_unlocked(
     *,
     execution_context: object,
@@ -3371,6 +3437,26 @@ def _load_verified_terminal_artifact_unlocked(
         run_admission=run_admission,
         run_history=run_history,
     )
+    candidate_marker_indices = [
+        index
+        for index, marker in enumerate(run_history.payloads[2:], start=2)
+        if marker.get("event") == "candidate_published"
+    ]
+    candidate_markers = [run_history.payloads[index] for index in candidate_marker_indices]
+    if len(candidate_markers) > 1:
+        raise ValueError("history contains multiple candidate_published markers")
+    if candidate_markers:
+        expected_candidate_subject_receipts = [
+            {
+                "provider": f"candidate_member_{index:02d}",
+                "receipt_kind": row["receipt_kind"],
+                "artifact_sha256": row["artifact_sha256"],
+                "file_sha256": row["file_sha256"],
+            }
+            for index, row in enumerate(bundle.payload["ordered_member_receipts"])
+        ]
+        if candidate_markers[0]["subject_receipts"] != expected_candidate_subject_receipts:
+            raise ValueError("candidate_published history subject receipts do not match the bundle")
     candidate_gate = _load_candidate_gate_artifact(
         candidate_dir=candidate_dir,
         member_receipts=bundle.payload["ordered_member_receipts"],
@@ -3394,7 +3480,11 @@ def _load_verified_terminal_artifact_unlocked(
         raise ValueError("candidate gate admission is not bound to admission bytes")
     if gate_receipts["static_inputs"] != admission_payload["static_input_contract"]:
         raise ValueError("candidate gate static inputs are not bound to admission")
-    if gate_receipts["run_history_ledger"] != history_contract:
+    gate_history_contract = _history_contract_before_candidate_marker(
+        run_history,
+        candidate_marker_indices[0] if candidate_marker_indices else None,
+    )
+    if gate_receipts["run_history_ledger"] != gate_history_contract:
         raise ValueError("candidate gate history is not bound to history")
 
     terminal = _load_verified_json_artifact(

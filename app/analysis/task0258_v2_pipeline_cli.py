@@ -22,7 +22,6 @@ from app.analysis.task0258_module_a_v2 import (
     canonical_artifact_sha256,
     compact_canonical_json,
     is_sha256,
-    verify_internal_artifact_hash,
 )
 from app.analysis.task0258_run_history import (
     MARKER_SCHEMA,
@@ -32,6 +31,7 @@ from app.analysis.task0258_v2_artifacts import (
     CANDIDATE_INPUT_RECEIPT_PROVIDERS,
     CANDIDATE_MEMBER_PATHS,
     verify_candidate_gate,
+    verify_candidate_member_bytes,
     verify_candidate_receipt_bundle,
     verify_postpublication_verification,
 )
@@ -92,14 +92,7 @@ def assemble_candidate_members(members: Mapping[str, object]) -> dict[str, bytes
             f"extra={sorted(set(members) - set(CANDIDATE_MEMBER_PATHS))}"
         )
     encoded = {rel: encode_member(value) for rel, value in members.items()}
-    for rel, data in encoded.items():
-        if rel.endswith(".json"):
-            import json
-
-            payload = json.loads(data)
-            if not isinstance(payload, Mapping):
-                raise ValueError(f"candidate member must be a JSON object: {rel}")
-            verify_internal_artifact_hash(payload)
+    verify_candidate_member_bytes(encoded)
     return encoded
 
 
@@ -193,7 +186,9 @@ def run_v2_pipeline(
             subject_receipts=_candidate_history_subject_receipts(actual_member_receipts),
             held_lock=history_lock,
         )
-        candidate_history = _history_contract(replay_run_history_registry(registry_dir, auth_sha256, held_lock=history_lock))
+        candidate_history = _history_contract(
+            replay_run_history_registry(registry_dir, auth_sha256, held_lock=history_lock)
+        )
         bound_bundle = _bind_candidate_bundle_payload(
             bundle_payload,
             actual_member_receipts=actual_member_receipts,
@@ -404,12 +399,17 @@ def _append_synthetic_pipeline_marker(
         }
     else:
         subject_kind = "completed_private" if is_private else "published_paths"
-        receipts = list(subject_receipts or [{
-            "provider": "synthetic_private_subject",
-            "receipt_kind": "json",
-            "artifact_sha256": "0" * 64,
-            "file_sha256": "0" * 64,
-        }])
+        receipts = list(
+            subject_receipts
+            or [
+                {
+                    "provider": "synthetic_private_subject",
+                    "receipt_kind": "json",
+                    "artifact_sha256": "0" * 64,
+                    "file_sha256": "0" * 64,
+                }
+            ]
+        )
         projection = "0" * 64 if is_private else None
         launch_claim = None
     payload: dict[str, object] = {

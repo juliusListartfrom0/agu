@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from task0258_candidate_fixtures import candidate_members
 
 from app.analysis import task0258_v2_capabilities as capabilities_module
 from app.analysis import vru_causal_temporal_retrospective as temporal_module
@@ -19,7 +20,6 @@ from app.analysis.task0258_module_a_v2 import (
     compact_canonical_json,
 )
 from app.analysis.task0258_run_history import ADMISSION_SCHEMA, CLAIM_SCHEMA, COMPLETION_SCHEMA, MODULE_ID
-from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_capabilities import (
     VerifiedImplementationReviewSandboxContext,
     VerifiedModuleAStaticInputs,
@@ -321,17 +321,7 @@ def _gate():
 
 
 def _members(*, gate=None):
-    members = {}
-    for rel in CANDIDATE_MEMBER_PATHS:
-        if rel.endswith(".jsonl"):
-            members[rel] = b'{"role":"test"}\n'
-        elif rel == "candidate_gate.json":
-            members[rel] = (compact_canonical_json(gate or _gate()) + "\n").encode()
-        else:
-            payload = {"schema_version": "agu.test"}
-            payload["artifact_sha256"] = canonical_artifact_sha256(payload)
-            members[rel] = (compact_canonical_json(payload) + "\n").encode()
-    return members
+    return candidate_members(gate or _gate())
 
 
 def _payload_receipt(payload):
@@ -2104,7 +2094,7 @@ def test_candidate_bundle_loader_rejects_candidate_member_drift(tmp_path):
         expected_check_name="focused_pytest", expected_command_sha256="0" * 64
     )
 
-    with pytest.raises(ValueError, match="member receipts"):
+    with pytest.raises(ValueError, match="member receipts|candidate JSON member"):
         load_verified_candidate_receipt_bundle(
             execution_context=review,
             bundle_path=bundle_path,
@@ -2157,7 +2147,7 @@ def test_terminal_loader_replays_result_and_rejects_candidate_drift(tmp_path):
     assert loaded.payload["decision"] == "mechanical_pass"
     mutated = fixture["candidate"] / "temporal_retrospective.json"
     mutated.write_bytes(mutated.read_bytes() + b" ")
-    with pytest.raises(ValueError, match="member receipts"):
+    with pytest.raises(ValueError, match="member receipts|candidate JSON member"):
         load_verified_terminal_artifact(
             execution_context=fixture["review"],
             terminal_kind="verified_result",
