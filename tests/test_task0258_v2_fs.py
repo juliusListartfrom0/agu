@@ -175,6 +175,7 @@ def test_seal_generation_cleans_stage_when_reopen_fails(tmp_path, monkeypatch):
 
     root = tmp_path / "out"
     lock = root.parent / ".lock"
+    lock.write_text("")
     stage_name = ".fixed-stage"
     real_open_directory_at = fs._open_directory_at
     open_count = 0
@@ -262,6 +263,33 @@ def test_exclusive_flock_at_rejects_forged_path_parent_or_leaf(tmp_path):
         os.close(directory_fd)
     assert not (left / ".lock").exists()
     assert not (right / ".lock").exists()
+
+
+def test_lock_leaf_replacement_invalidates_old_handle_and_refuses_recreation(tmp_path):
+    lock = tmp_path / ".lock"
+    lock.write_text("original")
+    directory_fd = fs._open_existing_directory_no_follow(tmp_path)
+    try:
+        with exclusive_flock_at(directory_fd, lock.name, lock) as old_handle:
+            original_identity = (lock.stat().st_dev, lock.stat().st_ino)
+            lock.unlink()
+            with pytest.raises(ValueError, match="missing"):
+                with exclusive_flock_at(directory_fd, lock.name, lock):
+                    pass
+
+            replacement = tmp_path / ".replacement"
+            replacement.write_text("replacement")
+            replacement.rename(lock)
+            replacement_identity = (lock.stat().st_dev, lock.stat().st_ino)
+            assert replacement_identity != original_identity
+            with pytest.raises(ValueError, match="identity"):
+                old_handle.assert_held(lock, directory_fd=directory_fd)
+            with exclusive_flock_at(directory_fd, lock.name, lock) as replacement_handle:
+                replacement_handle.assert_held(lock, directory_fd=directory_fd)
+                with pytest.raises(ValueError, match="identity"):
+                    old_handle.assert_held(lock, directory_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def test_bounded_read_rejects_post_read_metadata_drift(tmp_path, monkeypatch):

@@ -36,6 +36,7 @@ from app.analysis.task0258_v2_fs import (
     FlockHandle,
     _ensure_directory_no_follow,
     _open_existing_directory_no_follow,
+    _provision_lock_file,
     active_flock,
     atomic_write_json_at,
     exclusive_flock_at,
@@ -101,6 +102,9 @@ def create_run_history_registry(
         raise ValueError("run-history output root is not bound to the requested root")
     _ensure_directory_no_follow(Path(registry_dir))
     history_lock_path = Path(registry_dir) / f".{auth_sha256}.history.lock"
+    _ensure_directory_no_follow(Path(flock_path).parent)
+    _provision_lock_file(history_lock_path)
+    _provision_lock_file(flock_path)
     registry_fd = _open_existing_directory_no_follow(Path(registry_dir))
     try:
         with exclusive_flock_at(registry_fd, history_lock_path.name, history_lock_path) as history_lock:
@@ -160,9 +164,11 @@ def seal_run_consumption_claim(
         raise ValueError("registry directory descriptor requires its held history lock")
     if held_lock is not None:
         held_lock.assert_held(lock_path, directory_fd=registry_fd)
-    lock_context = (
-        nullcontext(held_lock) if held_lock is not None else exclusive_flock_at(registry_fd, lock_path.name, lock_path)
-    )
+    if held_lock is None:
+        _provision_lock_file(lock_path)
+        lock_context = exclusive_flock_at(registry_fd, lock_path.name, lock_path)
+    else:
+        lock_context = nullcontext(held_lock)
     try:
         with lock_context:
             atomic_write_json_at(registry_fd, claim_filename(auth_sha256), payload)
@@ -202,9 +208,11 @@ def seal_run_consumption_completed(
         raise ValueError("registry directory descriptor requires its held history lock")
     if held_lock is not None:
         held_lock.assert_held(lock_path, directory_fd=registry_fd)
-    lock_context = (
-        nullcontext(held_lock) if held_lock is not None else exclusive_flock_at(registry_fd, lock_path.name, lock_path)
-    )
+    if held_lock is None:
+        _provision_lock_file(lock_path)
+        lock_context = exclusive_flock_at(registry_fd, lock_path.name, lock_path)
+    else:
+        lock_context = nullcontext(held_lock)
     try:
         with lock_context:
             atomic_write_json_at(registry_fd, completion_filename(auth_sha256), payload)
@@ -247,6 +255,7 @@ def append_run_history_marker(
         if held_lock is not None:
             held_lock.assert_held(lock_path, directory_fd=registry_fd)
         if held_lock is None:
+            _provision_lock_file(lock_path)
             lock_context = exclusive_flock_at(registry_fd, lock_path.name, lock_path)
         else:
             lock_context = nullcontext(held_lock)

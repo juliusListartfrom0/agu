@@ -30,17 +30,25 @@ _ACTIVE_FLOCKS: ContextVar[dict[str, "FlockHandle"]] = ContextVar("task0258_acti
 class FlockHandle:
     """Process-local capability for a currently-held fixed-path flock."""
 
-    __slots__ = ("_capability", "_fd", "_path", "_parent_identity", "_sealed")
+    __slots__ = ("_capability", "_fd", "_path", "_parent_identity", "_leaf_identity", "_sealed")
 
     def __setattr__(self, name: str, value: object) -> None:
         if name == "_sealed" and hasattr(self, "_sealed"):
             raise AttributeError("FlockHandle seal state is immutable")
-        if getattr(self, "_sealed", False) and name in {"_capability", "_fd", "_path", "_parent_identity"}:
+        if getattr(self, "_sealed", False) and name in {
+            "_capability",
+            "_fd",
+            "_path",
+            "_parent_identity",
+            "_leaf_identity",
+        }:
             raise AttributeError("FlockHandle fields are immutable")
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
-        if name in {"_capability", "_fd", "_path", "_parent_identity", "_sealed"} and hasattr(self, name):
+        if name in {"_capability", "_fd", "_path", "_parent_identity", "_leaf_identity", "_sealed"} and hasattr(
+            self, name
+        ):
             raise AttributeError("FlockHandle fields are immutable")
         object.__delattr__(self, name)
 
@@ -51,6 +59,7 @@ class FlockHandle:
         capability: object,
         *,
         parent_identity: tuple[int, int],
+        leaf_identity: tuple[int, int],
     ) -> None:
         if capability is not _LOCK_CAPABILITY:
             raise TypeError("FlockHandle must be created by exclusive_flock")
@@ -58,18 +67,36 @@ class FlockHandle:
         object.__setattr__(self, "_fd", fd)
         object.__setattr__(self, "_path", Path(path))
         object.__setattr__(self, "_parent_identity", parent_identity)
+        object.__setattr__(self, "_leaf_identity", leaf_identity)
         object.__setattr__(self, "_sealed", True)
 
     def assert_held(self, path: Path, *, directory_fd: int | None = None) -> None:
         if self._capability is not _LOCK_CAPABILITY or self._fd < 0 or _lock_key(self._path) != _lock_key(path):
             raise ValueError("the supplied lock handle does not hold the required path")
         try:
-            os.fstat(self._fd)
+            leaf_stat = os.fstat(self._fd)
+            if (leaf_stat.st_dev, leaf_stat.st_ino) != self._leaf_identity or not stat.S_ISREG(leaf_stat.st_mode):
+                raise ValueError("the supplied lock handle leaf identity drifted")
             if directory_fd is not None:
                 _assert_directory_path_matches_fd(Path(path).parent, directory_fd, label="lock parent")
                 directory_stat = os.fstat(directory_fd)
                 if (directory_stat.st_dev, directory_stat.st_ino) != self._parent_identity:
                     raise ValueError("the supplied directory descriptor is not the lock parent")
+                parent_fd = directory_fd
+                owns_parent_fd = False
+            else:
+                parent_fd = _open_existing_directory_no_follow(Path(path).parent)
+                owns_parent_fd = True
+            try:
+                current_stat = os.stat(Path(path).name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    not stat.S_ISREG(current_stat.st_mode)
+                    or (current_stat.st_dev, current_stat.st_ino) != self._leaf_identity
+                ):
+                    raise ValueError("the supplied lock handle path leaf identity drifted")
+            finally:
+                if owns_parent_fd:
+                    os.close(parent_fd)
         except OSError as exc:
             raise ValueError("the supplied lock handle is no longer active") from exc
 
@@ -192,9 +219,17 @@ def fsync_dir(path: Path) -> None:
 
 @contextmanager
 def _hold_exclusive_flock(path: Path, fd: int, *, parent_identity: tuple[int, int]) -> Iterator[FlockHandle]:
-    handle = FlockHandle(path, fd, _LOCK_CAPABILITY, parent_identity=parent_identity)
+    handle: FlockHandle | None = None
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        leaf_stat = os.fstat(fd)
+        handle = FlockHandle(
+            path,
+            fd,
+            _LOCK_CAPABILITY,
+            parent_identity=parent_identity,
+            leaf_identity=(leaf_stat.st_dev, leaf_stat.st_ino),
+        )
+        if not stat.S_ISREG(leaf_stat.st_mode):
             raise ValueError(f"lock path is not a regular file: {path}")
         fcntl.flock(fd, fcntl.LOCK_EX)
         active = dict(_ACTIVE_FLOCKS.get())
@@ -208,12 +243,38 @@ def _hold_exclusive_flock(path: Path, fd: int, *, parent_identity: tuple[int, in
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
-            handle._invalidate()
+            if handle is not None:
+                handle._invalidate()
             os.close(fd)
 
 
-def _flock_open_flags() -> int:
-    return os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+def _flock_open_flags(*, create: bool) -> int:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    if create:
+        flags |= os.O_CREAT
+    return flags
+
+
+def _provision_lock_file(path: Path) -> None:
+    """Create one persistent regular lock file during resource initialization."""
+    path = Path(path)
+    parent_fd = _open_existing_directory_no_follow(path.parent)
+    try:
+        try:
+            fd = os.open(
+                path.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=parent_fd,
+            )
+        except FileExistsError:
+            current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISREG(current.st_mode):
+                raise ValueError("persistent lock path is not a regular file")
+        else:
+            os.close(fd)
+    finally:
+        os.close(parent_fd)
 
 
 @contextmanager
@@ -223,7 +284,7 @@ def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
     parent_fd = _open_existing_directory_no_follow(path.parent)
     try:
         parent_stat = os.fstat(parent_fd)
-        fd = os.open(path.name, _flock_open_flags(), 0o600, dir_fd=parent_fd)
+        fd = os.open(path.name, _flock_open_flags(create=True), 0o600, dir_fd=parent_fd)
     finally:
         os.close(parent_fd)
     with _hold_exclusive_flock(
@@ -243,7 +304,10 @@ def exclusive_flock_at(directory_fd: int, lock_name: str, path: Path) -> Iterato
         raise ValueError("lock path leaf does not match the relative lock name")
     _assert_directory_path_matches_fd(path.parent, directory_fd, label="lock parent")
     directory_stat = os.fstat(directory_fd)
-    fd = os.open(lock_name, _flock_open_flags(), 0o600, dir_fd=directory_fd)
+    try:
+        fd = os.open(lock_name, _flock_open_flags(create=False), 0o600, dir_fd=directory_fd)
+    except FileNotFoundError as exc:
+        raise ValueError("persistent lock leaf is missing; refusing to recreate it") from exc
     with _hold_exclusive_flock(
         Path(path),
         fd,
@@ -759,6 +823,8 @@ def publish_generation_directory(
     if staged.parent != final.parent:
         raise ValueError("staged and final generations must share one parent")
     _ensure_directory_no_follow(final.parent)
+    _ensure_directory_no_follow(Path(flock_path).parent)
+    _provision_lock_file(flock_path)
     parent_fd = _open_existing_directory_no_follow(final.parent)
     lock_parent_fd = _open_existing_directory_no_follow(Path(flock_path).parent)
     try:
@@ -884,6 +950,8 @@ def seal_generation_directory(
             raise ValueError("generation parent descriptor is not a directory")
     owns_lock_parent_fd = lock_parent_fd is None
     if owns_lock_parent_fd:
+        _ensure_directory_no_follow(Path(flock_path).parent)
+        _provision_lock_file(flock_path)
         lock_parent_fd = _open_existing_directory_no_follow(Path(flock_path).parent)
     else:
         lock_parent_stat = os.fstat(lock_parent_fd)

@@ -688,6 +688,7 @@ def _candidate_bundle_fixture(fixture):
     bundle_path = bundle_parent / "candidate-receipt-bundle.json"
     bundle_raw = (compact_canonical_json(bundle) + "\n").encode()
     bundle_path.write_bytes(bundle_raw)
+    (bundle_parent / ".candidate-receipt-bundle.lock").write_text("")
     member_by_path = {row["relative_path"]: row for row in candidate_rows}
     result = build_postpublication_verification_payload(
         error_bounds_pass=True,
@@ -2088,6 +2089,7 @@ def test_candidate_bundle_loader_replays_bytes_and_rejects_wrong_context(tmp_pat
     bundle_path = bundle_parent / "bundle.json"
     bundle_raw = (compact_canonical_json(bundle) + "\n").encode()
     bundle_path.write_bytes(bundle_raw)
+    (bundle_parent / ".candidate-receipt-bundle.lock").write_text("")
     review = bind_implementation_review_sandbox_context(
         expected_check_name="focused_pytest", expected_command_sha256="0" * 64
     )
@@ -2207,6 +2209,7 @@ def test_candidate_bundle_loader_rejects_candidate_member_drift(tmp_path):
     bundle_path = bundle_parent / "bundle.json"
     bundle_raw = (compact_canonical_json(bundle) + "\n").encode()
     bundle_path.write_bytes(bundle_raw)
+    (bundle_parent / ".candidate-receipt-bundle.lock").write_text("")
     (candidate / "temporal_retrospective.json").write_bytes(
         (candidate / "temporal_retrospective.json").read_bytes() + b" "
     )

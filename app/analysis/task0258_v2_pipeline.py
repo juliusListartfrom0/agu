@@ -39,8 +39,10 @@ from app.analysis.task0258_v2_artifacts import (
 from app.analysis.task0258_v2_fs import (
     FlockHandle,
     _assert_directory_path_matches_fd,
+    _ensure_directory_no_follow,
     _open_directory_at,
     _open_existing_directory_no_follow,
+    _provision_lock_file,
     _verify_absent_at,
     atomic_write_bytes_at,
     exclusive_flock_at,
@@ -124,6 +126,8 @@ def seal_candidate_v2(
     _require_output_parent_flock(output_root, flock_path)
     verify_candidate_member_bytes(candidate_members)
     authorization_sha256 = _candidate_authorization_sha256(candidate_members)
+    _ensure_directory_no_follow(Path(flock_path).parent)
+    _provision_lock_file(flock_path)
 
     def validate_topology_at(output_root_fd: int) -> None:
         _require_candidate_publication_topology_at(output_root_fd)
@@ -290,6 +294,8 @@ def seal_candidate_receipt_bundle(
         f".{authorization_receipt['artifact_sha256']}.{bundle_path.name}.task0258-bundle-stage"
     )
     lock_path = bundle_path.parent / ".candidate-receipt-bundle.lock"
+    _ensure_directory_no_follow(lock_path.parent)
+    _provision_lock_file(lock_path)
     bundle_bytes = (compact_canonical_json(bundle_payload) + "\n").encode("utf-8")
     with ExitStack() as resources:
         output_parent_fd = _open_existing_directory_no_follow(output_flock_path.parent)

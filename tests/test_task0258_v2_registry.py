@@ -162,6 +162,7 @@ def test_registry_sealers_reject_lock_parent_fd_drift(tmp_path, sealer, payload_
     moved_registry = tmp_path / "moved-registry"
     locked_registry_fd = _open_existing_directory_no_follow(registry)
     lock_path = registry / f".{AUTH}.history.lock"
+    lock_path.write_text("")
     try:
         with exclusive_flock_at(locked_registry_fd, lock_path.name, lock_path) as history_lock:
             registry.rename(moved_registry)
@@ -390,7 +391,7 @@ def test_append_marker_rejects_symlinked_lock_without_touching_target(tmp_path):
     lock_path.unlink()
     lock_path.symlink_to(target)
 
-    with pytest.raises(OSError):
+    with pytest.raises(ValueError, match="not a regular file"):
         append_run_history_marker(reg, AUTH, _marker("producer_attempt_1_admitted"), None)
 
     assert target.read_text() == "sentinel"
