@@ -58,6 +58,14 @@ def test_validate_bootstrap_fd_bindings_rejects_aliases_and_non_regular_source(t
     finally:
         os.close(request_fd)
     os.close(source_fd)
+    directory_fd = os.open(tmp_path, os.O_RDONLY)
+    request_fd = os.open(request_path, os.O_RDONLY)
+    try:
+        with pytest.raises(ValueError):
+            validate_bootstrap_fd_bindings(request_fd, directory_fd)
+    finally:
+        os.close(request_fd)
+        os.close(directory_fd)
 
 
 def test_bootstrap_closes_sensitive_fds_before_dispatch(tmp_path):
@@ -94,14 +102,19 @@ def test_bootstrap_closes_sensitive_fds_before_dispatch(tmp_path):
                 os.close(saved_fd)
         os.close(request_fd)
         os.close(source_fd)
-    directory_fd = os.open(tmp_path, os.O_RDONLY)
-    request_fd = os.open(request_path, os.O_RDONLY)
-    try:
-        with pytest.raises(ValueError):
-            validate_bootstrap_fd_bindings(request_fd, directory_fd)
-    finally:
-        os.close(request_fd)
-        os.close(directory_fd)
+
+
+def test_bootstrap_closes_fds_when_preimport_validation_fails(monkeypatch):
+    closed = []
+    monkeypatch.setattr(bootstrap_script, "_preimport_parse_flags", lambda _argv: (202, 203))
+
+    def fail_validation(_request_fd, _source_fd):
+        raise ValueError("invalid pre-import descriptors")
+
+    monkeypatch.setattr(bootstrap_script, "_preimport_validate_fds", fail_validation)
+    monkeypatch.setattr(bootstrap_script, "_close_bootstrap_fds", lambda request, source: closed.append((request, source)))
+    assert bootstrap_script.main() == 2
+    assert closed == [(202, 203)]
 
 
 def test_build_sys_path_from_entries():

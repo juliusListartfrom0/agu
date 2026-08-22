@@ -16,7 +16,7 @@ import secrets
 import stat
 import sys
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path, PurePosixPath
 
 from app.analysis.task0258_module_a_v2 import compact_canonical_json, is_safe_slug
@@ -335,6 +335,7 @@ def seal_generation_directory(
     flock_path: Path,
     stage_name: str | None = None,
     pre_publish_validator: Callable[[], None] | None = None,
+    lock_held: bool = False,
 ) -> Path:
     """Validate exact member coverage and atomically publish a generation.
 
@@ -358,7 +359,8 @@ def seal_generation_directory(
     parent.mkdir(parents=True, exist_ok=True)
     _verify_no_symlink_ancestors(parent)
     final = parent / final_name
-    with exclusive_flock(flock_path):
+    lock_context = nullcontext() if lock_held else exclusive_flock(flock_path)
+    with lock_context:
         if pre_publish_validator is not None:
             pre_publish_validator()
         staged = build_generation_directory(parent, members, stage_name=stage_name)

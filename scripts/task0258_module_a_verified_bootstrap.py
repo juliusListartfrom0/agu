@@ -108,9 +108,11 @@ def _preimport_parse_flags(argv: object) -> tuple[int, int]:
     return 202, 203
 
 
-def _close_bootstrap_fds(request_fd: int, source_fd: int) -> None:
+def _close_bootstrap_fds(request_fd: int | None, source_fd: int | None) -> None:
     """Close the sensitive review descriptors before dispatching target code."""
     for descriptor in (request_fd, source_fd):
+        if descriptor is None:
+            continue
         try:
             os.close(descriptor)
         except OSError:
@@ -214,12 +216,15 @@ def _preimport_runtime_sys_path(request: Mapping[str, object]) -> list[str]:
 
 
 def main() -> int:
+    request_fd: int | None = None
+    source_fd: int | None = None
     try:
         request_fd, source_fd = _preimport_parse_flags(sys.argv[1:])
         _preimport_validate_fds(request_fd, source_fd)
         request_bytes, request = _preimport_read_request(request_fd)
         sys.path[:] = _preimport_runtime_sys_path(request)
     except (OSError, TypeError, ValueError):
+        _close_bootstrap_fds(request_fd, source_fd)
         return 2
 
     try:
@@ -235,6 +240,7 @@ def main() -> int:
         validate_bootstrap_fd_bindings(request_fd, source_fd)
         validate_review_driver_request(request)
     except (ImportError, OSError, TypeError, ValueError):
+        _close_bootstrap_fds(request_fd, source_fd)
         return 2
 
     try:
@@ -261,6 +267,8 @@ def main() -> int:
         dispatch_module(request["target_module"], request["target_argv"])
     except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         return 2
+    finally:
+        _close_bootstrap_fds(request_fd, source_fd)
     return 0
 
 

@@ -170,22 +170,29 @@ def run_v2_pipeline(
         candidate_dir=candidate,
         output_flock_path=flock_path,
     )
-    bundle_bytes = read_published_candidate_receipt_bundle(
-        bundle_path,
-        candidate_dir=candidate,
-        output_flock_path=flock_path,
-        expected_payload=bundle_payload,
-    )
-    bound_result = dict(result_payload)
-    bound_result["candidate_receipt_bundle_receipt"] = {
-        "artifact_sha256": bundle_payload["artifact_sha256"],
-        "file_sha256": hashlib.sha256(bundle_bytes).hexdigest(),
-    }
-    bound_result["artifact_sha256"] = canonical_artifact_sha256(
-        {key: value for key, value in bound_result.items() if key != "artifact_sha256"}
-    )
-    verify_postpublication_verification(bound_result)
-    result = seal_verified_result(output_root, bound_result, flock_path=flock_path)
+    with exclusive_flock(flock_path):
+        bundle_bytes = read_published_candidate_receipt_bundle(
+            bundle_path,
+            candidate_dir=candidate,
+            output_flock_path=flock_path,
+            expected_payload=bundle_payload,
+            output_lock_held=True,
+        )
+        bound_result = dict(result_payload)
+        bound_result["candidate_receipt_bundle_receipt"] = {
+            "artifact_sha256": bundle_payload["artifact_sha256"],
+            "file_sha256": hashlib.sha256(bundle_bytes).hexdigest(),
+        }
+        bound_result["artifact_sha256"] = canonical_artifact_sha256(
+            {key: value for key, value in bound_result.items() if key != "artifact_sha256"}
+        )
+        verify_postpublication_verification(bound_result)
+        result = seal_verified_result(
+            output_root,
+            bound_result,
+            flock_path=flock_path,
+            output_lock_held=True,
+        )
     return {"candidate": candidate, "bundle": bundle_path, "result": result}
 
 

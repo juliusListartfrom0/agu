@@ -45,8 +45,8 @@ from app.analysis.task0258_v2_artifacts import (
     verify_postpublication_failure,
     verify_postpublication_verification,
 )
-from app.analysis.task0258_v2_fs import verify_generation_directory
-from app.analysis.task0258_v2_pipeline import build_member_receipts
+from app.analysis.task0258_v2_fs import exclusive_flock, verify_generation_directory
+from app.analysis.task0258_v2_pipeline import build_member_receipts, output_parent_flock_path
 from app.analysis.task0258_v2_read_isolation import verify_read_isolation_binding
 from app.analysis.task0258_v2_verification import verify_verification_attempt
 from app.analysis.vru_causal_temporal_retrospective import (
@@ -3085,6 +3085,50 @@ def load_verified_candidate_receipt_bundle(
     expected_artifact_sha256: str,
     expected_file_sha256: str,
 ) -> VerifiedJsonArtifact:
+    """Replay a candidate bundle while holding the canonical output locks."""
+    candidate_dir = Path(candidate_dir)
+    if candidate_dir.name != "candidate_v2":
+        raise ValueError("candidate bundle replay requires candidate_v2")
+    _verify_review_temp_directory(candidate_dir)
+    output_lock = output_parent_flock_path(candidate_dir.parent)
+    with exclusive_flock(output_lock):
+        return _load_verified_candidate_receipt_bundle_locked(
+            execution_context=execution_context,
+            bundle_path=bundle_path,
+            candidate_dir=candidate_dir,
+            expected_artifact_sha256=expected_artifact_sha256,
+            expected_file_sha256=expected_file_sha256,
+        )
+
+
+def _load_verified_candidate_receipt_bundle_locked(
+    *,
+    execution_context: object,
+    bundle_path: Path,
+    candidate_dir: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+) -> VerifiedJsonArtifact:
+    """Replay a candidate bundle while the output-parent lock is held."""
+    bundle_lock = Path(bundle_path).parent / ".candidate-receipt-bundle.lock"
+    with exclusive_flock(bundle_lock):
+        return _load_verified_candidate_receipt_bundle_unlocked(
+            execution_context=execution_context,
+            bundle_path=bundle_path,
+            candidate_dir=candidate_dir,
+            expected_artifact_sha256=expected_artifact_sha256,
+            expected_file_sha256=expected_file_sha256,
+        )
+
+
+def _load_verified_candidate_receipt_bundle_unlocked(
+    *,
+    execution_context: object,
+    bundle_path: Path,
+    candidate_dir: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+) -> VerifiedJsonArtifact:
     """Load a bundle and replay its exact member receipts against ``candidate_v2``."""
     if type(execution_context) not in {
         VerifiedImplementationReviewSandboxContext,
@@ -3110,6 +3154,19 @@ def load_verified_candidate_receipt_bundle(
 
 
 def load_verified_terminal_artifact(
+    *,
+    output_root: Path,
+    **kwargs: object,
+) -> VerifiedJsonArtifact:
+    """Replay one terminal generation while retaining its output lock."""
+    output_root = Path(output_root)
+    _verify_review_temp_directory(output_root)
+    output_lock = output_parent_flock_path(output_root)
+    with exclusive_flock(output_lock):
+        return _load_verified_terminal_artifact_unlocked(output_root=output_root, **kwargs)
+
+
+def _load_verified_terminal_artifact_unlocked(
     *,
     execution_context: object,
     terminal_kind: str,
@@ -3165,7 +3222,7 @@ def load_verified_terminal_artifact(
     if terminal_path.is_symlink():
         raise ValueError("terminal artifact cannot be a symlink")
 
-    bundle = load_verified_candidate_receipt_bundle(
+    bundle = _load_verified_candidate_receipt_bundle_locked(
         execution_context=execution_context,
         bundle_path=candidate_bundle_path,
         candidate_dir=candidate_dir,
