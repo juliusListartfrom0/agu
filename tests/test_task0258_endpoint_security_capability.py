@@ -51,6 +51,10 @@ def test_inspect_signed_artifact_reads_entitlement_from_the_requested_path(monke
             return capability.subprocess.CompletedProcess(
                 args, 0, stdout="Executable=\nAuthority=Developer ID Application: AGU\n", stderr=""
             )
+        if args[:3] == ("codesign", "-d", "-r-"):
+            return capability.subprocess.CompletedProcess(
+                args, 0, stdout='designated => identifier "agu.audit" and anchor apple generic\n', stderr=""
+            )
         if args[:4] == ("codesign", "-d", "--entitlements", ":-"):
             return capability.subprocess.CompletedProcess(
                 args,
@@ -86,6 +90,10 @@ def test_inspect_signed_artifact_requires_true_entitlement_value(monkeypatch, tm
             return capability.subprocess.CompletedProcess(args, 0, stdout="", stderr="")
         if args[:3] == ("codesign", "-dv", "--verbose=4"):
             return capability.subprocess.CompletedProcess(args, 0, stdout="Authority=AGU\n", stderr="")
+        if args[:3] == ("codesign", "-d", "-r-"):
+            return capability.subprocess.CompletedProcess(
+                args, 0, stdout='designated => identifier "agu.audit" and anchor apple generic\n', stderr=""
+            )
         if args[:4] == ("codesign", "-d", "--entitlements", ":-"):
             return capability.subprocess.CompletedProcess(
                 args,
@@ -97,6 +105,32 @@ def test_inspect_signed_artifact_requires_true_entitlement_value(monkeypatch, tm
 
     monkeypatch.setattr(capability, "_run", fake_run)
     assert capability.inspect_signed_artifact(artifact) == ("signed", False)
+
+
+def test_inspect_signed_artifact_rejects_self_signed_authority_with_entitlement(monkeypatch, tmp_path: Path):
+    artifact = tmp_path / "audit.systemextension"
+    artifact.mkdir()
+
+    def fake_run(*args: str):
+        if args[:2] == ("codesign", "--verify"):
+            return capability.subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:3] == ("codesign", "-dv", "--verbose=4"):
+            return capability.subprocess.CompletedProcess(args, 0, stdout="Authority=AGU\n", stderr="")
+        if args[:3] == ("codesign", "-d", "-r-"):
+            return capability.subprocess.CompletedProcess(
+                args, 0, stdout='designated => identifier "agu.audit"\n', stderr=""
+            )
+        if args[:4] == ("codesign", "-d", "--entitlements", ":-"):
+            return capability.subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=plistlib.dumps({"com.apple.developer.endpoint-security.client": True}).decode("utf-8"),
+                stderr="",
+            )
+        raise AssertionError(args)
+
+    monkeypatch.setattr(capability, "_run", fake_run)
+    assert capability.inspect_signed_artifact(artifact) == ("untrusted", True)
 
 
 def test_inspect_signed_artifact_rejects_missing_path(tmp_path: Path):

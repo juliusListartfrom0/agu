@@ -78,7 +78,11 @@ def inspect_signed_artifact(path: Path) -> tuple[str, bool]:
     if "adhoc" in details or "linker-signed" in details:
         signature_kind = "adhoc"
     elif "Authority=" in details:
-        signature_kind = "signed"
+        requirements = _run("codesign", "-d", "-r-", str(path))
+        requirement_details = f"{requirements.stdout}\n{requirements.stderr}".lower()
+        signature_kind = (
+            "signed" if requirements.returncode == 0 and "anchor apple" in requirement_details else "untrusted"
+        )
     else:
         signature_kind = "unknown"
     entitlements = _run("codesign", "-d", "--entitlements", ":-", str(path))
