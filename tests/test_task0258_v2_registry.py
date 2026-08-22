@@ -19,6 +19,8 @@ from app.analysis.task0258_run_history import (
     completion_filename,
     replay_run_history_registry,
 )
+from app.analysis.task0258_v2_fs import _open_existing_directory_no_follow, exclusive_flock_at
+from app.analysis.task0258_v2_pipeline import output_parent_flock_path
 from app.analysis.task0258_v2_registry import (
     append_run_history_marker,
     seal_run_consumption_claim,
@@ -144,6 +146,39 @@ def test_seal_claim_and_completed(tmp_path):
     # no-clobber: re-seal fails
     with pytest.raises(FileExistsError):
         seal_run_consumption_claim(reg, AUTH, _claim())
+
+
+@pytest.mark.parametrize(
+    ("sealer", "payload_factory"),
+    [
+        (seal_run_consumption_claim, _claim),
+        (seal_run_consumption_completed, _completed),
+    ],
+)
+def test_registry_sealers_reject_lock_parent_fd_drift(tmp_path, sealer, payload_factory):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    moved_registry = tmp_path / "moved-registry"
+    locked_registry_fd = _open_existing_directory_no_follow(registry)
+    lock_path = registry / f".{AUTH}.history.lock"
+    try:
+        with exclusive_flock_at(locked_registry_fd, lock_path.name, lock_path) as history_lock:
+            registry.rename(moved_registry)
+            registry.mkdir()
+            write_registry_fd = _open_existing_directory_no_follow(registry)
+            try:
+                with pytest.raises(ValueError, match="lock parent"):
+                    sealer(
+                        registry,
+                        AUTH,
+                        payload_factory(),
+                        held_lock=history_lock,
+                        registry_fd=write_registry_fd,
+                    )
+            finally:
+                os.close(write_registry_fd)
+    finally:
+        os.close(locked_registry_fd)
 
 
 def test_append_marker_valid(tmp_path):
@@ -350,9 +385,8 @@ def test_create_run_history_registry(tmp_path):
 
     reg = tmp_path / "registry"
     out = tmp_path / "out" / "vru_causal_temporal_retrospective_v2"
-    lock = tmp_path / "out" / ".lock"
+    lock = output_parent_flock_path(out)
     lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.write_text("")
 
     claim = _claim(str(out))
     admission = _admission(str(out), _file_receipt(claim))
@@ -393,6 +427,32 @@ def test_create_run_history_registry(tmp_path):
             output_root=out,
             flock_path=lock,
         )
+
+
+def test_create_run_history_registry_rejects_noncanonical_output_lock(tmp_path):
+    from app.analysis.task0258_v2_registry import create_run_history_registry
+
+    reg = tmp_path / "registry"
+    out = tmp_path / "out" / "vru_causal_temporal_retrospective_v2"
+    arbitrary_lock = tmp_path / "out" / ".caller-selected.lock"
+    arbitrary_lock.parent.mkdir(parents=True, exist_ok=True)
+
+    claim = _claim(str(out))
+    admission = _admission(str(out), _file_receipt(claim))
+    completion = _completed(str(out), _file_receipt(claim), _file_receipt(admission))
+    with pytest.raises(ValueError, match="fixed output-parent lock"):
+        create_run_history_registry(
+            registry_dir=reg,
+            auth_sha256=AUTH,
+            claim_payload=claim,
+            admission_payload=admission,
+            completion_payload=completion,
+            output_root=out,
+            flock_path=arbitrary_lock,
+        )
+
+    assert not reg.exists()
+    assert not out.exists()
 
 
 def test_replay_rejects_symlinked_registry_ancestor(tmp_path):

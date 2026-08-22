@@ -41,6 +41,7 @@ from app.analysis.task0258_v2_fs import (
     exclusive_flock_at,
     seal_generation_directory,
 )
+from app.analysis.task0258_v2_pipeline import output_parent_flock_path
 
 
 def create_run_history_registry(
@@ -60,6 +61,9 @@ def create_run_history_registry(
     then completed.json). Returns ``output_root``. A failure after the claim
     leaves fail-closed residue that is never repaired here.
     """
+    expected_flock_path = output_parent_flock_path(output_root)
+    if Path(flock_path) != expected_flock_path:
+        raise ValueError("v2 output transaction must use the fixed output-parent lock")
     verify_run_consumption_claim(claim_payload)
     verify_run_admission(admission_payload)
     verify_run_consumption_completed(completion_payload)
@@ -152,7 +156,7 @@ def seal_run_consumption_claim(
     if registry_fd is not None:
         if held_lock is None:
             raise ValueError("registry directory descriptor requires its held history lock")
-        held_lock.assert_held(lock_path)
+        held_lock.assert_held(lock_path, directory_fd=registry_fd)
     elif held_lock is not None:
         held_lock.assert_held(lock_path)
     owns_directory_fd = registry_fd is None
@@ -193,7 +197,7 @@ def seal_run_consumption_completed(
     if registry_fd is not None:
         if held_lock is None:
             raise ValueError("registry directory descriptor requires its held history lock")
-        held_lock.assert_held(lock_path)
+        held_lock.assert_held(lock_path, directory_fd=registry_fd)
     elif held_lock is not None:
         held_lock.assert_held(lock_path)
     owns_directory_fd = registry_fd is None
