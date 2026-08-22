@@ -212,6 +212,8 @@ def test_active_flock_is_scoped_and_verified(tmp_path):
     with exclusive_flock(lock) as handle:
         assert active_flock(lock) is handle
         handle.assert_held(lock)
+        with pytest.raises(AttributeError, match="immutable"):
+            handle._path = tmp_path / "other.lock"
     assert active_flock(lock) is None
 
 

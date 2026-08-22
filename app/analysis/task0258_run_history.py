@@ -34,7 +34,12 @@ from app.analysis.task0258_module_a_v2 import (
     verify_internal_artifact_hash,
     verify_static_input_contract,
 )
-from app.analysis.task0258_v2_fs import FlockHandle, active_flock, exclusive_flock
+from app.analysis.task0258_v2_fs import (
+    FlockHandle,
+    _open_existing_directory_no_follow,
+    active_flock,
+    exclusive_flock,
+)
 
 MARKER_SCHEMA = "agu.task0258-module-a-v2-run-history-marker.v1"
 CLAIM_SCHEMA = "agu.task0258-module-a-v2-run-consumption-claim.v1"
@@ -385,9 +390,8 @@ def replay_run_history_registry(
         with exclusive_flock(lock_path) as acquired_lock:
             return replay_run_history_registry(registry_dir, auth_sha256, held_lock=acquired_lock)
     held_lock.assert_held(lock_path)
-    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
     try:
-        directory_fd = os.open(os.fspath(registry_dir), flags)
+        directory_fd = _open_existing_directory_no_follow(Path(registry_dir))
     except OSError as exc:
         raise ValueError("registry directory cannot be opened without following links") from exc
     try:

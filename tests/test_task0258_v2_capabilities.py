@@ -253,6 +253,30 @@ def test_root_loader_opens_from_allowed_root_descriptor(tmp_path, monkeypatch):
     assert any(dir_fd is not None for _path, dir_fd in calls[1:])
 
 
+@pytest.mark.parametrize("reader_name", ["_read_no_follow_temp_file", "_read_no_follow_file_under_root"])
+def test_capability_bounded_read_rejects_post_read_metadata_drift(tmp_path, monkeypatch, reader_name):
+    target = tmp_path / "payload.json"
+    target.write_bytes(b"payload")
+    real_read = capabilities_module.os.read
+    mutated = False
+
+    def read_then_mutate(fd, count):
+        nonlocal mutated
+        data = real_read(fd, count)
+        if not mutated:
+            target.write_bytes(b"changed")
+            mutated = True
+        return data
+
+    monkeypatch.setattr(capabilities_module.os, "read", read_then_mutate)
+    reader = getattr(capabilities_module, reader_name)
+    kwargs = {"description": "test payload"}
+    if reader_name == "_read_no_follow_file_under_root":
+        kwargs["allowed_root"] = tmp_path
+    with pytest.raises(ValueError, match="changed during bounded read"):
+        reader(target, **kwargs)
+
+
 def _trust_slots(providers):
     out = []
     for provider in providers:

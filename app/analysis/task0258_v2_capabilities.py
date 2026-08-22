@@ -744,6 +744,16 @@ def _verify_no_symlink_ancestors(path: Path, *, allowed_prefix: Path) -> None:
             raise ValueError(f"cannot inspect path component: {current}") from exc
 
 
+def _bounded_read_stat_snapshot(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        getattr(value, "st_mtime_ns", 0),
+        getattr(value, "st_ctime_ns", 0),
+    )
+
+
 def _read_no_follow_temp_file(path: Path, *, description: str) -> bytes:
     """Read one bounded temporary regular file through no-follow descriptors."""
     path = Path(path)
@@ -789,6 +799,9 @@ def _read_no_follow_temp_file(path: Path, *, description: str) -> bytes:
                 raise ValueError(f"{description} ended before its recorded size")
             chunks.append(chunk)
             remaining -= len(chunk)
+        post_read_stat = os.fstat(file_fd)
+        if _bounded_read_stat_snapshot(post_read_stat) != _bounded_read_stat_snapshot(file_stat):
+            raise ValueError(f"{description} changed during bounded read")
         return b"".join(chunks)
     except OSError as exc:
         raise ValueError(f"{description} cannot be opened without following links") from exc
@@ -844,6 +857,9 @@ def _read_no_follow_file_under_root(path: Path, *, allowed_root: Path, descripti
                 raise ValueError(f"{description} ended before its recorded size")
             chunks.append(chunk)
             remaining -= len(chunk)
+        post_read_stat = os.fstat(file_fd)
+        if _bounded_read_stat_snapshot(post_read_stat) != _bounded_read_stat_snapshot(file_stat):
+            raise ValueError(f"{description} changed during bounded read")
         return b"".join(chunks)
     except OSError as exc:
         raise ValueError(f"{description} cannot be opened without following links") from exc

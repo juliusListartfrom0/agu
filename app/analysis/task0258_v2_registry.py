@@ -33,6 +33,7 @@ from app.analysis.task0258_run_history import (
 )
 from app.analysis.task0258_v2_fs import (
     FlockHandle,
+    _ensure_directory_no_follow,
     active_flock,
     atomic_write_json,
     exclusive_flock,
@@ -93,16 +94,19 @@ def create_run_history_registry(
         for payload in (claim_payload, admission_payload, completion_payload)
     ):
         raise ValueError("run-history output root is not bound to the requested root")
-    seal_run_consumption_claim(registry_dir, auth_sha256, claim_payload)
-    admission_bytes = (compact_canonical_json(admission_payload) + "\n").encode("utf-8")
-    seal_generation_directory(
-        output_root.parent,
-        output_root.name,
-        {"run_admission.json": admission_bytes},
-        ("run_admission.json",),
-        flock_path=flock_path,
-    )
-    seal_run_consumption_completed(registry_dir, auth_sha256, completion_payload)
+    _ensure_directory_no_follow(Path(registry_dir))
+    history_lock_path = Path(registry_dir) / f".{auth_sha256}.history.lock"
+    with exclusive_flock(history_lock_path):
+        seal_run_consumption_claim(registry_dir, auth_sha256, claim_payload)
+        admission_bytes = (compact_canonical_json(admission_payload) + "\n").encode("utf-8")
+        seal_generation_directory(
+            output_root.parent,
+            output_root.name,
+            {"run_admission.json": admission_bytes},
+            ("run_admission.json",),
+            flock_path=flock_path,
+        )
+        seal_run_consumption_completed(registry_dir, auth_sha256, completion_payload)
     return output_root
 
 

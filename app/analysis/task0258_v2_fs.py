@@ -30,14 +30,20 @@ _ACTIVE_FLOCKS: ContextVar[dict[str, "FlockHandle"]] = ContextVar("task0258_acti
 class FlockHandle:
     """Process-local capability for a currently-held fixed-path flock."""
 
-    __slots__ = ("_capability", "_fd", "_path")
+    __slots__ = ("_capability", "_fd", "_path", "_sealed")
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if getattr(self, "_sealed", False) and name in {"_capability", "_fd", "_path"}:
+            raise AttributeError("FlockHandle fields are immutable")
+        object.__setattr__(self, name, value)
 
     def __init__(self, path: Path, fd: int, capability: object) -> None:
         if capability is not _LOCK_CAPABILITY:
             raise TypeError("FlockHandle must be created by exclusive_flock")
-        self._capability = capability
-        self._fd = fd
-        self._path = Path(path)
+        object.__setattr__(self, "_capability", capability)
+        object.__setattr__(self, "_fd", fd)
+        object.__setattr__(self, "_path", Path(path))
+        object.__setattr__(self, "_sealed", True)
 
     def assert_held(self, path: Path) -> None:
         if self._capability is not _LOCK_CAPABILITY or self._fd < 0 or _lock_key(self._path) != _lock_key(path):
@@ -48,7 +54,7 @@ class FlockHandle:
             raise ValueError("the supplied lock handle is no longer active") from exc
 
     def _invalidate(self) -> None:
-        self._fd = -1
+        object.__setattr__(self, "_fd", -1)
 
 
 def _lock_key(path: Path) -> str:

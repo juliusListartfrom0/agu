@@ -25,6 +25,15 @@ from app.analysis.task0258_v2_bootstrap import (
 )
 from scripts import task0258_module_a_verified_bootstrap as bootstrap_script
 
+_BOOTSTRAP_TARGET_SOURCE_SHA256 = {
+    "app/__init__.py": "7d2e2db50d693717d0a15c16767025c05f0a7e6d5a202e4603ab2d752652bc4e",
+    "app/version.py": "e13df818c99497bcc976ce37d152bf978b416ae9b4f8eafdd17b72104d41994d",
+    "app/analysis/__init__.py": "5c2fc5f80f83f4e146ddb460ba922cb0eab5a9d14fdc4dbdc19bd544688ae65b",
+    "app/analysis/task0258_module_a_v2.py": "24ce88717acc24f5a28bde690274db1172cbe1663a8bf0900c4cdbf280d3a06b",
+    "app/analysis/task0258_v2_bootstrap.py": "c50ab5a67c259fe0f464e09a006ed42728face86ebac3beb043c08c9467279e5",
+    "scripts/task0258_module_a_verified_bootstrap.py": "eced6830d98c47cbb3d9e2898da1a051409def61ea0a31bff8220b62dbc10c4f",
+}
+
 
 def test_parse_bootstrap_flags():
     assert parse_bootstrap_flags(["--task0258-review-request-fd", "202", "--task0258-source-fd", "203"]) == (202, 203)
@@ -287,6 +296,9 @@ def test_runtime_snapshot_receipt_reopens_the_bound_canonical_contract(tmp_path)
 def test_verified_bootstrap_launcher_replays_fixed_fd_contract(tmp_path):
     """Exercise the real ``-P -S /dev/fd/203`` launcher locally."""
     repository_root = Path(__file__).resolve().parents[1]
+    for relative_path, expected_sha256 in _BOOTSTRAP_TARGET_SOURCE_SHA256.items():
+        source = repository_root / relative_path
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == expected_sha256
     runtime_root = tmp_path / "runtime"
     base_runtime = runtime_root / "base_runtime"
     stdlib_parent = base_runtime / "lib"

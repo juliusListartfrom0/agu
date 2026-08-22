@@ -349,7 +349,6 @@ def test_create_run_history_registry(tmp_path):
     from app.analysis.task0258_v2_registry import create_run_history_registry
 
     reg = tmp_path / "registry"
-    reg.mkdir()
     out = tmp_path / "out" / "vru_causal_temporal_retrospective_v2"
     lock = tmp_path / "out" / ".lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
@@ -394,3 +393,18 @@ def test_create_run_history_registry(tmp_path):
             output_root=out,
             flock_path=lock,
         )
+
+
+def test_replay_rejects_symlinked_registry_ancestor(tmp_path):
+    real_parent = tmp_path / "real-parent"
+    registry = real_parent / "registry"
+    registry.mkdir(parents=True)
+    claim = _claim()
+    completed = _completed()
+    seal_run_consumption_claim(registry, AUTH, claim)
+    seal_run_consumption_completed(registry, AUTH, completed)
+
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    with pytest.raises(ValueError, match="without following links"):
+        replay_run_history_registry(linked_parent / "registry", AUTH)
