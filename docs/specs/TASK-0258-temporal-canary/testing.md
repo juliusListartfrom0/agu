@@ -8,7 +8,7 @@
   `/ready` returned `{"status":"ready"}`, and the VLM-off 60-frame request
   returned a task ID whose status reached `completed` with `progress=100` and
   `error=null`.
-- TASK-0258 focused suite: `270 passed` (including the local simulation command,
+- TASK-0258 focused suite: `273 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -21,13 +21,14 @@
   `Critical=1 / Required=1 / Optional=1`: the pipeline did not append/replay
   durable history markers and the review spine allowed admission and history
   from different registries. Those findings were remediated in the next target;
-  the new handoff is fixed at `a07b100` against `c5157f2` with a 44-file diff
-  SHA and remains a request for a separate review, not a sealed receipt or
-  authority.
+  the new handoff is fixed at `fad3196` against `c5157f2` with a 44-file diff
+  SHA and remains a request for a separate full-scope review, not a sealed
+  receipt or authority. The `fad3196` incremental review is sealed 0/0 only
+  for its two-file delta; it is not a substitute for the complete review.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or OS-enforced process-tree cleanup.
-- Latest full repository pytest: `2,138 passed, 5
+- Latest full repository pytest: `2,140 passed, 5
   skipped, 15 warnings`.
 - The bounded fs_usage capture regression defers malformed stream input to
   `finish()` and records background iterator failures for the main caller;

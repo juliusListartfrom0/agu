@@ -44,10 +44,18 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 > Current P1 review handoff (2026-08-22):
 > `docs/specs/TASK-0258-temporal-canary/fresh-context-review-handoff-2026-08-22.md`
-> fixes the exact target `codex/agu-p2@9fc27a9`, baseline `c5157f2`, 44-file
+> fixes the exact target `codex/agu-p1-remediation-2@fad3196`, baseline `c5157f2`, 44-file
 > diff SHA, reproducible commands, and required independent `Critical=0 /
 > Required=0` receipt fields. It is a handoff only; it does not claim a passing
 > review or authorize P2/P3/P4/P5.
+
+> Latest P1 remediation (2026-08-22): branch `codex/agu-p1-remediation-2` is
+> pushed through `fad3196`; the focused suite is `273 passed` and the full
+> suite is `2,140 passed, 5 skipped, 15 warnings`. The independent `fad3196`
+> delta review is sealed `Critical=0 / Required=0 / Optional=0` for its two
+> changed files only. A fresh full 44-file review at the updated target is
+> still required before P1 can be closed or merged into `main`; P2 remains
+> externally blocked without Apple-granted Endpoint Security authorization.
 
 > Follow-up verification (2026-08-22): the amended-implementation-review, static-input, authorization-binding, run-admission-binding, terminal-binding, real bootstrap-launcher integration, bounded `fs_usage` diagnostic parser/capture, worker launch-input validation, synthetic no-follow context hardening, diagnostic CLI path hardening, and local Endpoint Security client/probe hardening are local, review-only evidence; current totals are 264 TASK-0258 tests and 2,132 full-suite tests. The independent fresh-context review still must be externally issued/repeated; Apple Developer access remains optional for this local work and external for the real Endpoint Security gate.
 
