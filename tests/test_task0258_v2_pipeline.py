@@ -212,9 +212,21 @@ def test_candidate_receipt_bundle(tmp_path):
     assert bundle_path.is_file()
     assert json.loads(bundle_path.read_text())["candidate_generation_name"] == "candidate_v2"
     assert (
-        read_published_candidate_receipt_bundle(bundle_path, expected_payload=bundle)
+        read_published_candidate_receipt_bundle(
+            bundle_path,
+            candidate_dir=final,
+            output_flock_path=lock,
+            expected_payload=bundle,
+        )
         == (compact_canonical_json(bundle) + "\n").encode()
     )
+    with pytest.raises(ValueError, match="fixed output-parent lock"):
+        read_published_candidate_receipt_bundle(
+            bundle_path,
+            candidate_dir=final,
+            output_flock_path=out / ".caller-selected.lock",
+            expected_payload=bundle,
+        )
     stage_path = (
         tmp_path / f".{bundle['authorization_receipt']['artifact_sha256']}.{bundle_path.name}.task0258-bundle-stage"
     )
@@ -251,14 +263,24 @@ def test_published_candidate_receipt_bundle_rejects_path_and_payload_drift(tmp_p
     )
     bundle_path.write_bytes((compact_canonical_json(drifted) + "\n").encode())
     with pytest.raises(ValueError, match="does not match the expected payload"):
-        read_published_candidate_receipt_bundle(bundle_path, expected_payload=bundle)
+        read_published_candidate_receipt_bundle(
+            bundle_path,
+            candidate_dir=final,
+            output_flock_path=lock,
+            expected_payload=bundle,
+        )
 
     replacement = tmp_path / "replacement.json"
     replacement.write_bytes((compact_canonical_json(bundle) + "\n").encode())
     bundle_path.unlink()
     bundle_path.symlink_to(replacement)
     with pytest.raises(ValueError, match="without following links"):
-        read_published_candidate_receipt_bundle(bundle_path, expected_payload=bundle)
+        read_published_candidate_receipt_bundle(
+            bundle_path,
+            candidate_dir=final,
+            output_flock_path=lock,
+            expected_payload=bundle,
+        )
 
 
 def test_candidate_receipt_bundle_rejects_locked_candidate_drift(tmp_path):

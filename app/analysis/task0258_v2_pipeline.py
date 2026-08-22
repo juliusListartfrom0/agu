@@ -293,25 +293,38 @@ def seal_candidate_receipt_bundle(
 def read_published_candidate_receipt_bundle(
     bundle_path: Path,
     *,
+    candidate_dir: Path,
+    output_flock_path: Path,
     expected_payload: Mapping[str, object] | None = None,
 ) -> bytes:
-    """Reopen a published bundle under its lock and replay its canonical bytes."""
+    """Reopen a published bundle and candidate under the same output locks."""
     bundle_path = Path(bundle_path)
-    if not bundle_path.is_absolute() or bundle_path.name != "candidate-receipt-bundle.json":
+    candidate_dir = Path(candidate_dir)
+    if (
+        not bundle_path.is_absolute()
+        or bundle_path.name != "candidate-receipt-bundle.json"
+        or not candidate_dir.is_absolute()
+        or candidate_dir.name != "candidate_v2"
+    ):
         raise ValueError("candidate receipt bundle path is not authorized")
+    _require_output_parent_flock(candidate_dir.parent, output_flock_path)
     lock_path = bundle_path.parent / ".candidate-receipt-bundle.lock"
-    with exclusive_flock(lock_path):
-        bundle_bytes = read_regular_file_no_follow(bundle_path)
-        try:
-            payload = json.loads(bundle_bytes.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("published candidate receipt bundle is not canonical JSON") from exc
-        if not isinstance(payload, Mapping) or bundle_bytes != (compact_canonical_json(payload) + "\n").encode("utf-8"):
-            raise ValueError("published candidate receipt bundle bytes are not canonical")
-        verify_candidate_receipt_bundle(payload)
-        if expected_payload is not None and payload != expected_payload:
-            raise ValueError("published candidate receipt bundle does not match the expected payload")
-        return bundle_bytes
+    with exclusive_flock(output_flock_path):
+        with exclusive_flock(lock_path):
+            verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
+            bundle_bytes = read_regular_file_no_follow(bundle_path)
+            try:
+                payload = json.loads(bundle_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("published candidate receipt bundle is not canonical JSON") from exc
+            if not isinstance(payload, Mapping) or bundle_bytes != (compact_canonical_json(payload) + "\n").encode("utf-8"):
+                raise ValueError("published candidate receipt bundle bytes are not canonical")
+            verify_candidate_receipt_bundle(payload)
+            if list(payload["ordered_member_receipts"]) != build_member_receipts(candidate_dir):
+                raise ValueError("published candidate receipt bundle is not bound to candidate bytes")
+            if expected_payload is not None and payload != expected_payload:
+                raise ValueError("published candidate receipt bundle does not match the expected payload")
+            return bundle_bytes
 
 
 def build_postpublication_verification_payload(

@@ -170,7 +170,12 @@ def run_v2_pipeline(
         candidate_dir=candidate,
         output_flock_path=flock_path,
     )
-    bundle_bytes = read_published_candidate_receipt_bundle(bundle_path, expected_payload=bundle_payload)
+    bundle_bytes = read_published_candidate_receipt_bundle(
+        bundle_path,
+        candidate_dir=candidate,
+        output_flock_path=flock_path,
+        expected_payload=bundle_payload,
+    )
     bound_result = dict(result_payload)
     bound_result["candidate_receipt_bundle_receipt"] = {
         "artifact_sha256": bundle_payload["artifact_sha256"],
