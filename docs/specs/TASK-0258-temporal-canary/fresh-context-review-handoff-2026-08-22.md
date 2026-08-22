@@ -1,9 +1,9 @@
 # TASK-0258 Amendment-001 — current fresh-context review handoff
 
-Review target: `codex/agu-p1-remediation-2` at commit `962b57b`
+Review target: `codex/agu-p1-remediation-2` at commit `70ca021`
 Baseline: `main` / `origin/main` at `c5157f2`
-Diff SHA-256 (`git diff --binary c5157f2...962b57b`):
-`20a8502cc9e4bc92880ed72a1a86e62c3b371fbc6f1289ff217113933a5138a0`
+Diff SHA-256 (`git diff --binary c5157f2...70ca021`):
+`89d22db5f6bfa8cdfb9db424c928f1f6beee49a733c3fbc62fe4fd0402475923`
 Changed-file count: 44
 
 ## Purpose
@@ -27,7 +27,7 @@ repository artifacts together with the code:
 - `docs/harness/P0-P5-EXECUTION-PLAN.md`
 - `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`
 
-Review the complete `c5157f2...962b57b` scope, not only the latest local
+Review the complete `c5157f2...70ca021` scope, not only the latest local
 fixes. In particular, adversarially review receipt/marker replay, publication
 locks and races, canonical/no-follow loaders, bootstrap and FD binding, worker
 process-tree cleanup, diagnostic-vs-production admission, and every place a
@@ -40,7 +40,7 @@ Use the canonical environment and record exact output:
 ```bash
 .venv/bin/python -m pytest -q tests/test_task0258_*.py
 .venv/bin/python -m pytest -q
-git diff --name-only c5157f2...962b57b -- '*.py' | \\
+git diff --name-only c5157f2...70ca021 -- '*.py' | \\
   xargs .venv/bin/python -m ruff check
 .venv/bin/python scripts/verify_harness.py
 .venv/bin/python scripts/task0258_local_simulation.py --json
