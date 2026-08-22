@@ -211,6 +211,12 @@ def build_member_receipts(candidate_dir: Path, *, candidate_dir_fd: int | None =
     return rows
 
 
+def _assert_candidate_directory_bindings(candidate_dir: Path, output_root_fd: int, candidate_dir_fd: int) -> None:
+    """Keep the authorized candidate path bound to the opened directory FDs."""
+    _assert_directory_path_matches_fd(candidate_dir.parent, output_root_fd, label="output root")
+    _assert_directory_path_matches_fd(candidate_dir, candidate_dir_fd, label="candidate directory")
+
+
 def build_candidate_receipt_bundle_payload(
     *,
     authorization_receipt: Mapping[str, object],
@@ -297,6 +303,7 @@ def seal_candidate_receipt_bundle(
             resources.callback(os.close, output_root_fd)
             candidate_dir_fd = _open_directory_at(output_root_fd, candidate_dir.name)
             resources.callback(os.close, candidate_dir_fd)
+            _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
             with exclusive_flock_at(bundle_parent_fd, lock_path.name, lock_path):
                 verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
                 actual_member_receipts = build_member_receipts(candidate_dir, candidate_dir_fd=candidate_dir_fd)
@@ -315,6 +322,7 @@ def seal_candidate_receipt_bundle(
                 if reopened != bundle_bytes:
                     raise ValueError("candidate receipt bundle changed during publication")
                 _verify_absent_at(bundle_parent_fd, stage_path.name)
+                _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
                 _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
     return bundle_path
 
@@ -348,6 +356,7 @@ def read_published_candidate_receipt_bundle(
             resources.callback(os.close, output_root_fd)
             candidate_dir_fd = _open_directory_at(output_root_fd, candidate_dir.name)
             resources.callback(os.close, candidate_dir_fd)
+            _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
             with exclusive_flock_at(bundle_parent_fd, lock_path.name, lock_path):
                 verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
                 bundle_bytes = read_regular_file_at(bundle_parent_fd, bundle_path.name)
@@ -366,6 +375,7 @@ def read_published_candidate_receipt_bundle(
                     raise ValueError("published candidate receipt bundle is not bound to candidate bytes")
                 if expected_payload is not None and payload != expected_payload:
                     raise ValueError("published candidate receipt bundle does not match the expected payload")
+                _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
                 _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
                 return bundle_bytes
 

@@ -347,6 +347,98 @@ def test_candidate_receipt_bundle_replay_rejects_bundle_parent_replacement(tmp_p
     assert (moved_bundle_dir / bundle_path.name).is_file()
 
 
+def test_candidate_receipt_bundle_rejects_output_root_replacement(tmp_path, monkeypatch):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = tmp_path / ".task0258-output.lock"
+    lock.write_text("")
+    final = seal_candidate_v2(out, members, flock_path=lock)
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    bundle_path = bundle_dir / "candidate-receipt-bundle.json"
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=final,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    original_open = pipeline_module._open_directory_at
+    moved_out = tmp_path / "out-moved"
+    calls = 0
+
+    def open_then_replace_output_root(parent_fd, name):
+        nonlocal calls
+        fd = original_open(parent_fd, name)
+        calls += 1
+        if calls == 2:
+            out.rename(moved_out)
+            out.mkdir()
+        return fd
+
+    monkeypatch.setattr(pipeline_module, "_open_directory_at", open_then_replace_output_root)
+    with pytest.raises(ValueError, match="output root|candidate directory"):
+        seal_candidate_receipt_bundle(bundle_path, bundle, candidate_dir=final, output_flock_path=lock)
+    assert not bundle_path.exists()
+    assert (moved_out / "candidate_v2").is_dir()
+
+
+def test_candidate_receipt_bundle_replay_rejects_output_root_replacement(tmp_path, monkeypatch):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = tmp_path / ".task0258-output.lock"
+    lock.write_text("")
+    final = seal_candidate_v2(out, members, flock_path=lock)
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    bundle_path = bundle_dir / "candidate-receipt-bundle.json"
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=final,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    seal_candidate_receipt_bundle(bundle_path, bundle, candidate_dir=final, output_flock_path=lock)
+    original_open = pipeline_module._open_directory_at
+    moved_out = tmp_path / "out-moved"
+    calls = 0
+
+    def open_then_replace_output_root(parent_fd, name):
+        nonlocal calls
+        fd = original_open(parent_fd, name)
+        calls += 1
+        if calls == 2:
+            out.rename(moved_out)
+            out.mkdir()
+        return fd
+
+    monkeypatch.setattr(pipeline_module, "_open_directory_at", open_then_replace_output_root)
+    with pytest.raises(ValueError, match="output root|candidate directory"):
+        read_published_candidate_receipt_bundle(
+            bundle_path,
+            candidate_dir=final,
+            output_flock_path=lock,
+            expected_payload=bundle,
+        )
+    assert bundle_path.is_file()
+    assert (moved_out / "candidate_v2").is_dir()
+
+
 def test_candidate_receipt_bundle_closes_fds_when_candidate_open_fails(tmp_path):
     if not os.path.isdir("/dev/fd"):
         pytest.skip("/dev/fd is unavailable")
