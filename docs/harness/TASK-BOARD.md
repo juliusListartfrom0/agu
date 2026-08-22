@@ -152,6 +152,13 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > `main@ac8a2aa`; post-merge focused TASK-0258 tests (320), Harness, probe,
 > and simulation passed. P2's authoritative platform gate remains incomplete.
 
+> P2 external-state audit (2026-08-22): on the current Mac,
+> `security find-identity -v -p codesigning` reports `0 valid identities
+> found`, `systemextensionsctl list` reports `0 extension(s)`, and
+> `xcodebuild -version` is unavailable because the active developer directory
+> is CommandLineTools. This confirms the local external blocker; it does not
+> change the P2 status or authorize P3–P5.
+
 > Latest P1 remediation (2026-08-22): commit `b18c784` closes the output-root
 > replacement finding from the `afbfef0` review by binding both
 > `candidate_dir.parent` and `candidate_dir` to stable output-root/candidate
