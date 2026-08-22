@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+import app.analysis.task0258_v2_fs as fs
 from app.analysis.task0258_module_a_v2 import (
     canonical_artifact_sha256,
     compact_canonical_json,
@@ -212,3 +213,9 @@ def test_active_flock_is_scoped_and_verified(tmp_path):
         assert active_flock(lock) is handle
         handle.assert_held(lock)
     assert active_flock(lock) is None
+
+
+def test_no_follow_directory_flags_fail_closed_when_platform_flag_is_missing(monkeypatch):
+    monkeypatch.delattr(fs.os, "O_NOFOLLOW", raising=False)
+    with pytest.raises(OSError, match="required directory no-follow flags"):
+        fs._directory_open_flags()

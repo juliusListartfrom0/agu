@@ -71,12 +71,12 @@ def _absolute_path_components(path: Path) -> tuple[str, ...]:
 
 
 def _directory_open_flags() -> int:
-    return (
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-    )
+    try:
+        directory = os.O_DIRECTORY
+        no_follow = os.O_NOFOLLOW
+    except AttributeError as exc:
+        raise OSError(errno.ENOTSUP, "platform lacks required directory no-follow flags") from exc
+    return os.O_RDONLY | directory | no_follow | getattr(os, "O_CLOEXEC", 0)
 
 
 def _open_existing_directory_no_follow(path: Path) -> int:
@@ -156,7 +156,7 @@ def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
     flags = (
         os.O_RDONLY
         | os.O_CREAT
-        | getattr(os, "O_NOFOLLOW", 0)
+        | os.O_NOFOLLOW
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NONBLOCK", 0)
     )
@@ -207,7 +207,7 @@ def read_regular_file_no_follow(path: Path, *, maximum_bytes: int = 16_777_216) 
     path = Path(path)
     if not isinstance(maximum_bytes, int) or isinstance(maximum_bytes, bool) or maximum_bytes < 0:
         raise ValueError("maximum_bytes is invalid")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
     try:
         fd = _open_leaf_no_follow(path, flags)
     except OSError as exc:
@@ -337,7 +337,7 @@ def atomic_write_bytes(
         stage_parent_fd = _open_existing_directory_no_follow(stage.parent)
         os.close(stage_parent_fd)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
     fd = _open_leaf_no_follow(stage, flags, mode)
     try:
         with os.fdopen(fd, "wb") as fh:

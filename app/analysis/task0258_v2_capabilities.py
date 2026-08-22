@@ -767,8 +767,8 @@ def _read_no_follow_temp_file(path: Path, *, description: str) -> bytes:
     if not components or any(not component for component in components):
         raise ValueError(f"{description} contains an empty path component")
     common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    directory_flags = common_flags | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    file_flags = common_flags | getattr(os, "O_NOFOLLOW", 0)
+    directory_flags = common_flags | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = common_flags | os.O_NOFOLLOW
     parent_fd: int | None = None
     file_fd: int | None = None
     try:
@@ -818,8 +818,8 @@ def _read_no_follow_file_under_root(path: Path, *, allowed_root: Path, descripti
     if not components or any(not component for component in components):
         raise ValueError(f"{description} contains an empty path component")
     common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    directory_flags = common_flags | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    file_flags = common_flags | getattr(os, "O_NOFOLLOW", 0)
+    directory_flags = common_flags | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = common_flags | os.O_NOFOLLOW
     parent_fd: int | None = None
     file_fd: int | None = None
     try:

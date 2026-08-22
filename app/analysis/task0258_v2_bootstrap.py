@@ -194,8 +194,8 @@ def _open_no_follow_absolute_file(path: str) -> int:
     if not components or any(not component for component in components):
         raise ValueError("runtime contract path contains an empty component")
     common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    directory_flags = common_flags | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    no_follow_flags = common_flags | getattr(os, "O_NOFOLLOW", 0)
+    directory_flags = common_flags | os.O_DIRECTORY | os.O_NOFOLLOW
+    no_follow_flags = common_flags | os.O_NOFOLLOW
     parent_fd = os.open("/", directory_flags)
     try:
         for component in components[:-1]:

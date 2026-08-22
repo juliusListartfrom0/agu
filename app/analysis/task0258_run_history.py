@@ -328,7 +328,7 @@ def _registry_history_filenames_from_fd(directory_fd: int, auth_sha256: str) -> 
 
 def _read_registry_member_from_fd(directory_fd: int, filename: str) -> bytes:
     """Read one bounded regular registry member without following the leaf link."""
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
     try:
         member_fd = os.open(filename, flags, dir_fd=directory_fd)
     except OSError as exc:
@@ -385,7 +385,7 @@ def replay_run_history_registry(
         with exclusive_flock(lock_path) as acquired_lock:
             return replay_run_history_registry(registry_dir, auth_sha256, held_lock=acquired_lock)
     held_lock.assert_held(lock_path)
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
     try:
         directory_fd = os.open(os.fspath(registry_dir), flags)
     except OSError as exc:
