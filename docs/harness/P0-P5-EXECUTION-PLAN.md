@@ -36,9 +36,9 @@ model execution or readiness transition.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
-- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@afbfef0` against
+- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@b18c784` against
       `c5157f2`, with 46 changed files and diff SHA
-      `872dfb1d3dec2b7331314c48083865822c60103c9f21649714e17d83bb7f5f2d`;
+      `9d4f4bddc87b288f8de0a5e5b6996a8b7e67d7e3aced9306b2568130bd30dcdf`;
       the exact independent `Critical=0 / Required=0` receipt is still open.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 280 passed and
@@ -189,14 +189,14 @@ model execution or readiness transition.
       complete allowed-read/event coverage. The follow-up `313582b` binds
       registry writes to the exact held directory FD and rejects caller-selected
       output locks; `d8569a8` rejects non-Apple-anchored self-signed artifacts
-      in the capability probe. Focused TASK-0258 tests are 295 passed and the
-      full suite is 2,163 passed, 5 skipped, 15 warnings. This
+      in the capability probe. Focused TASK-0258 tests are 297 passed and the
+      full suite is 2,165 passed, 5 skipped, 15 warnings. This
       is local evidence only and is not yet an independent sealed review
       receipt.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
-- [ ] Repeat the fresh review against `afbfef0` after the latest four Required
-      and one Optional findings were remediated; the previous review returned
+- [ ] Repeat the fresh review against `b18c784` after the latest output-root
+      Required finding was remediated; the previous review returned
       `scope_complete=false`, `sealed_receipt=false` and did not authorize P1.
 
 ### P2 — Platform isolation gate

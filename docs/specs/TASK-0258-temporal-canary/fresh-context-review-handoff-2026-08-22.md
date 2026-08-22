@@ -1,9 +1,9 @@
 # TASK-0258 Amendment-001 — current fresh-context review handoff
 
-Review target: `codex/agu-p1-remediation-2` at commit `afbfef0`
+Review target: `codex/agu-p1-remediation-2` at commit `b18c784`
 Baseline: `main` / `origin/main` at `c5157f2`
-Diff SHA-256 (`git diff --binary c5157f2...afbfef0`):
-`872dfb1d3dec2b7331314c48083865822c60103c9f21649714e17d83bb7f5f2d`
+Diff SHA-256 (`git diff --binary c5157f2...b18c784`):
+`9d4f4bddc87b288f8de0a5e5b6996a8b7e67d7e3aced9306b2568130bd30dcdf`
 Changed-file count: 46
 
 ## Purpose
@@ -27,7 +27,7 @@ repository artifacts together with the code:
 - `docs/harness/P0-P5-EXECUTION-PLAN.md`
 - `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`
 
-Review the complete `c5157f2...afbfef0` scope, not only the latest local
+Review the complete `c5157f2...b18c784` scope, not only the latest local
 fixes. In particular, adversarially review receipt/marker replay, publication
 locks and races, canonical/no-follow loaders, bootstrap and FD binding, worker
 process-tree cleanup, diagnostic-vs-production admission, and every place a
@@ -40,14 +40,14 @@ Use the canonical environment and record exact output:
 ```bash
 .venv/bin/python -m pytest -q tests/test_task0258_*.py
 .venv/bin/python -m pytest -q
-git diff --name-only c5157f2...afbfef0 -- '*.py' | \\
+git diff --name-only c5157f2...b18c784 -- '*.py' | \\
   xargs .venv/bin/python -m ruff check
 .venv/bin/python scripts/verify_harness.py
 .venv/bin/python scripts/task0258_local_simulation.py --json
 .venv/bin/python scripts/task0258_endpoint_security_capability.py --json
 ```
 
-The current local evidence is 295 focused TASK-0258 tests and 2,163 full-suite
+The current local evidence is 297 focused TASK-0258 tests and 2,165 full-suite
 tests, with 5 skips and 15 warnings; the local service hook also reached
 `/health`/`/ready`, submitted a lightweight task, and observed `completed`.
 The latest remediation closes the prior re-review's mutable `FlockHandle` seal
@@ -124,10 +124,14 @@ the independent review of `9fd347a`:
 5. The obsolete caller-held output-lock parameter was removed from bundle
    replay; the CLI already uses the stable self-owned lock transaction.
 
-`295` focused TASK-0258 tests, `2,163` full-suite tests, Harness, simulation,
-capability probe, and clean-archive replay (`295 passed`) pass. A fresh
-independent review of `afbfef0` is required; P1 remains open until its sealed
+`297` focused TASK-0258 tests, `2,165` full-suite tests, Harness, simulation,
+capability probe, and clean-archive replay (`297 passed`) pass. A fresh
+independent review of `b18c784` is required; P1 remains open until its sealed
 receipt reports `scope_complete=true`, `Critical=0`, and `Required=0`.
+
+The follow-up `b18c784` additionally binds `candidate_dir.parent` and
+`candidate_dir` to the opened output-root/candidate FDs before and after bundle
+publication/replay, rejecting output-root or candidate-path replacement.
 
 ## Required review output
 
