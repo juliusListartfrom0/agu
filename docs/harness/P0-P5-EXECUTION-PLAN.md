@@ -36,9 +36,9 @@ model execution or readiness transition.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
-- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@d009687` against
+- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@4f8678f` against
       `c5157f2`, with 46 changed files and diff SHA
-      `e4d3d471ebcc4c3393d7c0cf2cce155031bfff4dd8a53e075c1b2e175851d16b`;
+      `4e56d600644fd89d004faaa1fd2217c8cb25f0be210312b52602ad2c3eb90369`;
       the exact independent `Critical=0 / Required=0` receipt is still open.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 280 passed and
@@ -186,9 +186,18 @@ model execution or readiness transition.
       binds terminal locking to the stable output-parent FD, requires direct
       FD203 bootstrap execution, validates physical runtime import roots before
       and after dispatch, and fails closed on unprovable stage-FD cleanup.
-      Current evidence is 317 focused TASK-0258 tests and 2,185 full-suite
+      Current evidence is 318 focused TASK-0258 tests and 2,186 full-suite
       tests, with Harness/Ruff/local-service/simulation/probe checks passing.
       This remains local review-only evidence.
+- [x] Remediate the persistent lock-leaf identity boundary: `FlockHandle`
+      records the opened leaf device/inode, revalidates it through the stable
+      parent descriptor, and rejects missing, replaced, or non-regular leaves.
+      Descriptor-relative acquisition refuses implicit `O_CREAT` recreation;
+      publication and registry initialization provision persistent locks
+      explicitly. The unlink/recreate regression and full TASK-0258 suite pass.
+      Current evidence is 318 focused TASK-0258 tests and 2,186 full-suite
+      tests, with Harness/Ruff/simulation/probe checks passing. This remains
+      local review-only evidence and does not close P1 or P2.
 - [x] Harden the post-review candidate replay boundary: all ten candidate
       members are path-specific schema-validated, canonical JSON/JSONL checked,
       and bound to attempt resource-log receipts/counters; verification
@@ -208,9 +217,9 @@ model execution or readiness transition.
       receipt.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
-- [ ] Repeat the fresh review against `d009687` after the latest publication
-      boundary findings were remediated; prior reviews returned
-      `scope_complete=false`, `sealed_receipt=false` and did not authorize P1.
+- [ ] Repeat the fresh review against `4f8678f` after the persistent lock-leaf
+      identity finding was remediated; the exact review must return a sealed
+      `Critical=0 / Required=0` receipt before P1 can close.
 
 ### P2 — Platform isolation gate
 
