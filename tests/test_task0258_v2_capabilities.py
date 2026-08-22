@@ -777,6 +777,44 @@ def _replace_output_root_with_identical_copy(fixture):
     assert os.stat(moved_root, follow_symlinks=False).st_ino != os.stat(fixture["root"], follow_symlinks=False).st_ino
 
 
+def _terminal_replay_request(tmp_path, terminal_kind):
+    fixture = _candidate_bundle_fixture(_admission_fixture(tmp_path))
+    if terminal_kind == "verified_result":
+        terminal_payload = fixture["result"]
+        terminal_dir = seal_verified_result(fixture["root"], terminal_payload, flock_path=fixture["lock"])
+        member_name = "verification_registry.json"
+    else:
+        fixture, terminal_payload, terminal_dir = _postverification_failure_fixture(fixture)
+        member_name = "failure.json"
+    terminal_path = terminal_dir / member_name
+    return {
+        "fixture": fixture,
+        "terminal_kind": terminal_kind,
+        "terminal_payload": terminal_payload,
+        "terminal_path": terminal_path,
+        "member_name": member_name,
+        "terminal_file_sha": hashlib.sha256(terminal_path.read_bytes()).hexdigest(),
+    }
+
+
+def _load_terminal_replay_request(request):
+    fixture = request["fixture"]
+    return load_verified_terminal_artifact(
+        execution_context=fixture["review"],
+        terminal_kind=request["terminal_kind"],
+        output_root=fixture["root"],
+        candidate_dir=fixture["candidate"],
+        candidate_bundle_path=fixture["bundle_path"],
+        expected_candidate_bundle_artifact_sha256=fixture["bundle"]["artifact_sha256"],
+        expected_candidate_bundle_file_sha256=fixture["bundle_file_sha"],
+        run_admission=fixture["admission"],
+        run_history=fixture["history"],
+        terminal_path=request["terminal_path"],
+        expected_terminal_artifact_sha256=request["terminal_payload"]["artifact_sha256"],
+        expected_terminal_file_sha256=request["terminal_file_sha"],
+    )
+
+
 def test_review_contexts_are_opaque_and_distinct():
     with pytest.raises(TypeError):
         VerifiedReviewDiscoveryContext()
@@ -2352,6 +2390,126 @@ def test_terminal_loader_closes_output_fds_for_failure_when_root_identity_is_rej
                 expected_terminal_artifact_sha256=failure["artifact_sha256"],
                 expected_terminal_file_sha256=terminal_file_sha,
             )
+    after = len(os.listdir("/dev/fd"))
+    assert after <= before + 2
+
+
+@pytest.mark.parametrize("terminal_kind", ["verified_result", "postverification_failure"])
+def test_terminal_loader_rejects_run_admission_file_cas_replacement(tmp_path, monkeypatch, terminal_kind):
+    request = _terminal_replay_request(tmp_path, terminal_kind)
+    fixture = request["fixture"]
+    admission_path = fixture["root"] / "run_admission.json"
+    moved_path = admission_path.with_name("run-admission-moved.json")
+    original_read = capabilities_module.read_regular_file_at_with_identity
+    replaced = False
+
+    def replace_admission_file(directory_fd, relative_path, *, maximum_bytes):
+        nonlocal replaced
+        if relative_path == "run_admission.json" and not replaced:
+            admission_path.rename(moved_path)
+            shutil.copy2(moved_path, admission_path)
+            replaced = True
+        return original_read(directory_fd, relative_path, maximum_bytes=maximum_bytes)
+
+    monkeypatch.setattr(capabilities_module, "read_regular_file_at_with_identity", replace_admission_file)
+    with pytest.raises(ValueError, match="admission file physical CAS"):
+        _load_terminal_replay_request(request)
+
+
+@pytest.mark.parametrize("terminal_kind", ["verified_result", "postverification_failure"])
+def test_terminal_loader_rejects_candidate_directory_replacement(tmp_path, monkeypatch, terminal_kind):
+    request = _terminal_replay_request(tmp_path, terminal_kind)
+    fixture = request["fixture"]
+    original_open = capabilities_module._open_directory_at
+    moved_candidate = fixture["candidate"].with_name("candidate-moved")
+    replaced = False
+
+    def open_then_replace_candidate(parent_fd, name):
+        nonlocal replaced
+        fd = original_open(parent_fd, name)
+        if name == "candidate_v2" and not replaced:
+            fixture["candidate"].rename(moved_candidate)
+            shutil.copytree(moved_candidate, fixture["candidate"])
+            replaced = True
+        return fd
+
+    monkeypatch.setattr(capabilities_module, "_open_directory_at", open_then_replace_candidate)
+    with pytest.raises(ValueError, match="candidate directory"):
+        _load_terminal_replay_request(request)
+
+
+@pytest.mark.parametrize("terminal_kind", ["verified_result", "postverification_failure"])
+def test_terminal_loader_rejects_bundle_parent_replacement(tmp_path, monkeypatch, terminal_kind):
+    request = _terminal_replay_request(tmp_path, terminal_kind)
+    bundle_path = request["fixture"]["bundle_path"]
+    bundle_parent = bundle_path.parent
+    moved_parent = bundle_parent.with_name("bundle-parent-moved")
+    original_load = capabilities_module._load_verified_json_artifact_at
+    replaced = False
+
+    def load_then_replace_bundle_parent(*, path, **kwargs):
+        nonlocal replaced
+        if Path(path) == bundle_path and not replaced:
+            bundle_parent.rename(moved_parent)
+            shutil.copytree(moved_parent, bundle_parent)
+            replaced = True
+        return original_load(path=path, **kwargs)
+
+    monkeypatch.setattr(capabilities_module, "_load_verified_json_artifact_at", load_then_replace_bundle_parent)
+    with pytest.raises(ValueError, match="bundle parent"):
+        _load_terminal_replay_request(request)
+
+
+@pytest.mark.parametrize("terminal_kind", ["verified_result", "postverification_failure"])
+def test_terminal_loader_rejects_bundle_file_replacement(tmp_path, monkeypatch, terminal_kind):
+    request = _terminal_replay_request(tmp_path, terminal_kind)
+    bundle_path = request["fixture"]["bundle_path"]
+    original_load = capabilities_module._load_verified_json_artifact_at
+    replaced = False
+
+    def load_then_replace_bundle(*, path, **kwargs):
+        nonlocal replaced
+        if Path(path) == bundle_path and not replaced:
+            bundle_path.write_bytes(b"{}\n")
+            replaced = True
+        return original_load(path=path, **kwargs)
+
+    monkeypatch.setattr(capabilities_module, "_load_verified_json_artifact_at", load_then_replace_bundle)
+    with pytest.raises(ValueError, match="file hash|canonical JSON"):
+        _load_terminal_replay_request(request)
+
+
+@pytest.mark.parametrize("terminal_kind", ["verified_result", "postverification_failure"])
+def test_terminal_loader_rejects_terminal_directory_replacement(tmp_path, monkeypatch, terminal_kind):
+    request = _terminal_replay_request(tmp_path, terminal_kind)
+    terminal_dir = request["terminal_path"].parent
+    moved_terminal = terminal_dir.with_name("terminal-moved")
+    original_load = capabilities_module._load_verified_json_artifact_at
+    replaced = False
+
+    def load_then_replace_terminal(*, path, **kwargs):
+        nonlocal replaced
+        if Path(path) == request["terminal_path"] and not replaced:
+            terminal_dir.rename(moved_terminal)
+            shutil.copytree(moved_terminal, terminal_dir)
+            replaced = True
+        return original_load(path=path, **kwargs)
+
+    monkeypatch.setattr(capabilities_module, "_load_verified_json_artifact_at", load_then_replace_terminal)
+    with pytest.raises(ValueError, match="terminal directory"):
+        _load_terminal_replay_request(request)
+
+
+@pytest.mark.parametrize("terminal_kind", ["verified_result", "postverification_failure"])
+def test_terminal_loader_closes_fds_after_terminal_read_failure(tmp_path, monkeypatch, terminal_kind):
+    if not os.path.isdir("/dev/fd"):
+        pytest.skip("/dev/fd is unavailable")
+    request = _terminal_replay_request(tmp_path, terminal_kind)
+    request["terminal_path"].write_bytes(b"{}\n")
+    before = len(os.listdir("/dev/fd"))
+    for _ in range(25):
+        with pytest.raises(ValueError):
+            _load_terminal_replay_request(request)
     after = len(os.listdir("/dev/fd"))
     assert after <= before + 2
 

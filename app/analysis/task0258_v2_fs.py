@@ -518,8 +518,10 @@ def _open_relative_parent_fd(directory_fd: int, relative_path: str) -> tuple[int
         raise
 
 
-def read_regular_file_at(directory_fd: int, relative_path: str, *, maximum_bytes: int = 16_777_216) -> bytes:
-    """Read one bounded regular file relative to a stable directory FD."""
+def read_regular_file_at_with_identity(
+    directory_fd: int, relative_path: str, *, maximum_bytes: int = 16_777_216
+) -> tuple[bytes, tuple[int, int, int]]:
+    """Read one bounded regular file and return its opened device/inode/size."""
     if not isinstance(maximum_bytes, int) or isinstance(maximum_bytes, bool) or maximum_bytes < 0:
         raise ValueError("maximum_bytes is invalid")
     parent_fd, file_name = _open_relative_parent_fd(directory_fd, relative_path)
@@ -541,13 +543,23 @@ def read_regular_file_at(directory_fd: int, relative_path: str, *, maximum_bytes
         post_read_stat = os.fstat(file_fd)
         if _stat_snapshot(post_read_stat) != _stat_snapshot(file_stat):
             raise ValueError(f"file changed during bounded read: {relative_path}")
-        return b"".join(chunks)
+        return b"".join(chunks), (file_stat.st_dev, file_stat.st_ino, file_stat.st_size)
     except OSError as exc:
         raise ValueError(f"file cannot be opened without following links: {relative_path}") from exc
     finally:
         if file_fd is not None:
             os.close(file_fd)
         os.close(parent_fd)
+
+
+def read_regular_file_at(directory_fd: int, relative_path: str, *, maximum_bytes: int = 16_777_216) -> bytes:
+    """Read one bounded regular file relative to a stable directory FD."""
+    data, _identity = read_regular_file_at_with_identity(
+        directory_fd,
+        relative_path,
+        maximum_bytes=maximum_bytes,
+    )
+    return data
 
 
 def _unlink_no_follow(path: Path) -> None:

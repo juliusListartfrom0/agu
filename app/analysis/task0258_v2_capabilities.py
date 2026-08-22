@@ -57,6 +57,7 @@ from app.analysis.task0258_v2_fs import (
     active_flock,
     exclusive_flock_at,
     read_regular_file_at,
+    read_regular_file_at_with_identity,
     verify_generation_directory,
     verify_generation_directory_at,
 )
@@ -111,6 +112,14 @@ def _exclusive_review_lock(lock_path: Path):
             yield handle
     finally:
         os.close(parent_fd)
+
+
+@contextmanager
+def _exclusive_review_lock_at(parent_fd: int, lock_path: Path):
+    """Acquire a review lock relative to a caller-held stable parent FD."""
+    lock_path = Path(lock_path)
+    with exclusive_flock_at(parent_fd, lock_path.name, lock_path) as handle:
+        yield handle
 
 
 _REVIEW_CHECKS = frozenset({"focused_pytest", "full_pytest"})
@@ -1218,6 +1227,30 @@ def _load_verified_json_artifact_at(
         raw=raw,
         expected_artifact_sha256=expected_artifact_sha256,
         expected_file_sha256=expected_file_sha256,
+    )
+
+
+def _load_verified_json_artifact_at_with_identity(
+    *,
+    directory_fd: int,
+    relative_path: str,
+    path: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+) -> tuple[VerifiedJsonArtifact, tuple[int, int, int]]:
+    raw, identity = read_regular_file_at_with_identity(
+        directory_fd,
+        relative_path,
+        maximum_bytes=_MAX_VERIFIED_FILE_BYTES,
+    )
+    return (
+        _decode_verified_json_artifact(
+            path=Path(path),
+            raw=raw,
+            expected_artifact_sha256=expected_artifact_sha256,
+            expected_file_sha256=expected_file_sha256,
+        ),
+        identity,
     )
 
 
@@ -3452,10 +3485,16 @@ def _load_verified_candidate_receipt_bundle_locked(
     expected_file_sha256: str,
     candidate_dir_fd: int | None = None,
     output_root_fd: int | None = None,
+    bundle_parent_fd: int | None = None,
 ) -> VerifiedJsonArtifact:
     """Replay a candidate bundle while the output-parent lock is held."""
     bundle_lock = Path(bundle_path).parent / ".candidate-receipt-bundle.lock"
-    with _exclusive_review_lock(bundle_lock):
+    lock_context = (
+        _exclusive_review_lock_at(bundle_parent_fd, bundle_lock)
+        if bundle_parent_fd is not None
+        else _exclusive_review_lock(bundle_lock)
+    )
+    with lock_context:
         return _load_verified_candidate_receipt_bundle_unlocked(
             execution_context=execution_context,
             bundle_path=bundle_path,
@@ -3464,6 +3503,7 @@ def _load_verified_candidate_receipt_bundle_locked(
             expected_file_sha256=expected_file_sha256,
             candidate_dir_fd=candidate_dir_fd,
             output_root_fd=output_root_fd,
+            bundle_parent_fd=bundle_parent_fd,
         )
 
 
@@ -3476,17 +3516,31 @@ def _load_verified_candidate_receipt_bundle_unlocked(
     expected_file_sha256: str,
     candidate_dir_fd: int | None = None,
     output_root_fd: int | None = None,
+    bundle_parent_fd: int | None = None,
 ) -> VerifiedJsonArtifact:
     """Load a bundle and replay its exact member receipts against ``candidate_v2``."""
     if type(execution_context) not in {
         VerifiedImplementationReviewSandboxContext,
     }:
         raise PermissionError("candidate bundle loader requires a verified review context")
-    artifact = _load_verified_json_artifact(
-        path=bundle_path,
-        expected_artifact_sha256=expected_artifact_sha256,
-        expected_file_sha256=expected_file_sha256,
-    )
+    bundle_path = Path(bundle_path)
+    if bundle_parent_fd is None:
+        artifact = _load_verified_json_artifact(
+            path=bundle_path,
+            expected_artifact_sha256=expected_artifact_sha256,
+            expected_file_sha256=expected_file_sha256,
+        )
+    else:
+        if bundle_path.name != "candidate-receipt-bundle.json":
+            raise ValueError("candidate receipt bundle basename is not authorized")
+        _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
+        artifact = _load_verified_json_artifact_at(
+            directory_fd=bundle_parent_fd,
+            relative_path=bundle_path.name,
+            path=bundle_path,
+            expected_artifact_sha256=expected_artifact_sha256,
+            expected_file_sha256=expected_file_sha256,
+        )
     verify_candidate_receipt_bundle(artifact.payload)
     candidate_dir = Path(candidate_dir)
     if candidate_dir.name != "candidate_v2":
@@ -3514,7 +3568,60 @@ def _load_verified_candidate_receipt_bundle_unlocked(
         )
         verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
         _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
+    if bundle_parent_fd is not None:
+        _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
     return artifact
+
+
+_TERMINAL_TARGETS = {
+    "verified_result": ("verified_result_v2", "verification_registry.json"),
+    "postverification_failure": ("postverification_failure_v2", "failure.json"),
+}
+
+
+def _verify_terminal_topology_at(output_root_fd: int, terminal_name: str, member_name: str) -> None:
+    """Verify terminal sibling exclusivity and exact coverage from output-root FD."""
+    for sibling in ("terminal_failure_v2", "verified_result_v2", "postverification_failure_v2"):
+        try:
+            sibling_stat = os.stat(sibling, dir_fd=output_root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            if sibling == terminal_name:
+                raise ValueError("terminal generation is missing") from None
+            continue
+        except OSError as exc:
+            raise ValueError("terminal topology cannot be inspected from output-root FD") from exc
+        if stat.S_ISLNK(sibling_stat.st_mode) or not stat.S_ISDIR(sibling_stat.st_mode):
+            raise ValueError("terminal topology contains a non-directory generation")
+        if sibling != terminal_name:
+            raise ValueError("terminal topology contains a competing generation")
+    verify_generation_directory_at(output_root_fd, terminal_name, (member_name,))
+
+
+def _replay_terminal_admission_from_output_root(
+    *, output_root: Path, output_root_fd: int, run_admission: VerifiedReviewRunAdmission
+) -> VerifiedJsonArtifact:
+    """Reopen run admission and bind its file CAS to completion during replay."""
+    admission_path = output_root / "run_admission.json"
+    admission, identity = _load_verified_json_artifact_at_with_identity(
+        directory_fd=output_root_fd,
+        relative_path="run_admission.json",
+        path=admission_path,
+        expected_artifact_sha256=run_admission.admission.artifact_sha256,
+        expected_file_sha256=run_admission.admission.file_sha256,
+    )
+    expected_identity = run_admission.completion.payload.get("admission_identity")
+    actual_identity = {
+        "device": identity[0],
+        "inode": identity[1],
+        "size_bytes": identity[2],
+        "internal_sha256": admission.artifact_sha256,
+        "file_sha256": admission.file_sha256,
+    }
+    if expected_identity != actual_identity:
+        raise ValueError("terminal replay admission file physical CAS drifted")
+    if admission.payload != run_admission.admission.payload:
+        raise ValueError("terminal replay admission bytes drifted from loaded admission")
+    return admission
 
 
 def _assert_terminal_output_root_binding(
@@ -3564,6 +3671,13 @@ def load_verified_terminal_artifact(
             resources.callback(os.close, output_root_fd)
             candidate_dir_fd = _open_directory_at(output_root_fd, candidate_dir.name)
             resources.callback(os.close, candidate_dir_fd)
+            if terminal_kind not in _TERMINAL_TARGETS:
+                raise ValueError("terminal kind is not implemented by this review loader")
+            terminal_name, _member_name = _TERMINAL_TARGETS[terminal_kind]
+            terminal_dir_fd = _open_directory_at(output_root_fd, terminal_name)
+            resources.callback(os.close, terminal_dir_fd)
+            bundle_parent_fd = _open_existing_directory_no_follow(Path(candidate_bundle_path).parent)
+            resources.callback(os.close, bundle_parent_fd)
             return _load_verified_terminal_artifact_unlocked(
                 execution_context=execution_context,
                 terminal_kind=terminal_kind,
@@ -3579,6 +3693,8 @@ def load_verified_terminal_artifact(
                 expected_terminal_file_sha256=expected_terminal_file_sha256,
                 _output_root_fd=output_root_fd,
                 _candidate_dir_fd=candidate_dir_fd,
+                _bundle_parent_fd=bundle_parent_fd,
+                _terminal_dir_fd=terminal_dir_fd,
             )
 
 
@@ -3598,6 +3714,8 @@ def _load_verified_terminal_artifact_unlocked(
     expected_terminal_file_sha256: str,
     _output_root_fd: int | None = None,
     _candidate_dir_fd: int | None = None,
+    _bundle_parent_fd: int | None = None,
+    _terminal_dir_fd: int | None = None,
 ) -> VerifiedJsonArtifact:
     """Replay one existing terminal generation and its trust-spine inputs.
 
@@ -3612,21 +3730,22 @@ def _load_verified_terminal_artifact_unlocked(
         raise TypeError("terminal loader requires a verified review-only admission")
     if type(run_history) is not VerifiedRunHistoryLedger:
         raise TypeError("terminal loader requires a verified run-history ledger")
-    if _output_root_fd is None or _candidate_dir_fd is None:
-        raise ValueError("terminal loader requires stable output-root and candidate descriptors")
-    targets = {
-        "verified_result": ("verified_result_v2", "verification_registry.json"),
-        "postverification_failure": ("postverification_failure_v2", "failure.json"),
-    }
-    if terminal_kind not in targets:
+    if _output_root_fd is None or _candidate_dir_fd is None or _bundle_parent_fd is None or _terminal_dir_fd is None:
+        raise ValueError("terminal loader requires stable replay descriptors")
+    if terminal_kind not in _TERMINAL_TARGETS:
         raise ValueError("terminal kind is not implemented by this review loader")
-    terminal_name, member_name = targets[terminal_kind]
+    terminal_name, member_name = _TERMINAL_TARGETS[terminal_kind]
 
     output_root = Path(output_root)
     candidate_dir = Path(candidate_dir)
     terminal_path = Path(terminal_path)
     _verify_review_temp_directory(output_root)
     _assert_terminal_output_root_binding(
+        output_root=output_root,
+        output_root_fd=_output_root_fd,
+        run_admission=run_admission,
+    )
+    admission_artifact = _replay_terminal_admission_from_output_root(
         output_root=output_root,
         output_root_fd=_output_root_fd,
         run_admission=run_admission,
@@ -3639,14 +3758,8 @@ def _load_verified_terminal_artifact_unlocked(
     expected_terminal_dir = output_root / terminal_name
     if terminal_path != expected_terminal_dir / member_name:
         raise ValueError("terminal artifact path is not bound to its fixed generation")
-    for sibling in ("terminal_failure_v2", "verified_result_v2", "postverification_failure_v2"):
-        sibling_path = output_root / sibling
-        if sibling == terminal_name:
-            verify_generation_directory(sibling_path, (member_name,))
-        elif sibling_path.exists() or sibling_path.is_symlink():
-            raise ValueError("terminal topology contains a competing generation")
-    if terminal_path.is_symlink():
-        raise ValueError("terminal artifact cannot be a symlink")
+    _verify_terminal_topology_at(_output_root_fd, terminal_name, member_name)
+    _assert_directory_path_matches_fd(terminal_path.parent, _terminal_dir_fd, label="terminal directory")
 
     bundle = _load_verified_candidate_receipt_bundle_locked(
         execution_context=execution_context,
@@ -3656,12 +3769,13 @@ def _load_verified_terminal_artifact_unlocked(
         expected_file_sha256=expected_candidate_bundle_file_sha256,
         candidate_dir_fd=_candidate_dir_fd,
         output_root_fd=_output_root_fd,
+        bundle_parent_fd=_bundle_parent_fd,
     )
     if bundle.path.is_relative_to(output_root):
         raise ValueError("candidate receipt bundle must remain outside the output root")
 
-    admission_payload = run_admission.admission.payload
-    admission_receipt = _artifact_file_receipt(run_admission.admission)
+    admission_payload = admission_artifact.payload
+    admission_receipt = _artifact_file_receipt(admission_artifact)
     history_contract = _verify_run_admission_history_binding(
         run_admission=run_admission,
         run_history=run_history,
@@ -3686,8 +3800,9 @@ def _load_verified_terminal_artifact_unlocked(
         ]
         if candidate_markers[0]["subject_receipts"] != expected_candidate_subject_receipts:
             raise ValueError("candidate_published history subject receipts do not match the bundle")
-    candidate_gate = _load_candidate_gate_artifact(
+    candidate_gate = _load_candidate_gate_artifact_at(
         candidate_dir=candidate_dir,
+        candidate_dir_fd=_candidate_dir_fd,
         member_receipts=bundle.payload["ordered_member_receipts"],
     ).payload
     gate_receipts = {slot["provider"]: slot["receipt"] for slot in candidate_gate["input_receipts"]}
@@ -3716,19 +3831,16 @@ def _load_verified_terminal_artifact_unlocked(
     if gate_receipts["run_history_ledger"] != gate_history_contract:
         raise ValueError("candidate gate history is not bound to history")
 
-    terminal_dir_fd = _open_directory_at(_output_root_fd, terminal_name)
-    try:
-        _assert_directory_path_matches_fd(terminal_path.parent, terminal_dir_fd, label="terminal directory")
-        verify_generation_directory_at(_output_root_fd, terminal_name, (member_name,))
-        terminal = _load_verified_json_artifact_at(
-            directory_fd=terminal_dir_fd,
-            relative_path=member_name,
-            path=terminal_path,
-            expected_artifact_sha256=expected_terminal_artifact_sha256,
-            expected_file_sha256=expected_terminal_file_sha256,
-        )
-    finally:
-        os.close(terminal_dir_fd)
+    terminal = _load_verified_json_artifact_at(
+        directory_fd=_terminal_dir_fd,
+        relative_path=member_name,
+        path=terminal_path,
+        expected_artifact_sha256=expected_terminal_artifact_sha256,
+        expected_file_sha256=expected_terminal_file_sha256,
+    )
+    _assert_directory_path_matches_fd(terminal_path.parent, _terminal_dir_fd, label="terminal directory")
+    _verify_terminal_topology_at(_output_root_fd, terminal_name, member_name)
+    _assert_directory_path_matches_fd(Path(candidate_bundle_path).parent, _bundle_parent_fd, label="bundle parent")
     bundle_receipt = _artifact_file_receipt(bundle)
     if terminal_kind == "verified_result":
         verify_postpublication_verification(terminal.payload)
