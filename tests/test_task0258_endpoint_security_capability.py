@@ -130,6 +130,24 @@ def test_main_passes_signed_artifact_to_report_builder(monkeypatch, capsys, tmp_
     assert '"status":"requires_external_user_approval"' in capsys.readouterr().out
 
 
+def test_require_ready_rejects_pending_user_approval(monkeypatch, capsys, tmp_path: Path):
+    signed_artifact = tmp_path / "audit.systemextension"
+    signed_artifact.mkdir()
+
+    monkeypatch.setattr(
+        capability,
+        "build_capability_report",
+        lambda *, signed_artifact=None: {"status": "requires_external_user_approval"},
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["probe", "--json", "--require-ready", "--signed-artifact", str(signed_artifact)],
+    )
+    assert capability.main() == 1
+    assert '"status":"requires_external_user_approval"' in capsys.readouterr().out
+
+
 def test_endpoint_security_source_bounds_output_and_process_lineage():
     source = capability.SOURCE.read_text(encoding="utf-8")
 

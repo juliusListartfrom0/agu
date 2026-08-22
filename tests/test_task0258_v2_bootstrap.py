@@ -23,6 +23,7 @@ from app.analysis.task0258_v2_bootstrap import (
     validate_review_driver_request,
     validate_target_module,
 )
+from scripts import task0258_module_a_verified_bootstrap as bootstrap_script
 
 
 def test_parse_bootstrap_flags():
@@ -55,6 +56,42 @@ def test_validate_bootstrap_fd_bindings_rejects_aliases_and_non_regular_source(t
         finally:
             os.close(alias_fd)
     finally:
+        os.close(request_fd)
+    os.close(source_fd)
+
+
+def test_bootstrap_closes_sensitive_fds_before_dispatch(tmp_path):
+    request_path = tmp_path / "request"
+    source_path = tmp_path / "source"
+    request_path.write_bytes(b"request")
+    source_path.write_bytes(b"source")
+    request_fd = os.open(request_path, os.O_RDONLY)
+    source_fd = os.open(source_path, os.O_RDONLY)
+    saved: dict[int, int | None] = {}
+    try:
+        for target_fd in (202, 203):
+            try:
+                saved[target_fd] = os.dup(target_fd)
+            except OSError:
+                saved[target_fd] = None
+        os.dup2(request_fd, 202)
+        os.dup2(source_fd, 203)
+        bootstrap_script._close_bootstrap_fds(202, 203)
+        with pytest.raises(OSError):
+            os.fstat(202)
+        with pytest.raises(OSError):
+            os.fstat(203)
+    finally:
+        for target_fd in (203, 202):
+            saved_fd = saved[target_fd]
+            if saved_fd is None:
+                try:
+                    os.close(target_fd)
+                except OSError:
+                    pass
+            else:
+                os.dup2(saved_fd, target_fd)
+                os.close(saved_fd)
         os.close(request_fd)
         os.close(source_fd)
     directory_fd = os.open(tmp_path, os.O_RDONLY)

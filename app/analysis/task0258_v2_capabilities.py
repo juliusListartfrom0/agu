@@ -807,7 +807,7 @@ def _read_no_follow_file_under_root(path: Path, *, allowed_root: Path, descripti
     except (FileNotFoundError, OSError, ValueError) as exc:
         raise ValueError(f"{description} must be below the repository root") from exc
     _verify_no_symlink_ancestors(path, allowed_prefix=allowed_root)
-    components = canonical_path.parts[1:]
+    components = canonical_path.relative_to(canonical_root).parts
     if not components or any(not component for component in components):
         raise ValueError(f"{description} contains an empty path component")
     common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
@@ -816,7 +816,11 @@ def _read_no_follow_file_under_root(path: Path, *, allowed_root: Path, descripti
     parent_fd: int | None = None
     file_fd: int | None = None
     try:
-        parent_fd = os.open("/", directory_flags)
+        expected_root_identity = _verify_real_directory(canonical_root)
+        parent_fd = os.open(os.fspath(canonical_root), directory_flags)
+        opened_root = os.fstat(parent_fd)
+        if (opened_root.st_dev, opened_root.st_ino) != expected_root_identity:
+            raise ValueError(f"{description} allowed root changed during open")
         for component in components[:-1]:
             next_fd = os.open(component, directory_flags, dir_fd=parent_fd)
             os.close(parent_fd)

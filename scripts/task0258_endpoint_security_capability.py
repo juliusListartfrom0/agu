@@ -178,14 +178,18 @@ def main() -> int:
         type=Path,
         help="inspect this signed executable or .systemextension instead of the temporary compile",
     )
-    parser.add_argument("--require-ready", action="store_true", help="return nonzero unless entitlement is present")
+    parser.add_argument(
+        "--require-ready",
+        action="store_true",
+        help="return nonzero unless the capability is fully authorized",
+    )
     args = parser.parse_args()
     report = build_capability_report(signed_artifact=args.signed_artifact)
     if args.json:
         print(json.dumps(report, sort_keys=True, separators=(",", ":")))
     else:
         print(report["status"])
-    return 0 if not args.require_ready or report["status"] == "requires_external_user_approval" else 1
+    return 0 if not args.require_ready or report["status"] == "authorized" else 1
 
 
 if __name__ == "__main__":

@@ -87,6 +87,33 @@ def _receipt():
     return {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64}
 
 
+def test_root_loader_opens_from_allowed_root_descriptor(tmp_path, monkeypatch):
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    target = repository_root / "nested" / "artifact.json"
+    target.parent.mkdir()
+    target.write_bytes(b"artifact")
+    real_open = capabilities_module.os.open
+    calls = []
+
+    def traced_open(path, flags, *args, **kwargs):
+        calls.append((os.fspath(path), kwargs.get("dir_fd")))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(capabilities_module.os, "open", traced_open)
+    assert (
+        capabilities_module._read_no_follow_file_under_root(
+            target,
+            allowed_root=repository_root,
+            description="test artifact",
+        )
+        == b"artifact"
+    )
+    assert calls[0][0] == os.fspath(repository_root)
+    assert "/" not in [path for path, _dir_fd in calls]
+    assert any(dir_fd is not None for _path, dir_fd in calls[1:])
+
+
 def _trust_slots(providers):
     out = []
     for provider in providers:

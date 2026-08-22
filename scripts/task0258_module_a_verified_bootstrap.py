@@ -108,6 +108,15 @@ def _preimport_parse_flags(argv: object) -> tuple[int, int]:
     return 202, 203
 
 
+def _close_bootstrap_fds(request_fd: int, source_fd: int) -> None:
+    """Close the sensitive review descriptors before dispatching target code."""
+    for descriptor in (request_fd, source_fd):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
 def _preimport_validate_fds(request_fd: int, source_fd: int) -> None:
     request_stat = os.fstat(request_fd)
     source_stat = os.fstat(source_fd)
@@ -248,6 +257,7 @@ def main() -> int:
         entries = runtime_contract["ordered_python_sys_path_entries"]
         runtime_root = runtime_contract["runtime_root_absolute_path"]
         sys.path[:] = build_sys_path_from_entries(runtime_root, entries)
+        _close_bootstrap_fds(request_fd, source_fd)
         dispatch_module(request["target_module"], request["target_argv"])
     except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         return 2
