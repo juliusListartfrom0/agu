@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256
 from app.analysis.task0258_run_history import (
     ADMISSION_SCHEMA,
     CLAIM_SCHEMA,
@@ -31,6 +32,13 @@ from app.analysis.task0258_run_history import (
 )
 
 AUTH = "0" * 64
+
+
+def _seal(payload):
+    payload["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    )
+    return payload
 
 
 def test_history_events_exact_order():
@@ -169,7 +177,9 @@ def test_verify_registry_listing_valid():
     names = [claim_filename(AUTH), completion_filename(AUTH)]
     names.append(history_filename(AUTH, 1, "producer_attempt_1_admitted"))
     names.append(history_filename(AUTH, 2, "producer_attempt_1_completed_private"))
-    names.append(history_filename(AUTH, 3, "candidate_published"))
+    names.append(history_filename(AUTH, 3, "verification_attempt_admitted"))
+    names.append(history_filename(AUTH, 4, "verification_attempt_completed_private"))
+    names.append(history_filename(AUTH, 5, "candidate_published"))
     verify_registry_listing(names, AUTH)
 
 
@@ -232,14 +242,14 @@ def test_verify_history_subject_receipt():
 
 
 def _marker(subject_kind="published_paths"):
-    return {
+    payload = {
         "schema_version": MARKER_SCHEMA,
         "module_id": MODULE_ID,
         "authorization_receipt": {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64},
         "run_identity_receipt": {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64},
         "run_id": "run-1",
         "output_root": "/x/vru_causal_temporal_retrospective_v2",
-        "nonce": 1,
+        "nonce": "0" * 64,
         "sequence_ordinal": 1,
         "prior_marker_receipt": {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64},
         "event": "candidate_published",
@@ -296,6 +306,7 @@ def _marker(subject_kind="published_paths"):
         "created_at_utc": "2026-08-17T00:00:00Z",
         "artifact_sha256": "0" * 64,
     }
+    return _seal(payload)
 
 
 def test_verify_run_history_marker_valid():
@@ -312,7 +323,7 @@ def test_verify_run_history_marker_worker_launch_admission():
         "launch_secret_sha256": "0" * 64,
         "bootstrap_source_sha256": "0" * 64,
         "worker_request_artifact_sha256": "0" * 64,
-        "provider_process_instance_id": 1,
+        "provider_process_instance_id": "1" * 64,
         "audit_prepared_artifact_sha256": "0" * 64,
         "expected_hash_state_projection_sha256": "0" * 64,
         "private_stage_identity": {"device": 1, "inode": 2},
@@ -323,6 +334,7 @@ def test_verify_run_history_marker_worker_launch_admission():
         "audit_start_gate_fd": 8,
         "claim_envelope_fd": 9,
     }
+    m = _seal(m)
     verify_run_history_marker(m)
 
 
@@ -365,6 +377,7 @@ def test_verify_run_consumption_claim():
         "created_at_utc": "2026-08-17T00:00:00Z",
         "artifact_sha256": "0" * 64,
     }
+    _seal(p)
     verify_run_consumption_claim(p)
     p["state"] = "completed"
     with pytest.raises(ValueError):
@@ -391,6 +404,7 @@ def test_verify_run_admission():
         "created_at_utc": "2026-08-17T00:00:00Z",
         "artifact_sha256": "0" * 64,
     }
+    _seal(p)
     verify_run_admission(p)
     p["module_b_authorized"] = True
     with pytest.raises(ValueError):
@@ -420,6 +434,7 @@ def test_verify_run_consumption_completed():
         "created_at_utc": "2026-08-17T00:00:00Z",
         "artifact_sha256": "0" * 64,
     }
+    _seal(p)
     verify_run_consumption_completed(p)
     p["root_identity"] = {"device": 1}
     with pytest.raises(ValueError):
@@ -474,8 +489,33 @@ def test_completion_rejects_bad_nonce():
         "created_at_utc": "2026-08-17T00:00:00Z",
         "artifact_sha256": "0" * 64,
     }
+    _seal(p)
     with pytest.raises(ValueError):
         verify_run_consumption_completed(p)
+
+
+def test_run_history_ledgers_reject_self_hash_and_identity_drift():
+    claim = {
+        "schema_version": CLAIM_SCHEMA,
+        "module_id": MODULE_ID,
+        "authorization_receipt": _receipt(),
+        "run_id": "run-1",
+        "output_root_absolute_path": "/x",
+        "nonce": "0" * 64,
+        "state": "claimed",
+        "created_at_utc": "2026-08-17T00:00:00Z",
+        "artifact_sha256": "0" * 64,
+    }
+    _seal(claim)
+    verify_run_consumption_claim(claim)
+    forged = dict(claim)
+    forged["run_id"] = "other"
+    with pytest.raises(ValueError):
+        verify_run_consumption_claim(forged)
+    forged = dict(claim)
+    forged["artifact_sha256"] = "f" * 64
+    with pytest.raises(ValueError):
+        verify_run_consumption_claim(forged)
 
 
 def test_verify_worker_launch_claim():
@@ -488,7 +528,7 @@ def test_verify_worker_launch_claim():
         "launch_secret_sha256": "0" * 64,
         "bootstrap_source_sha256": "0" * 64,
         "worker_request_artifact_sha256": "0" * 64,
-        "provider_process_instance_id": 1,
+        "provider_process_instance_id": "1" * 64,
         "audit_prepared_artifact_sha256": "0" * 64,
         "expected_hash_state_projection_sha256": "0" * 64,
         "private_stage_identity": {"device": 1, "inode": 2},
@@ -519,7 +559,7 @@ def test_marker_worker_launch_admission_validates_claim():
         "launch_secret_sha256": "0" * 64,
         "bootstrap_source_sha256": "0" * 64,
         "worker_request_artifact_sha256": "0" * 64,
-        "provider_process_instance_id": 1,
+        "provider_process_instance_id": "1" * 64,
         "audit_prepared_artifact_sha256": "0" * 64,
         "expected_hash_state_projection_sha256": "0" * 64,
         "private_stage_identity": {"device": 1, "inode": 2},
@@ -530,4 +570,5 @@ def test_marker_worker_launch_admission_validates_claim():
         "audit_start_gate_fd": 8,
         "claim_envelope_fd": 9,
     }
+    m = _seal(m)
     verify_run_history_marker(m)

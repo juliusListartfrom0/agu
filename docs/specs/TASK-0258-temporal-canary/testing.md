@@ -2,14 +2,220 @@
 
 ## Automated verification
 
-### Current P0 working-tree check (2026-08-20)
+### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `161 passed`.
-- `scripts/verify_harness.py --test-command` with the focused suite: passed.
-- `git diff --check`: passed.
-- Scoped Ruff: five findings before P0 cleanup; no completion claim until zero.
-- Full repository pytest is deferred until P0 cleanup and documentation
-  reconciliation; no model execution was performed.
+- Local service curl hook passed: `/health` returned `{"status":"ok"}`,
+  `/ready` returned `{"status":"ready"}`, and the VLM-off 60-frame request
+  returned a task ID whose status reached `completed` with `progress=100` and
+  `error=null`.
+- TASK-0258 focused suite: `273 passed` (including the local simulation command,
+  its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
+  pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
+  residue validation for candidate/bundle/result/failure publication). Candidate
+  publication now validates and binds the candidate gate's exact rerun
+  authorization SHA to its fixed stage and checks terminal occupancy under the
+  output-root lock.
+- The independent fresh-context implementation review: **failed** with
+  `Critical=7 / Required=5 / Optional=3`.
+- The latest independent fresh-context review of the previous target found
+  `Critical=1 / Required=1 / Optional=1`: the pipeline did not append/replay
+  durable history markers and the review spine allowed admission and history
+  from different registries. Those findings were remediated in the next target;
+  the new handoff is fixed at `fad3196` against `c5157f2` with a 44-file diff
+  SHA and remains a request for a separate full-scope review, not a sealed
+  receipt or authority. The `fad3196` incremental review is sealed 0/0 only
+  for its two-file delta; it is not a substitute for the complete review.
+- No model/video extraction or v2 rerun was performed.
+- The passing focused suite does not prove receipt binding, kernel read
+  isolation, authenticated bootstrap, or OS-enforced process-tree cleanup.
+- Latest full repository pytest: `2,141 passed, 5
+  skipped, 15 warnings`.
+- The bounded fs_usage capture regression defers malformed stream input to
+  `finish()` and records background iterator failures for the main caller;
+  both paths remain diagnostic-only and fail closed.
+- The capture harness also rejects a diagnostic stream whose drain thread does
+  not finish within the bounded join window, preventing partial transcripts
+  from reaching the parser.
+- The fs_usage audit entry point rejects malformed worker argv before spawn and
+  uses the shared sanitized environment and new-process-group contract, then
+  kills/reaps the worker group on timeout. It also starts fs_usage in its own
+  process group and reaps both children when observer startup or diagnostic
+  drain cleanup fails; this remains local cleanup evidence only.
+- The fs_usage CLI reads policy JSON through the bounded no-follow reader and
+  writes future provider output via no-clobber atomic JSON; regression tests
+  reject symlinked policy and output paths before any overwrite.
+- Diff-scoped Ruff over the 44-file implementation scope passes. A full
+  repository Ruff run still reports 52 pre-existing findings outside the
+  TASK-0258 scope; no unrelated cleanup is claimed.
+- The Endpoint Security diagnostic client accepts only strict positive decimal
+  PID/timeout values, subscribes to the target EXIT event, and uses a bounded
+  default 120-second lifetime with timeout exit code `4`; this prevents an
+  unbounded local observer but remains unsigned diagnostic code, not platform
+  authorization or kernel evidence.
+- Each diagnostic row now carries the Endpoint Security notification result
+  (`auth`/`flags`) plus available per-event and global sequence numbers. A
+  sequence gap, non-notify message, or unknown result type fails closed with
+  diagnostic exit code `5`; this detects client-side event loss but remains
+  local evidence only.
+- The Python Endpoint Security JSONL parser now validates the exact auth/flags
+  row projection, rejects duplicate JSON fields, malformed JSON/constants,
+  non-absolute or NUL-containing paths, invalid process identifiers, and
+  sequence regressions, while enforcing the shared row/byte caps and the C
+  client's 512-byte maximum row size. The C client now appends a finalization
+  row before flush/fsync; the parser requires a clean final row and verifies
+  its event-row/byte counts, rejecting truncated or failed diagnostic runs.
+  Parsed rows remain diagnostic events and cannot mint a provider receipt or
+  attestation.
+- The bootstrap regression coverage now pins the four exact parent review
+  command arrays, the fixed request/source FD map `202/203`, and no-follow
+  canonical reopening of the standalone runtime contract through a
+  descriptor-relative directory-FD chain, including a symlink-ancestor case;
+  it also rejects closed, aliased, and non-regular inherited descriptors.
+- A local subprocess regression now launches the actual bootstrap source with
+  `-P -S /dev/fd/203`, binds real request/source descriptors `202/203`, and
+  verifies the fixed target argv reaches the sealed runtime path. The launcher
+  uses a standard-library-only pre-import phase before importing the sealed
+  package; this is local integration evidence, not OS/kernel proof.
+- The review-only capability/loader tests prove temporary-ancestor identity
+  re-open, canonical artifact/file hashes, context separation, and wrong-context
+  rejection. JSON manifest/bundle reads use bounded descriptor-relative
+  no-follow traversal and reject symlinked temporary parents; they do not
+  provide kernel-audit or production admission evidence.
+- Synthetic review contexts now canonicalize the macOS temporary-directory
+  alias before binding and reject symlinked ancestors both at bind time and on
+  every re-open; this is local path-integrity evidence only.
+- Run-history marker append validates the authorization SHA before touching a
+  lock path, so malformed authorization input cannot create a path outside the
+  registry directory.
+- Marker append now replays the durable ledger under the registry lock and
+  requires the new marker's authorization, run identity, run-root/nonce, and
+  predecessor receipt to equal the durable claim/completion/head; forged
+  predecessor and identity-drift regressions fail before publication.
+- Durable registry replay now holds one opened directory FD, reads each member
+  with descriptor-relative `O_NOFOLLOW`, bounds member bytes, and rejects
+  non-JSON residue; regressions cover a symlinked completion member and an
+  unexpected temporary file.
+- Shared v2 lock acquisition now creates/opens a regular lock file with
+  `O_NOFOLLOW`/`O_CLOEXEC`/nonblocking flags; callers no longer pre-touch a
+  potentially symlinked lock path.
+- Candidate receipt-bundle sealing now takes the output-root and distinct
+  bundle-parent locks, reopens and recomputes all candidate member receipts
+  under those locks, rejects candidate drift and exact fixed-stage residue, and
+  reopens the published bundle bytes. This is repository-local publication
+  hardening, not a substitute for the external receipt issuer or OS sandbox.
+- The pipeline's post-seal bundle read now reopens the published bundle under
+  the bundle lock through a bounded regular-file/no-follow descriptor and
+  requires exact canonical payload equality before binding the bundle file
+  receipt into the result; regressions cover payload drift and a symlinked leaf.
+- The public pipeline preflight now cross-binds the candidate gate's
+  authorization, admission, and run-identity receipts to the actual admission
+  and completion bytes, then requires the bundle and result to share the same
+  authorization/admission/history/static-input tuple and exact candidate-member
+  rows. Mismatches fail before registry, output-root, or bundle writes; tests
+  cover admission drift and result-member drift with zero side effects.
+- The pipeline entry now refuses production execution before any filesystem
+  write because no external admission issuer is bound locally. End-to-end
+  temporary tests must explicitly pass the synthetic-only context and flag;
+  that path remains diagnostic and is not P2/P5 authorization.
+- The review-only candidate bundle loader now requires the real absolute
+  `candidate_v2` directory, reopens exact member coverage, recomputes all ten
+  member receipts, and rejects candidate-byte drift. It remains a review-only
+  loader and supplies no production admission or kernel evidence.
+- The review-only run-admission loader now replays canonical claim,
+  `run_admission.json`, and completion bytes, binds their receipt edges, and
+  compares the completion's root/admission physical CAS to the reopened
+  temporary files. The terminal loader then replays the candidate bundle and
+  exactly one `verified_result_v2` or `postverification_failure_v2` sibling,
+  binding history, admission, static-input, authorization, bundle, and member
+  receipts. These loaders remain diagnostic-only.
+- Candidate bundle replay now also reopens and validates the candidate gate
+  schema; terminal replay binds its authorization, run-admission, static-input,
+  and run-history provider slots to the independently loaded trust spine.
+- Read-isolation policy/attestation binding now verifies the policy artifact
+  hash, provider/run/worker/nonce tuple, deny-before-allow precedence, unique
+  longest policy-row match, fixed inherited-FD locators, and returned regular
+  file identity. It validates an externally produced attestation only; it
+  never creates kernel evidence, and raw `fs_usage`/Python-row paths remain
+  fail-closed.
+- The review-only capability loader now reopens both policy and attestation
+  artifacts through the bounded descriptor-relative no-follow JSON boundary,
+  checks their exact file/internal hashes, and returns an opaque cross-bound
+  pair. It remains diagnostic-only and cannot mint a kernel attestation or
+  production admission.
+- The verification-attempt loader now reopens the complete canonical attempt
+  artifact, verifies its internal/file hashes, and invokes the existing
+  attempt validator—including the nested read-isolation binder—before
+  returning an opaque review-only artifact.
+- The review-only trust-spine binder now cross-binds that attempt to the
+  reopened admission, stable history identity/head, rerun authorization, and
+  output-root physical CAS. It remains diagnostic-only and cannot issue
+  production admission.
+- The review-only no-write preflight now reopens output-root and registry
+  identities, rejects reserved output/stage residue and candidate-bundle
+  aliases, and returns a diagnostic write plan without creating locks,
+  directories, or files. It remains diagnostic-only and cannot issue
+  production authorization.
+- The review-only implementation-approval loader now reopens the sealed
+  amendment approval through the bounded canonical/no-follow JSON boundary,
+  replays the parent approval and its three exact spec files, the amendment
+  file, the Critical/Required 0/0 fresh review, and the implementation-scope
+  baseline/root CAS, and returns an opaque diagnostic artifact. It does not
+  issue rerun authorization or provide production admission.
+- The amended-implementation-review loader now reopens the canonical
+  implementation-review artifact and separate fresh-review artifact, binds
+  approval/root/baseline receipts, replays the frozen code/test/runtime/config,
+  check-input, check-output, and scope-delta rows, and requires the fresh
+  reviewer governance observation plus Critical/Required `0/0`. It returns
+  only an opaque diagnostic object; an independent review is not claimed for
+  the current branch unless an external receipt supplies that artifact.
+- The review-only rerun-authorization loader now replays the exact v2
+  authorization field set and binds it to the loaded implementation approval,
+  amended review, static-input contract, fixed operation list, absent output /
+  candidate-bundle paths, and registry physical identity. It rejects Module B
+  authorization and returns `production_capability=false`; it does not consume
+  a run or issue production admission.
+- The review-only static-input loader now replays the explicit canonical
+  temporal-plan and complete TASK-0257 parent receipt graph. It enforces the
+  declared path cardinalities, no-symlink absolute paths, all ordered JPEG /
+  source-video / checkpoint receipts, and the caller-frozen compact-canonical
+  projection hash before returning `VerifiedModuleAStaticInputs` with
+  `production_capability=false`; the parent verifier capability is discarded.
+  `replay_verified_module_a_static_inputs()` reopens the stored plan and
+  reconstructs/replays the complete parent graph on each use, rejecting
+  in-memory snapshot mutation; no model/video run is started.
+- The review-only rerun-authorization wrapper now requires that per-use static
+  replay before binding its exact three-hash static-input contract; it remains
+  diagnostic-only and does not issue authorization.
+- The review-only terminal loader has the same static-input-bound entry point;
+  it replays the static graph, checks the admission contract, and only then
+  replays candidate/terminal receipts. It remains diagnostic-only.
+- The review-only run-admission loader has a corresponding static-input-bound
+  entry point; it replays the static graph first, then requires the reopened
+  admission's exact three-hash contract to equal the replayed capability before
+  returning the diagnostic admission object. It remains diagnostic-only.
+- `verify_verification_attempt` now invokes that binder as the attempt-level
+  gate, so individually schema-valid but cross-boundary-drifting policy and
+  attestation objects cannot enter a verification attempt.
+- Canonical JSON reopening restores the schema's fixed authorization-provider
+  iteration order only after canonical bytes and the internal artifact hash
+  have been verified; this avoids treating JSON serializer key sorting as
+  receipt drift.
+- `verified_result_v2` and `postverification_failure_v2` sealing now derive
+  deterministic stage-directory names from the rerun-authorization SHA, reject
+  pre-existing stage residue, publish no-clobber, and reopen exact member
+  coverage after rename. This also remains repository-local evidence.
+- Terminal publication now replays the candidate-present topology under the
+  output-root lock before creating a stage and rejects an existing terminal
+  sibling, so result and postverification failure cannot coexist in one root.
+- The read-isolation audit tests prove that both raw `fs_usage` rows and direct
+  Python `verified_event_rows` injection fail closed with no attestation; the
+  local policy↔attestation binder rejects tuple drift, unknown/denied events,
+  and ambiguous policy matches; the external kernel-provider capability is
+  still absent.
+- The worker subprocess runner rejects non-list argv, embedded NULs, and
+  non-positive/non-integer timeouts before spawn; this complements its
+  sanitized environment and process-group cleanup but remains local evidence,
+  not OS-enforced sandbox proof.
 
 - Module-A focused tests: `67 passed`.
 - Adjacent TASK-0257 export/probe/backbone/causal regression: `523 passed, 3 skipped`.
@@ -20,8 +226,68 @@
 - The three Module-A CLIs return successful `--help` output under canonical
   `.venv` Python 3.11.
 
-A repository-wide pytest claim is intentionally not made because the shared
-dirty worktree contains unrelated in-progress VLM RED tests.
+No model/video extraction or v2 rerun was performed, and no v2 terminal/result
+artifact is claimed.
+
+Endpoint Security capability probe: `compile_ok=true`, SDK header/stub present,
+signature `adhoc`, required entitlement absent,
+`external_user_approval_observed=false`, status
+`blocked_external_authorization`. This is a platform blocker, not a
+read-isolation attestation. The probe now accepts
+`--signed-artifact <path> --json` to inspect the actual signed executable or
+`.systemextension`; it first requires strict `codesign --verify` success and
+  parses the entitlement plist, accepting the entitlement only when its value is
+  the boolean `true`; entitlement on an adhoc/unknown signature remains
+  blocked. The selected artifact is canonicalized before inspection, and the
+  C client passes strict warning compilation with no-follow/exclusive output,
+  bounded fork/pidversion lineage, path-truncation rejection, JSON-safe path
+  encoding, strict decimal PID/timeout parsing, and bounded target-exit/timeout
+  shutdown, exact notify-result serialization, and fail-closed notification
+  sequence-gap detection. The C client appends a finalization row with clean
+  status and event-row/byte counts, then flushes and `fsync`s the descriptor
+  before close; the Python parser rejects missing, unclean, or mismatched
+  finalization. Without that option it intentionally
+  reports the temporary
+  ad-hoc compile and cannot observe an installed system extension.
+
+## Repository-local simulation
+
+The canonical local simulation command is:
+
+```bash
+.venv/bin/python scripts/task0258_local_simulation.py --json
+```
+
+The 2026-08-21 run exercised the synthetic discovery manifest and both
+review-only state-machine contexts. It returned `evidence_class=diagnostic_only`
+for the platform boundary, `production_capability=false`, and `p5_ready=false`.
+The simulation now also parses two C-shaped Endpoint Security diagnostic rows
+and their clean finalization record, reporting the result as
+`evidence_class=diagnostic_only` with `production_capability=false`; this does
+not represent an actual kernel observation.
+
+The read-only `inspect_endpoint_security_transcript.py` handoff command accepts
+only an absolute regular non-symlink file with no symlinked ancestors, validates the same finalization and
+count rules, and reports `valid_diagnostic_transcript` without creating an
+attestation.
+The platform portion remained `blocked_external_authorization` with ad-hoc
+signing, no Endpoint Security entitlement, no user approval, and no kernel
+read-isolation attestation. This command is deliberately not a substitute for
+an OS-enforced review sandbox or real Endpoint Security evidence.
+
+## Local service curl hook
+
+- Started the canonical service with `.venv/bin/python -m uvicorn app.main:app
+  --host 127.0.0.1 --port 8765`.
+- `GET /health` returned `{"status":"ok"}` and `GET /ready` returned
+  `{"status":"ready"}`.
+- `POST /api/v1/analysis/run` with `examples/lebron_shoots.mp4`,
+  `vlm_mode=off`, `generate_video=false`, `segmented_analysis=false`, and
+  `max_frames=60` returned a `task_id` with `status=pending`; polling the
+  status endpoint reached `status=completed`, `progress=100`, `error=null`.
+- An intentionally missing video path returned HTTP 400 as documented. No
+  v2 extraction or TASK-0258 result artifact was produced by this service
+  smoke.
 
 ## Real artifact verification
 

@@ -11,6 +11,7 @@ runner is the process isolation layer that audit wraps.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 from dataclasses import dataclass
 
@@ -24,6 +25,19 @@ CONTRACT_ENV: dict[str, str] = {
     "VECLIB_MAXIMUM_THREADS": "1",
     "NUMEXPR_NUM_THREADS": "1",
 }
+
+
+def validate_worker_argv(argv: object) -> None:
+    """Reject malformed worker argv before any subprocess boundary is crossed."""
+    if not isinstance(argv, list) or not argv or any(not isinstance(arg, str) or "\x00" in arg for arg in argv):
+        raise ValueError("worker argv is invalid")
+
+
+def validate_worker_launch_inputs(argv: object, timeout_seconds: object) -> None:
+    """Validate all worker launch inputs before crossing the process boundary."""
+    validate_worker_argv(argv)
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
+        raise ValueError("worker timeout must be a positive integer")
 
 
 @dataclass(frozen=True)
@@ -67,21 +81,51 @@ def run_worker_subprocess(
     On timeout the process group is hard-killed and ``WorkerTimeoutError`` is
     raised with the captured output.
     """
-    if not argv or not isinstance(argv[0], str):
-        raise ValueError("worker argv is invalid")
+    validate_worker_launch_inputs(argv, timeout_seconds)
+    expected_env = sanitized_worker_env()
+    if env is not None and env != expected_env:
+        raise ValueError("worker environment must be the exact sanitized contract environment")
     proc = subprocess.Popen(
         argv,
-        env=env if env is not None else sanitized_worker_env(),
+        env=expected_env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        stdout, stderr = proc.communicate()
-        raise WorkerTimeoutError(argv, timeout_seconds, stdout, stderr) from None
+    except subprocess.TimeoutExpired as timeout_exc:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        partial_stdout = timeout_exc.stdout or ""
+        partial_stderr = timeout_exc.stderr or ""
+        if isinstance(partial_stdout, bytes):
+            partial_stdout = partial_stdout.decode(errors="replace")
+        if isinstance(partial_stderr, bytes):
+            partial_stderr = partial_stderr.decode(errors="replace")
+        timeout_error = WorkerTimeoutError(
+            argv,
+            timeout_seconds,
+            partial_stdout,
+            partial_stderr,
+        )
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+        stdout = ""
+        stderr = ""
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
+        raise timeout_error from None
     return WorkerResult(proc.returncode, stdout, stderr)
 
 
@@ -90,5 +134,7 @@ __all__ = [
     "WorkerResult",
     "WorkerTimeoutError",
     "sanitized_worker_env",
+    "validate_worker_argv",
+    "validate_worker_launch_inputs",
     "run_worker_subprocess",
 ]

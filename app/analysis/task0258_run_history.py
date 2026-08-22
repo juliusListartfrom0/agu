@@ -17,14 +17,28 @@ later phases.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
+import stat
 from collections.abc import Mapping
+from pathlib import Path, PurePosixPath
 
 from app.analysis.task0258_module_a_v2 import (
+    compact_canonical_json,
     is_rfc3339,
     is_safe_slug,
     is_sha256,
     verify_artifact_file_receipt,
+    verify_internal_artifact_hash,
+    verify_static_input_contract,
+)
+from app.analysis.task0258_v2_fs import (
+    FlockHandle,
+    _open_existing_directory_no_follow,
+    active_flock,
+    exclusive_flock_at,
 )
 
 MARKER_SCHEMA = "agu.task0258-module-a-v2-run-history-marker.v1"
@@ -267,6 +281,214 @@ def verify_registry_listing(
         if nn != prev_nn + 1:
             raise ValueError(f"registry history ordinal gap at {name!r}")
         prev_nn = nn
+    events = [parse_history_filename(name, auth_sha256)[1] for name in filenames[2:]]
+    if events:
+        verify_completed_successor(events[0])
+        for prior, current in zip(events, events[1:]):
+            verify_history_transition(prior, current)
+
+
+def registry_history_filenames(registry_dir: Path, auth_sha256: str) -> list[str]:
+    """Return the JSON registry listing in the canonical replay order."""
+    if not registry_dir.is_dir() or registry_dir.is_symlink():
+        raise ValueError("registry directory must be a real directory")
+    filenames = [entry.name for entry in registry_dir.iterdir() if entry.name.endswith(".json")]
+    if not filenames:
+        raise ValueError("registry directory is empty")
+    ordered = [claim_filename(auth_sha256), completion_filename(auth_sha256)]
+    if any(required not in filenames for required in ordered):
+        raise ValueError("registry is missing claim or completion ledger")
+    markers = sorted(name for name in filenames if ".history-" in name)
+    unexpected = set(filenames) - set(ordered) - set(markers)
+    if unexpected:
+        raise ValueError(f"registry contains unexpected JSON files: {sorted(unexpected)!r}")
+    ordered.extend(markers)
+    verify_registry_listing(ordered, auth_sha256)
+    return ordered
+
+
+_MAX_REGISTRY_MEMBER_BYTES = 16_777_216
+
+
+def _registry_history_filenames_from_fd(directory_fd: int, auth_sha256: str) -> list[str]:
+    """Return the stable registry listing from one already-open directory FD."""
+    try:
+        names = os.listdir(directory_fd)
+    except OSError as exc:
+        raise ValueError("registry directory cannot be listed through its descriptor") from exc
+    allowed_lock_name = f".{auth_sha256}.history.lock"
+    allowed_lock_identity_name = f"{allowed_lock_name}.identity"
+    if any(
+        not isinstance(name, str)
+        or (not name.endswith(".json") and name not in {allowed_lock_name, allowed_lock_identity_name})
+        for name in names
+    ):
+        raise ValueError("registry contains non-JSON residue")
+    ordered = [claim_filename(auth_sha256), completion_filename(auth_sha256)]
+    markers = sorted(name for name in names if ".history-" in name)
+    unexpected = set(names) - set(ordered) - set(markers) - {allowed_lock_name, allowed_lock_identity_name}
+    if unexpected:
+        raise ValueError(f"registry contains unexpected files: {sorted(unexpected)!r}")
+    if any(required not in names for required in ordered):
+        raise ValueError("registry is missing claim or completion ledger")
+    ordered.extend(markers)
+    verify_registry_listing(ordered, auth_sha256)
+    return ordered
+
+
+def _read_registry_member_from_fd(directory_fd: int, filename: str) -> bytes:
+    """Read one bounded regular registry member without following the leaf link."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
+    try:
+        member_fd = os.open(filename, flags, dir_fd=directory_fd)
+    except OSError as exc:
+        raise ValueError(f"registry member cannot be opened without following links: {filename}") from exc
+    try:
+        member_stat = os.fstat(member_fd)
+        if not stat.S_ISREG(member_stat.st_mode) or member_stat.st_size > _MAX_REGISTRY_MEMBER_BYTES:
+            raise ValueError(f"registry member is not a bounded regular file: {filename}")
+        remaining = member_stat.st_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(member_fd, min(1 << 20, remaining))
+            if not chunk:
+                raise ValueError(f"registry member ended before its recorded size: {filename}")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        post_stat = os.fstat(member_fd)
+        snapshot = (
+            member_stat.st_dev,
+            member_stat.st_ino,
+            member_stat.st_size,
+            getattr(member_stat, "st_mtime_ns", 0),
+            getattr(member_stat, "st_ctime_ns", 0),
+        )
+        post_snapshot = (
+            post_stat.st_dev,
+            post_stat.st_ino,
+            post_stat.st_size,
+            getattr(post_stat, "st_mtime_ns", 0),
+            getattr(post_stat, "st_ctime_ns", 0),
+        )
+        if post_snapshot != snapshot:
+            raise ValueError(f"registry member changed during bounded read: {filename}")
+        return b"".join(chunks)
+    except OSError as exc:
+        raise ValueError(f"registry member cannot be read: {filename}") from exc
+    finally:
+        os.close(member_fd)
+
+
+def replay_run_history_registry(
+    registry_dir: Path,
+    auth_sha256: str,
+    *,
+    held_lock: FlockHandle | None = None,
+    registry_fd: int | None = None,
+) -> list[Mapping[str, object]]:
+    """Load and replay every durable ledger/marker binding in order.
+
+    The replay runs under the registry's fixed history lock by default. Writers
+    that already hold that lock pass its unforgeable ``FlockHandle`` to avoid
+    reacquiring the same advisory lock through a second file descriptor.
+    """
+    lock_path = Path(registry_dir) / f".{auth_sha256}.history.lock"
+    if held_lock is None:
+        held_lock = active_flock(lock_path)
+        if held_lock is None:
+            try:
+                owned_directory_fd = _open_existing_directory_no_follow(Path(registry_dir))
+            except OSError as exc:
+                raise ValueError("registry directory cannot be opened without following links") from exc
+            try:
+                with exclusive_flock_at(owned_directory_fd, lock_path.name, lock_path) as acquired_lock:
+                    return replay_run_history_registry(
+                        registry_dir,
+                        auth_sha256,
+                        held_lock=acquired_lock,
+                        registry_fd=owned_directory_fd,
+                    )
+            finally:
+                os.close(owned_directory_fd)
+    if registry_fd is not None and not isinstance(registry_fd, int):
+        raise ValueError("registry directory descriptor is invalid")
+    owns_directory_fd = registry_fd is None
+    if owns_directory_fd:
+        try:
+            registry_fd = _open_existing_directory_no_follow(Path(registry_dir))
+        except OSError as exc:
+            raise ValueError("registry directory cannot be opened without following links") from exc
+    try:
+        assert registry_fd is not None
+        held_lock.assert_held(lock_path, directory_fd=registry_fd)
+        directory_stat = os.fstat(registry_fd)
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            raise ValueError("registry path is not a directory")
+        filenames = _registry_history_filenames_from_fd(registry_fd, auth_sha256)
+        payloads: list[Mapping[str, object]] = []
+        for filename in filenames:
+            raw = _read_registry_member_from_fd(registry_fd, filename)
+            if not raw.endswith(b"\n"):
+                raise ValueError(f"registry member is missing its final LF: {filename}")
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"registry member is not canonical JSON: {filename}") from exc
+            if not isinstance(payload, Mapping) or raw != (compact_canonical_json(payload) + "\n").encode("utf-8"):
+                raise ValueError(f"registry member bytes are not canonical: {filename}")
+            verify_internal_artifact_hash(payload)
+            if filename.endswith(".claim.json"):
+                verify_run_consumption_claim(payload)
+            elif filename.endswith(".completed.json"):
+                verify_run_consumption_completed(payload)
+            else:
+                verify_run_history_marker(payload)
+                ordinal, event = parse_history_filename(filename, auth_sha256)
+                if payload["sequence_ordinal"] != ordinal or payload["event"] != event:
+                    raise ValueError(f"registry marker payload does not match its basename: {filename}")
+            payloads.append(payload)
+    finally:
+        if owns_directory_fd:
+            os.close(registry_fd)
+    claim = payloads[0]
+    completion = payloads[1]
+    auth_receipt = claim["authorization_receipt"]
+    if not isinstance(auth_receipt, Mapping) or auth_receipt["artifact_sha256"] != auth_sha256:
+        raise ValueError("registry claim authorization is not bound to the registry name")
+    for payload in (completion,):
+        if payload["authorization_receipt"] != auth_receipt:
+            raise ValueError("registry completion authorization binding drifted")
+        for field in ("run_id", "nonce", "output_root_absolute_path"):
+            claim_field = "output_root_absolute_path" if field == "output_root_absolute_path" else field
+            if payload[field] != claim[claim_field]:
+                raise ValueError(f"registry completion {field} binding drifted")
+    completion_receipt = _file_receipt(completion)
+    previous_receipt = completion_receipt
+    previous_event = None
+    for marker in payloads[2:]:
+        if marker["authorization_receipt"] != auth_receipt:
+            raise ValueError("registry marker authorization binding drifted")
+        if marker["run_identity_receipt"] != completion_receipt:
+            raise ValueError("registry marker run identity binding drifted")
+        for field in ("run_id", "nonce", "output_root"):
+            claim_field = "output_root_absolute_path" if field == "output_root" else field
+            if marker[field] != claim[claim_field]:
+                raise ValueError(f"registry marker {field} binding drifted")
+        if marker["prior_marker_receipt"] != previous_receipt:
+            raise ValueError("registry marker prior-head receipt does not replay")
+        event = marker["event"]
+        if previous_event is None:
+            verify_completed_successor(event)
+        else:
+            verify_history_transition(previous_event, event)
+        previous_event = event
+        previous_receipt = _file_receipt(marker)
+    return payloads
+
+
+def _file_receipt(payload: Mapping[str, object]) -> dict[str, str]:
+    data = (compact_canonical_json(payload) + "\n").encode("utf-8")
+    return {"artifact_sha256": str(payload["artifact_sha256"]), "file_sha256": hashlib.sha256(data).hexdigest()}
 
 
 def verify_history_subject_receipt(row: object) -> None:
@@ -395,19 +617,27 @@ def verify_run_consumption_claim(payload: Mapping[str, object]) -> None:
     """Validate a `agu.task0258-module-a-v2-run-consumption-claim.v1` payload."""
     if not isinstance(payload, Mapping) or set(payload) != CLAIM_FIELDS:
         raise ValueError("claim field set is invalid")
+    verify_internal_artifact_hash(payload)
     if payload["schema_version"] != CLAIM_SCHEMA or payload["module_id"] != MODULE_ID:
         raise ValueError("claim identity is invalid")
     verify_artifact_file_receipt(payload["authorization_receipt"])
     if payload["state"] != "claimed":
         raise ValueError("claim state must be claimed")
-    if not is_sha256(payload["nonce"]) or not isinstance(payload["run_id"], str) or not payload["run_id"]:
+    if not is_sha256(payload["nonce"]) or not is_safe_slug(payload["run_id"]):
         raise ValueError("claim nonce/run_id is invalid")
+    if not isinstance(payload["output_root_absolute_path"], str) or not payload["output_root_absolute_path"].startswith(
+        "/"
+    ):
+        raise ValueError("claim output_root_absolute_path is invalid")
+    if not is_rfc3339(payload["created_at_utc"]):
+        raise ValueError("claim created_at_utc is invalid")
 
 
 def verify_run_admission(payload: Mapping[str, object]) -> None:
     """Validate a `agu.task0258-module-a-v2-run-admission.v1` payload."""
     if not isinstance(payload, Mapping) or set(payload) != ADMISSION_FIELDS:
         raise ValueError("admission field set is invalid")
+    verify_internal_artifact_hash(payload)
     if payload["schema_version"] != ADMISSION_SCHEMA or payload["module_id"] != MODULE_ID:
         raise ValueError("admission identity is invalid")
     verify_artifact_file_receipt(payload["authorization_receipt"])
@@ -416,14 +646,22 @@ def verify_run_admission(payload: Mapping[str, object]) -> None:
         raise ValueError("admission state/count is invalid")
     if payload["module_b_authorized"] is not False:
         raise ValueError("admission module_b_authorized must be False")
-    if not is_sha256(payload["nonce"]):
-        raise ValueError("admission nonce is invalid")
+    if not is_sha256(payload["nonce"]) or not is_safe_slug(payload["run_id"]):
+        raise ValueError("admission nonce/run_id is invalid")
+    if not isinstance(payload["output_root_absolute_path"], str) or not payload["output_root_absolute_path"].startswith(
+        "/"
+    ):
+        raise ValueError("admission output_root_absolute_path is invalid")
+    if not is_rfc3339(payload["created_at_utc"]):
+        raise ValueError("admission created_at_utc is invalid")
+    verify_static_input_contract(payload["static_input_contract"])
 
 
 def verify_run_consumption_completed(payload: Mapping[str, object]) -> None:
     """Validate a `agu.task0258-module-a-v2-run-consumption-completed.v1` payload."""
     if not isinstance(payload, Mapping) or set(payload) != COMPLETION_FIELDS:
         raise ValueError("completion field set is invalid")
+    verify_internal_artifact_hash(payload)
     if payload["schema_version"] != COMPLETION_SCHEMA or payload["module_id"] != MODULE_ID:
         raise ValueError("completion identity is invalid")
     verify_artifact_file_receipt(payload["authorization_receipt"])
@@ -431,8 +669,14 @@ def verify_run_consumption_completed(payload: Mapping[str, object]) -> None:
     verify_artifact_file_receipt(payload["admission_receipt"])
     if payload["consumption_count"] != 1 or payload["state"] != "completed":
         raise ValueError("completion count/state is invalid")
-    if not is_sha256(payload["nonce"]):
-        raise ValueError("completion nonce is invalid")
+    if not is_sha256(payload["nonce"]) or not is_safe_slug(payload["run_id"]):
+        raise ValueError("completion nonce/run_id is invalid")
+    if not isinstance(payload["output_root_absolute_path"], str) or not payload["output_root_absolute_path"].startswith(
+        "/"
+    ):
+        raise ValueError("completion output_root_absolute_path is invalid")
+    if not is_rfc3339(payload["created_at_utc"]):
+        raise ValueError("completion created_at_utc is invalid")
     root_identity = payload["root_identity"]
     if not isinstance(root_identity, Mapping) or set(root_identity) != {"device", "inode"}:
         raise ValueError("completion root_identity is invalid")
@@ -507,10 +751,12 @@ def verify_worker_launch_claim(value: object) -> None:
     ):
         if not is_sha256(value[field]):
             raise ValueError(f"worker_launch_claim {field} is invalid")
-    for field in ("parent_pid", "provider_process_instance_id"):
+    for field in ("parent_pid",):
         v = value[field]
         if not isinstance(v, int) or isinstance(v, bool) or v < 0:
             raise ValueError(f"worker_launch_claim {field} is invalid")
+    if not is_sha256(value["provider_process_instance_id"]):
+        raise ValueError("worker_launch_claim provider_process_instance_id is invalid")
     stage = value["private_stage_identity"]
     if not isinstance(stage, Mapping) or set(stage) != {"device", "inode"}:
         raise ValueError("worker_launch_claim private_stage_identity is invalid")
@@ -539,6 +785,9 @@ def verify_root_subject_cas_row(row: object) -> None:
         raise ValueError("root_subject_cas row shape is invalid")
     if not isinstance(row["relative_path"], str) or not row["relative_path"]:
         raise ValueError("root_subject_cas relative_path is invalid")
+    rel = PurePosixPath(row["relative_path"])
+    if "\\" in row["relative_path"] or rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+        raise ValueError("root_subject_cas relative_path must be safe and POSIX-relative")
     for field in ("device", "inode"):
         value = row[field]
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -571,7 +820,17 @@ def verify_run_history_marker(payload: Mapping[str, object]) -> None:
     """
     if not isinstance(payload, Mapping) or set(payload) != MARKER_FIELDS:
         raise ValueError("marker field set is invalid")
+    verify_internal_artifact_hash(payload)
     verify_marker_scalars(payload)
+    verify_artifact_file_receipt(payload["authorization_receipt"])
+    verify_artifact_file_receipt(payload["run_identity_receipt"])
+    if not is_safe_slug(payload["run_id"]):
+        raise ValueError("marker run_id invalid")
+    if not isinstance(payload["output_root"], str) or not payload["output_root"].startswith("/"):
+        raise ValueError("marker output_root invalid")
+    if not is_sha256(payload["nonce"]):
+        raise ValueError("marker nonce invalid")
+    verify_artifact_file_receipt(payload["prior_marker_receipt"])
     subject_kind = payload["subject_kind"]
     if subject_kind not in SUBJECT_KINDS:
         raise ValueError("marker subject_kind is invalid")
@@ -590,6 +849,8 @@ def verify_run_history_marker(payload: Mapping[str, object]) -> None:
         raise ValueError("marker root_subject_cas must be a non-empty list")
     for row in root_cas:
         verify_root_subject_cas_row(row)
+    if [row["relative_path"] for row in root_cas] != sorted(row["relative_path"] for row in root_cas):
+        raise ValueError("marker root_subject_cas rows must be sorted by relative_path")
     projection = payload["subject_projection_sha256"]
     if projection is not None and not is_sha256(projection):
         raise ValueError("marker subject_projection_sha256 is invalid")
@@ -649,6 +910,8 @@ __all__ = [
     "completion_filename",
     "history_filename",
     "verify_registry_listing",
+    "registry_history_filenames",
+    "replay_run_history_registry",
     "verify_history_subject_receipt",
     "verify_root_subject_cas_row",
     "verify_worker_launch_claim",

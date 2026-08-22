@@ -1,5 +1,4 @@
 # AGU Task Board
-
 This board records non-trivial Codex-assisted work so future sessions can see what changed, where task artifacts live, and what remains blocked.
 
 Update this file when a task uses the full workflow, changes public behavior, or produces durable task artifacts under `docs/specs/`.
@@ -19,17 +18,222 @@ Update this file when a task uses the full workflow, changes public behavior, or
 ## Active P0–P5 execution
 
 The user-authorized sequence is tracked in
-[`docs/harness/P0-P5-EXECUTION-PLAN.md`](P0-P5-EXECUTION-PLAN.md). P0 is the
-current phase. Each phase must be verified on its own `codex/agu-pN` branch,
-pushed, merged into `main`, and re-verified after the merge. P0 does not
-authorize TASK-0258 model execution, Module B, readiness, or blind inference.
+[`docs/harness/P0-P5-EXECUTION-PLAN.md`](P0-P5-EXECUTION-PLAN.md). P1 is now
+closed by the sealed independent fresh-context review receipt; the historical
+failed review had `Critical=7 / Required=5 / Optional=3`; see
+`docs/specs/TASK-0258-temporal-canary/fresh-context-review-2026-08-20.md`.
+Each phase must be verified on its own `codex/agu-pN` branch, pushed, merged
+into `main`, and re-verified after the merge. P0 does not authorize TASK-0258
+model execution, Module B, readiness, or blind inference.
+
+The 2026-08-22 operating decision is to continue repository-local code,
+review-only synthetic scenarios, capability probes, pytest, and Harness checks
+without Apple Developer Program access. The ad-hoc/no-sudo probe remains
+diagnostic only; it cannot supply Endpoint Security entitlement, user approval,
+kernel read-isolation evidence, rerun authorization, or P5 readiness. P2 and
+P3–P5 therefore remain open; P1 is sealed. The post-team handoff is
+documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 ## In Progress
+
+> Local Endpoint Security transcript handoff (2026-08-22):
+> `scripts/inspect_endpoint_security_transcript.py` safely validates an
+> absolute regular non-symlink C JSONL transcript and its clean finalization,
+> returning only `valid_diagnostic_transcript`; it cannot create authorization,
+> kernel evidence, or P5 readiness.
+
+> Current P1 review handoff (2026-08-22):
+> `docs/specs/TASK-0258-temporal-canary/fresh-context-review-handoff-2026-08-22.md`
+> now fixes the exact target `codex/agu-p1-remediation-2@46c35e6`, baseline `c5157f2`, 46-file
+> diff SHA `3a962603…`, reproducible commands, and required independent `Critical=0 /
+> Required=0` receipt fields. It is a handoff only; it does not claim a passing
+> review or authorize P2/P3/P4/P5.
+
+> Current P1 remediation (2026-08-22): commit `9fd347a` addresses the previous
+> review's three Required findings: stable descriptor-relative candidate-bundle
+> publication/replay, deeply immutable review-only capability objects with
+> JSON-compatible frozen containers, and automatic history-lock acquisition by
+> registry claim/completion sealers. Verification is 290 focused TASK-0258
+> tests and 2,158 full-suite tests, with Harness, local service curl, local
+> simulation, capability probe, and clean-archive replay passing. A new
+> independent sealed review is in progress; P1 remains open and P2 remains
+> externally blocked.
+
+> Latest P1 remediation (2026-08-22): commit `afbfef0` addresses the four
+> Required and one Optional findings from the independent review of `9fd347a`:
+> capabilities now expose defensive copies backed by immutable snapshots;
+> bundle publication/replay revalidates parent-directory identity and cleans
+> every FD through `ExitStack`; registry sealers reject foreign registry FDs
+> without a matching held lock; and the obsolete caller-held bundle output
+> lock parameter is removed. Verification is 295 focused TASK-0258 tests and
+> 2,163 full-suite tests, with Harness, simulation, capability probe, and
+> clean-archive replay passing. A new independent sealed review is required;
+> P1 remains open and P2 remains externally blocked.
+
+> Latest P1 remediation (2026-08-22): commit `c219b22` closes the next
+> publication-boundary findings by making public candidate-bundle replay
+> descriptor-only, checking bundle-parent identity before and after work,
+> moving candidate/result/failure topology validation to stable output-root
+> FDs, and binding nested generation staging writes/cleanup to a stable stage
+> FD. Verification is 314 focused TASK-0258 tests and 2,182 full-suite tests,
+> with Harness/Ruff/simulation/probe checks passing. A fresh exact review is
+> required; P1 remains open and P2 remains externally blocked.
+
+> Latest P1 remediation (2026-08-22): commit `0405f67` closes the next
+> descriptor/bootstrap findings: the CLI binds candidate/result receipt reads
+> to one stable output-root transaction; terminal replay locks through its
+> already-open output-parent FD; bootstrap execution is direct from FD203 and
+> runtime import roots are identity-checked before/after dispatch; and stage
+> reopen/cleanup failures fail closed. Verification is 315 focused TASK-0258
+> tests and 2,183 full-suite tests, with Harness, Ruff, local service curl,
+> simulation, and capability probe passing. A fresh exact review is required;
+> P1 remains open, P2 remains externally blocked, and no platform proof or P5
+> readiness is claimed.
+
+> Latest P1 remediation (2026-08-22): commit `d009687` closes the two Required
+> findings from the fresh review of `0405f67`: `exclusive_flock_at` now binds
+> lock leaf/parent paths to the supplied directory FD, including held-handle
+> reuse; and all fs_usage worker/observer cleanup paths terminate the full
+> process group with SIGKILL escalation, covered by a forked-descendant test.
+> Verification is 317 focused TASK-0258 tests and 2,185 full-suite tests,
+> with Harness, Ruff, simulation, and capability probe passing. A new exact
+> review is required; P1 remains open, P2 remains externally blocked, and no
+> platform proof or P5 readiness is claimed.
+
+> Latest P1 remediation (2026-08-22): commit `db839e7` closes the remaining
+> lock-leaf identity finding from the exact review of `d009687`. `FlockHandle`
+> now records and rechecks the lock leaf device/inode through the stable parent
+> descriptor; missing, replaced, and non-regular leaves are rejected, and
+> every lock acquisition entry point refuses implicit `O_CREAT` recreation.
+> Publication/registry initialization provisions persistent lock leaves and
+> `.identity` anchors explicitly, while review/replay opens only existing
+> anchored locks. A parent-directory xattr is authoritative and is checked
+> before and after flock acquisition, so paired leaf/sidecar replacement now
+> rejects both the old handle and the replacement acquisition. Verification is
+> 318 focused TASK-0258 tests and 2,186
+> full-suite tests, with Harness, Ruff, simulation, and capability probe passing.
+> A fresh exact review of `db839e7` is required; P1 remains open, P2 remains
+> externally blocked, and no platform proof or P5 readiness is claimed.
+
+> Latest P1 remediation (2026-08-22): commit `46c35e6` closes the follow-up
+> parent-identity findings by making no-directory-FD held-handle validation
+> compare the current parent inode with the recorded identity, and by making
+> path-based acquisition recheck the stable parent FD and pathname after
+> `flock()` before yielding. New regressions cover parent replacement during
+> handle reuse and a post-flock pathname replacement race. Verification is
+> 320 focused TASK-0258 tests and 2,188 full-suite tests, with Harness/Ruff,
+> simulation, and capability-probe checks passing. A fresh exact independent
+> review is required; P1 remains open, P2 remains externally blocked, and no
+> platform proof or P5 readiness is claimed.
+
+> Final independent P1 receipt (2026-08-22): the exact target `46c35e6` was
+> reviewed read-only by a fresh context against `c5157f2`, with 46 total files,
+> 36 Python files, and diff SHA `3a962603…`. The sealed receipt reports
+> `scope_complete=true`, `sealed_receipt=true`, Critical=0, Required=0, and
+> Optional=0. P1 is closed. Local verification is 320 focused TASK-0258 tests
+> and 2,188 full-suite tests; P2 remains `blocked_external_authorization` and
+> no Apple platform proof or P5 readiness is claimed.
+
+> Latest P1 remediation (2026-08-22): commit `b18c784` closes the output-root
+> replacement finding from the `afbfef0` review by binding both
+> `candidate_dir.parent` and `candidate_dir` to stable output-root/candidate
+> FDs before and after bundle publication/replay. Verification is 297 focused
+> TASK-0258 tests and 2,165 full-suite tests, with Harness, simulation,
+> capability probe, and clean-archive replay passing. A fresh independent
+> sealed review is required; P1 remains open and P2 remains externally blocked.
+
+> Latest P1 remediation (2026-08-22): commit `29897ff` adds path-specific
+> schema replay for all ten candidate members, canonical JSON/JSONL and
+> resource-log receipt/counter binding, verification internal-hash checks,
+> stable parent-directory-FD review locks, candidate marker↔bundle receipt
+> binding, and pre-publication candidate-gate history-prefix binding. The
+> current local evidence is 281 focused TASK-0258 tests and 2,149 full-suite
+> tests, with 5 skips and 15 warnings. A new independent fresh-context sealed
+> review is still required; P2 remains externally blocked and no P1/P2/P5
+> completion is claimed.
+
+> Independent review attempt result (2026-08-22): the exact `5549408` target
+> was inspected read-only with `scope_complete=false`, `sealed_receipt=false`,
+> `Critical=0`, `Required=0`, `Optional=0`, and no file changes. Focused 284
+> tests and scoped Ruff passed, but the isolated snapshot lacked `.venv` and
+> repository-local datasets/checkpoints for complete full-scope verification.
+> This is not a sealed 0/0 receipt; P1 remains open.
+
+> Latest P1 remediation follow-up (2026-08-22): commit `5549408` is the new
+> review target against `c5157f2`, with 46 files and diff SHA
+> `5e88f55058e0563eef1cc1505d864ba7920d196eccced7c30face6b93b331f08`.
+> It binds candidate-gate verification/producer-chain receipts to candidate
+> bytes, binds held locks to their parent-directory identities, proves the
+> executed bootstrap is FD203, and requires complete read-isolation
+> allowlist/event coverage. Verification is 284 focused TASK-0258 tests and
+> 2,152 full-suite tests, 5 skipped, 15 warnings; a new independent sealed
+> review is still required, P2 remains externally blocked, and no P1/P2/P5
+> completion is claimed.
+
+> Latest independent review findings and follow-up (2026-08-22): the fresh
+> read-only review of `5549408` returned `scope_complete=false`,
+> `sealed_receipt=false`, `Critical=0`, `Required=2`, `Optional=1`. The
+> Required findings were missing registry-FD parent binding in both registry
+> sealers and acceptance of a caller-selected output lock; the Optional
+> finding was arbitrary self-signed `Authority=` classification. Commits
+> `313582b` and `d8569a8` add the fixes and regression tests. The new exact
+> review target is `d8569a8` with diff SHA
+> `687babd2eb8857a37da21c09fecb617a4f04c6e0d7e3885cf27253879c735428`;
+> P1 remains open until a fresh sealed `Critical=0 / Required=0` receipt.
+
+> Latest P1 remediation (2026-08-22): branch `codex/agu-p1-remediation-2` is
+> now at `b752a40` after fixing the unsealed re-review findings: immutable
+> `FlockHandle` seal state and one locked, descriptor-relative registry
+> transaction. The focused suite is `280 passed` and the full suite is
+> `2,148 passed, 5 skipped, 15 warnings`; Harness, local simulation, capability
+> probe, and local service curl hook also passed/recorded. The independent
+> full 45-file review at this exact target is still required before P1 can be
+> closed or merged into `main`; P2 remains externally blocked without
+> Apple-granted Endpoint Security authorization.
+
+> Follow-up verification (2026-08-22): the amended-implementation-review, static-input, authorization-binding, run-admission-binding, terminal-binding, real bootstrap-launcher integration, bounded `fs_usage` diagnostic parser/capture, worker launch-input validation, synthetic no-follow context hardening, diagnostic CLI path hardening, and local Endpoint Security client/probe hardening are local, review-only evidence; current totals are 264 TASK-0258 tests and 2,132 full-suite tests. The independent fresh-context review still must be externally issued/repeated; Apple Developer access remains optional for this local work and external for the real Endpoint Security gate.
+
+> Local audit/worker hardening (2026-08-22): `parse_fsusage_transcript()` and the
+> UTF-8 transcript bytes and parsed event rows against the v2 read-event caps,
+> rejecting invalid or over-limit input before it can grow the diagnostic event
+> list. The audit harness drains its diagnostic pipes while retaining at most
+> the same byte cap, defers malformed-input failures to the main caller, and
+> propagates background iterator failures and rejects unfinished drain threads;
+> the worker runner rejects non-list argv, embedded NULs, and invalid timeout
+> values before spawning, and the audit path kills/reaps the worker group on
+> timeout. These are local resource/input bounds only; raw `fs_usage` text
+> still cannot mint kernel read-isolation evidence.
+
+> Local P3 preparation (2026-08-22): the review-only rerun-authorization replay now binds the exact approval/review/static-input receipts, fixed operation list, absent output and candidate-bundle paths, registry identity, and `module_b_authorized=false`. It returns no production capability and consumes no run; the actual exact-SHA authorization remains an external/user-issued gate.
+
+> Local static-input preparation (2026-08-22): `VerifiedModuleAStaticInputs` now replays the complete explicit temporal-plan/TASK-0257 graph, including all ordered JPEG, source-video, and checkpoint receipts, computes the caller-frozen projection, and returns only `production_capability=false`. Its review-only replay entry point reopens the stored plan and replays the parent graph on each use, including in-memory snapshot mutation rejection. The review-only authorization, run-admission, and terminal bindings require this per-use replay before binding the static-input contract. They use the repository's parent public verifier and do not authorize model execution or P5.
+
+> Latest implementation push (2026-08-22): `codex/agu-p2` includes the current implementation with bounded `fs_usage` parser/capture, main-thread propagation of capture failures, unfinished-drain rejection, shared worker argv/environment/process-group hardening, worker-group timeout kill/reap, and local Endpoint Security probe/client hardening including strict PID/timeout parsing, bounded target-exit/timeout shutdown, exact notify-result serialization, fail-closed notification-sequence gap detection, and flush/fsync-before-close transcript finalization; `main` remains at `c5157f2` because the independent review and external platform gates are still open.
+
+> TASK-0258 latest local remediation note (2026-08-22): branch `codex/agu-p2`; repository-local receipt, replay, path, bootstrap, worker, review-only, and Endpoint Security probe/client hardening remains diagnostic-only, including bounded UTF-8/row-count `fs_usage` parsing, bounded diagnostic pipe capture with main-thread error propagation and unfinished-drain rejection, shared worker argv/environment/process-group hardening, worker-group timeout kill/reap, fail-closed worker argv/timeout validation, strict signed-artifact status handling, canonical artifact path binding, no-follow/exclusive C transcript output, bounded fork/pidversion lineage, JSON-safe path encoding, strict decimal PID/timeout parsing, bounded target-exit/timeout client shutdown, exact notify-result serialization, fail-closed `seq_num`/`global_seq_num` gap detection, finalization-row count/byte checks before flush/fsync, and strict bounded Python JSONL parsing of the C projection with duplicate-field, result-shape, path, identifier, sequence-order, and C-aligned 512-byte row-cap rejection. Verification is 257 focused TASK-0258 tests and 2,125 full-suite tests; `main` remains at `c5157f2` because P1/P2 external and independent-review gates are still open. No Apple platform proof, P5 readiness, or v2 terminal/result artifact is claimed.
+> TASK-0258 latest local remediation note (2026-08-22): branch `codex/agu-p2`; repository-local receipt, replay, path, bootstrap, worker, review-only, and Endpoint Security probe/client hardening remains diagnostic-only, including bounded UTF-8/row-count `fs_usage` parsing, bounded diagnostic pipe capture with main-thread error propagation and unfinished-drain rejection, shared worker argv/environment/process-group hardening, worker-group timeout kill/reap, fail-closed worker argv/timeout validation, observer/worker process-group cleanup on observer-start, drain-cleanup, and timeout failures, strict signed-artifact status handling, canonical artifact path binding, no-follow/exclusive C transcript output, bounded fork/pidversion lineage, JSON-safe path encoding, strict decimal PID/timeout parsing, bounded target-exit/timeout client shutdown, exact notify-result serialization, fail-closed `seq_num`/`global_seq_num` gap detection, finalization-row count/byte checks before flush/fsync, and strict bounded Python JSONL parsing of the C projection with duplicate-field, result-shape, path, identifier, sequence-order, and C-aligned 512-byte row-cap rejection. Verification is 260 focused TASK-0258 tests and 2,128 full-suite tests; `main` remains at `c5157f2` because P1/P2 external and independent-review gates are still open. No Apple platform proof, P5 readiness, or v2 terminal/result artifact is claimed.
+> TASK-0258 latest local remediation note (2026-08-22): branch `codex/agu-p2`; repository-local receipt, replay, path, bootstrap, worker, review-only, and Endpoint Security probe/client hardening remains diagnostic-only, including bounded UTF-8/row-count `fs_usage` parsing, bounded diagnostic pipe capture with main-thread error propagation and unfinished-drain rejection, shared worker argv/environment/process-group hardening, worker-group timeout kill/reap, fail-closed worker argv/timeout validation, observer/worker process-group cleanup on observer-start, drain-cleanup, and timeout failures, strict signed-artifact status handling, canonical artifact path binding, no-follow/exclusive C transcript output, bounded fork/pidversion lineage, JSON-safe path encoding, strict decimal PID/timeout parsing, bounded target-exit/timeout client shutdown, exact notify-result serialization, fail-closed `seq_num`/`global_seq_num` gap detection, finalization-row count/byte checks before flush/fsync, strict bounded Python JSONL parsing of the C projection with duplicate-field, result-shape, path, identifier, sequence-order, and C-aligned 512-byte row-cap rejection, and local simulation coverage of the C-shaped clean finalization path. Verification is 260 focused TASK-0258 tests and 2,128 full-suite tests; `main` remains at `c5157f2` because P1/P2 external and independent-review gates are still open. No Apple platform proof, P5 readiness, or v2 terminal/result artifact is claimed.
+
+> TASK-0258 row-count correction (2026-08-22): the historical numeric summary
+> in the active row below is superseded by the latest verified totals of 262
+> focused TASK-0258 tests and 2,130 full-suite tests. The row's gate conclusion
+> is unchanged: P1/P2 remain open and no production evidence is claimed.
+
+> Latest verification supersession (2026-08-22): after the synthetic context
+> no-follow hardening, macOS temporary-path canonicalization, and diagnostic
+> CLI path hardening, the current totals are 264 focused TASK-0258 tests and
+> 2,132 full-suite tests. This supersedes the older 260/2,128 and 262/2,130
+> figures in the historical remediation notes.
+
+> Verification scope note (2026-08-22): diff-scoped Ruff over the TASK-0258
+> Python change set passes. A repository-wide `ruff check app scripts tests`
+> audit reports 52 pre-existing findings outside this task scope; no unrelated
+> cleanup is being claimed as part of P1/P2 remediation.
 
 | Task ID | Task Name | Phase | Owner | Blockers | Docs | Last Updated |
 | --- | --- | --- | --- | --- | --- | --- |
 | TASK-0041 | Implement raw-only official box score pipeline | W4 Development | Codex | Frozen CHI-UTA v11 completed 390/390 and was sealed before truth reveal, but fails: fixed eight-type count-only F1 upper bound is 0.5339 and automatic-confirmed upper bound is 0.0053. Post-reveal development expands candidate coverage to 8/8 event types and the complete-scope count-only upper bound to 0.6322. Four disjoint hash-bound ball-release review rounds now cover 128 hard windows and lift four-game shot-validity pooled F1 from 0.786 to 0.844, but weakest-game precision remains 0.727. Label-free RapidOCR broadcast-state evidence raises pooled F1 to 0.853, but weakest-game precision is still only 0.733. The 110-event, 24-position causal review feeds a directly trained MobileNet temporal convolution with 0.732 pooled and 0.694 weakest-game balanced accuracy. Per-position ball/rim/player geometry raises pooled F1 to 0.773 but leaves the weakest game at 0.688. Full causal-window detection fills the sampling grid to 2,640/2,640 positions but raises actual ball visibility only from 975 to 1,047; raw-box and supported-track fusion reach just 0.625 and 0.656 weakest-game balanced accuracy. A hash-bound MUVY audit retained 177/373 proposed small-ball boxes, but COCO transfer still loses to BODD on an event-held screen: P/R/mAP50 0.424/0.182/0.217 versus 0.452/0.364/0.232. The immediate blocker remains higher-quality, game-diverse small-ball recall/precision with hard negatives, followed by rim/court-constrained trajectory normalization; assist/steal/turnover recall, timing, actor identity, causal links and two fresh blind games also remain open. Runtime Codex answers remain forbidden; CHI-UTA is development-only and HOU-ORL G1/G2 remain sealed. | `docs/specs/TASK-0041-raw-only-official-box-score/`, `docs/specs/TASK-0044-public-research-data/`, wiki `agu-complete-box-score-plan-2026-07-13` | 2026-07-30 |
-| TASK-0258 | Screen one frozen tiled-Swin temporal variable | W5 Code Review | Codex | Amendment-001 implementation approval is sealed, and the v2 implementation/test slice is present in the P0 working tree. Focused TASK-0258 tests pass 161/161; the Harness gate passes; the separate final fresh-context implementation review, platform read-isolation/FD sandbox proof, exact v2 rerun authorization, and v2 terminal/result artifact remain open. Module B, runtime, promotion, readiness, and blind inference remain unauthorized/unchanged. | `docs/specs/TASK-0258-temporal-canary/`, `docs/harness/P0-P5-EXECUTION-PLAN.md`, `analysis_outputs/public_research/task0258_module_a_amendment_approval/`, wiki `agu-task0258-v2-schema-layer-2026-08-17` | 2026-08-20 |
+| TASK-0258 | Screen one frozen tiled-Swin temporal variable | Blocked | Codex | P1 is closed by the sealed independent fresh-context receipt for `codex/agu-p1-remediation-2@46c35e6` (`scope_complete=true`, `sealed_receipt=true`, Critical=0, Required=0, Optional=0). Local verification is 320 focused TASK-0258 tests and 2,188 full-suite tests, 5 skipped, 15 warnings. P2 remains externally blocked: the local ad-hoc probe is diagnostic-only and no Apple Endpoint Security entitlement, external approval, kernel read-isolation evidence, exact rerun authorization, or P5 readiness is claimed. Module B, runtime, promotion, readiness, and blind inference remain unauthorized/unchanged. | `app/analysis/task0258_v2_artifacts.py`, `app/analysis/task0258_v2_fs.py`, `app/analysis/task0258_v2_pipeline.py`, `app/analysis/task0258_v2_read_isolation.py`, `app/analysis/task0258_v2_registry.py`, `app/analysis/task0258_v2_pipeline_cli.py`, `scripts/task0258_module_a_verified_bootstrap.py`, `scripts/task0258_endpoint_security_capability.py`, `docs/specs/TASK-0258-temporal-canary/fresh-context-review-handoff-2026-08-22.md`, `docs/specs/TASK-0258-temporal-canary/fresh-context-review-receipt-2026-08-22.md`, `docs/harness/P0-P5-EXECUTION-PLAN.md`, wiki `agu` | 2026-08-22 |
 
 | TASK-0091 | Freeze MUVS dense multi-frame source protocol | W4 Development | Codex | Full 110-frame remote materialization is slow: one remote-seek smoke sequence took about 19 minutes. A sequential-download slice now validates 2 coordinates/10 frames, but it is too small for a model screen; no runtime promotion. | `app/analysis/muvs_dense_sequence.py`, dense-sequence CLIs, `analysis_outputs/public_research/muvs_dense_sequence_dev_v1/`, `docs/current-solution.md`, `docs/datasets.md`, wiki `agu-complete-box-score-plan-2026-07-13` | 2026-07-31 |
 

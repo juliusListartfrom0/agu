@@ -4,41 +4,89 @@ Status: **IMPLEMENTATION AUTHORIZED — PARTIALLY IMPLEMENTED** (amendment fresh
 review Critical/Required 0/0, exact-SHA approval sealed 2026-08-17; see
 `amendment_implementation_approval.json`).
 
-## Progress to date (2026-08-20)
+## Progress to date (2026-08-22)
 
-The schema/validation/grammar/persistence layer is complete (TDD, 152 tests
-passing, ruff clean); the execution layer is largely implemented and smoke-verified.
+The schema/validation/grammar/persistence layer is partially implemented and
+being hardened after the independent fresh-context review failed with
+`Critical=7 / Required=5 / Optional=3` (see
+`fresh-context-review-2026-08-20.md`). The remediation slice now has 270
+focused tests passing and keeps unauthorized v2 publication fail-closed; it is
+not a passing implementation-review seal.
 Implemented modules:
 
 - `app/analysis/task0258_module_a_v2.py` — receipt primitives + exact field sets.
-- `app/analysis/task0258_run_history.py` — run-history events/graph/marker/claim/admission/completion schemas.
+- `app/analysis/task0258_run_history.py` — run-history events/graph/marker/claim/admission/completion schemas plus descriptor-relative no-follow durable replay.
 - `app/analysis/task0258_v2_gate.py` — candidate/result check sequences + failure matrix.
 - `app/analysis/task0258_v2_artifacts.py` — candidate/failure/bundle/result/failure artifact schemas + membership.
 - `app/analysis/task0258_v2_fs.py` — atomic publication primitives.
 - `app/analysis/task0258_v2_registry.py` — registry durable write path + `create_run_history_registry`.
-- `app/analysis/task0258_v2_verification.py` — verification embedding/attempt/resource schemas, float32 projection, embedding builder.
+- `app/analysis/task0258_v2_verification.py` — verification embedding/attempt/resource schemas, float32 projection, embedding builder, and attempt-level read-isolation binding.
 - `app/analysis/task0258_v2_verification_extract.py` — empty-state extraction wiring (parent reuse).
-- `app/analysis/task0258_v2_read_isolation.py` — read-isolation policy/attestation schemas.
+- `app/analysis/task0258_v2_read_isolation.py` — read-isolation policy/attestation schemas and local policy binding.
 - `app/analysis/task0258_v2_bootstrap.py` + `scripts/task0258_module_a_verified_bootstrap.py` — authorized pre-import bootstrap core + FD entry.
 - `app/analysis/task0258_v2_pipeline.py` — candidate/bundle/post-publication builders + sealers.
 - `app/analysis/task0258_v2_pipeline_cli.py` — full pipeline orchestration (registry→candidate→bundle→result).
 - `app/analysis/task0258_v2_worker_runner.py` — worker subprocess isolation runner.
+- `app/analysis/task0258_v2_capabilities.py` — review-only synthetic contexts,
+  no-follow canonical-byte loaders, durable run-history replay, admission
+  claim/admission/completion replay, candidate-gate schema/trust-spine replay,
+  terminal result/failure replay, and read-isolation policy/attestation
+  cross-bound loading, complete verification-attempt replay, and implementation
+  approval full parent/amendment/review/baseline receipt replay, plus amended
+  implementation-review/fresh-review and review-only rerun-authorization
+  receipt replay and complete review-only static-input receipt-graph replay,
+  including per-use reopen/replay, authorization, run-admission, and terminal
+  static-input binding;
+  these
+  contexts also bind the attempt to the loaded admission/history trust spine
+  and provide a no-write preflight replay, but cannot authorize production
+  publication.
 - `scripts/smoke_v2_verification_extraction.py` — real empty-state Swin extraction smoke.
 
-Current working-tree verification: 161 TASK-0258 tests pass and the AGU Harness
-structural gate passes. The scoped Ruff check currently has five findings in
-the pre-P0 working tree; P0 is responsible for clearing them. The existing
+Current working-tree verification: 270 TASK-0258 tests pass and the AGU Harness
+structural gate passes. The full repository suite reports 2,138 passed, 5
+skipped, and 15 warnings. Scoped Ruff/format checks are clean after the P0 and
+P1 remediation work. The existing
 implementation plan records a real empty-state extraction smoke producing 45
 rows (4x768) with computational projection
 `3d8dfba9…3c72`, but no retained v2 result/terminal receipt has been found in
 the current repository state. This smoke claim is therefore not a v2 run
 result and does not authorize execution.
 
-Remaining gates: a different fresh-context implementation review, the
-kernel-audit read-isolation production path (macOS Endpoint Security / syscall
-audit), and the OS-enforced FD review sandbox driver. The worker subprocess
-isolation layer that audit wraps is implemented, but the full production proof
-boundary is not yet sealed. Module B and the v2 rerun remain unauthorized.
+Remaining gates: close the fresh-context findings and repeat the independent
+review, then complete the kernel-audit read-isolation production path (macOS
+Endpoint Security / syscall audit), OS-enforced FD review sandbox driver,
+externally authenticated verified loaders, and exact authorization-bound
+production admission. The bootstrap now rejects non-fixed target commands and
+FD assignments and reopens the standalone runtime contract through the
+four-field receipt with descriptor-relative no-follow/canonical checks; the
+runtime contract and kernel/provider evidence are still external gates. The
+Python audit parser also refuses to mint an attestation from raw or caller-
+supplied "verified" rows. The current review-only
+  contexts/loaders are deliberately not an admission substitute. The
+  worker subprocess layer now sanitizes its environment, starts a process group,
+  kills the group on timeout, and rejects non-list argv, embedded NULs, and
+  invalid timeouts before spawn. The fs_usage harness bounds diagnostic pipe
+  capture before parsing, propagates malformed/iterator failures to the main
+  caller, and rejects unfinished drain threads. The fs_usage audit entry point
+  also reuses the worker launch validator, sanitized environment, and
+  new-process-group boundary, killing/reaping the worker group on timeout; the
+  Endpoint Security capability probe now requires a non-adhoc signed artifact
+  before recognizing the entitlement, and the C client applies no-follow/
+  exclusive transcript output, bounded fork/pidversion lineage,
+  path-truncation rejection, JSON-safe path encoding, strict decimal
+  PID/timeout parsing, bounded target-exit/timeout shutdown, exact
+  notify-result serialization, and fail-closed notification-sequence gap
+  detection; successful transcript finalization flushes and `fsync`s the
+  descriptor before close; the C client appends a finalization row containing
+  clean status and event-row/byte counts before that flush, while the Python
+  diagnostic boundary strictly parses the resulting JSONL projection, rejects
+  missing/unclean finalization, duplicate fields and sequence regression, and
+  enforces the shared row/byte caps; the
+  full production proof boundary is not
+  sealed. The pipeline CLI now refuses production execution unless a future
+  external admission issuer is bound; its end-to-end tests require an explicit
+  synthetic-only flag. Module B and the v2 rerun remain unauthorized.
 
 This plan decomposes the amendment-001 v2 proof boundary into dependency-ordered
 phases matching the spec's acyclic hash order (amendment §"Acyclic producer and

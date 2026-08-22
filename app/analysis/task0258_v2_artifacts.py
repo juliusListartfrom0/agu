@@ -9,22 +9,34 @@ field set and every pinned constant field.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from hashlib import sha256
 
 from app.analysis.task0258_module_a_v2 import (
+    AUTHORIZATION_PROVIDER_ORDER,
     CANDIDATE_GATE_SCHEMA_V2,
     CANDIDATE_RECEIPT_BUNDLE_SCHEMA,
     MECHANICAL_FAILURE_SCHEMA_V2,
     MODULE_ID,
     POSTPUBLICATION_FAILURE_SCHEMA_V2,
     POSTPUBLICATION_VERIFICATION_SCHEMA_V2,
+    TILED_SWIN_ATTEMPT_SCHEMA_V2,
+    TILED_SWIN_EMBEDDING_SCHEMA_V2,
+    V2_PRODUCER_ATTEMPT_FIELDS,
+    V2_PRODUCER_EMBEDDING_FIELDS,
+    compact_canonical_json,
     is_sha256,
     verify_artifact_file_receipt,
+    verify_authorization_receipts,
     verify_exact_field_set,
     verify_history_artifact_receipt,
+    verify_internal_artifact_hash,
     verify_provider_slot,
     verify_provider_slots,
+    verify_run_history_contract_receipt,
     verify_static_input_contract,
+    verify_v2_receipt_fields,
 )
 from app.analysis.task0258_v2_gate import (
     CANDIDATE_PREPUBLICATION_CHECKS,
@@ -222,6 +234,299 @@ def verify_candidate_member_coverage(paths: object) -> None:
         raise ValueError("candidate member coverage is invalid (must be the exact ten members in order)")
 
 
+_PARENT_ARTIFACT_COMMON_FIELDS = frozenset(
+    {
+        "schema_version",
+        "module_id",
+        "purpose",
+        "runtime_consumable",
+        "training_consumable",
+        "formal_evaluation_eligible",
+        "promotion_eligible",
+        "promoted",
+    }
+)
+_TEMPORAL_RETROSPECTIVE_FIELDS = _PARENT_ARTIFACT_COMMON_FIELDS | frozenset(
+    {
+        "input_receipts",
+        "selection_protocol",
+        "source_selection_limitation",
+        "outer_folds",
+        "per_fit_environment",
+        "held_label_invariance",
+        "archived_task0257_comparator",
+        "error_bound_result",
+        "temporal_hypothesis_decision",
+        "artifact_sha256",
+    }
+)
+_FINAL_EVALUATOR_FIELDS = _PARENT_ARTIFACT_COMMON_FIELDS | frozenset(
+    {
+        "evaluator_role",
+        "input_receipts",
+        "representation_candidates",
+        "ordered_training_rows",
+        "logo_selection",
+        "selected_evaluator",
+        "all_45_refit",
+        "conditional_downstream",
+        "artifact_sha256",
+    }
+)
+
+
+def _reject_duplicate_json_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("candidate member JSON contains duplicate keys")
+        result[key] = value
+    return result
+
+
+def _decode_canonical_json_member(relative_path: str, encoded: bytes) -> Mapping[str, object]:
+    if not encoded.endswith(b"\n"):
+        raise ValueError(f"candidate JSON member is missing its final newline: {relative_path}")
+    try:
+        payload = json.loads(
+            encoded[:-1].decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"candidate JSON member is invalid: {relative_path}") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"candidate JSON member must be an object: {relative_path}")
+    expected = (compact_canonical_json(payload) + "\n").encode("utf-8")
+    if encoded != expected:
+        raise ValueError(f"candidate JSON member is not canonical: {relative_path}")
+    return payload
+
+
+def _verify_parent_artifact(payload: Mapping[str, object], *, schema_version: str, fields: frozenset[str]) -> None:
+    verify_exact_field_set(payload, fields)
+    if payload.get("schema_version") != schema_version or payload.get("module_id") != MODULE_ID:
+        raise ValueError("candidate parent artifact identity is invalid")
+    if payload.get("purpose") != "development_diagnostic_only":
+        raise ValueError("candidate parent artifact purpose is invalid")
+    for field in (
+        "runtime_consumable",
+        "training_consumable",
+        "formal_evaluation_eligible",
+        "promotion_eligible",
+        "promoted",
+    ):
+        if payload.get(field) is not False:
+            raise ValueError("candidate parent artifact eligibility flags are invalid")
+    verify_internal_artifact_hash(payload)
+
+
+def _verify_candidate_producer_embedding(payload: Mapping[str, object]) -> None:
+    verify_exact_field_set(payload, V2_PRODUCER_EMBEDDING_FIELDS)
+    if payload.get("schema_version") != TILED_SWIN_EMBEDDING_SCHEMA_V2:
+        raise ValueError("candidate producer embedding schema is invalid")
+    _verify_parent_artifact(payload, schema_version=TILED_SWIN_EMBEDDING_SCHEMA_V2, fields=V2_PRODUCER_EMBEDDING_FIELDS)
+    verify_v2_receipt_fields(_ordered_v2_payload(payload))
+    verify_artifact_file_receipt(payload["plan_receipt"])
+    if type(payload.get("row_count")) is not int or payload["row_count"] != 45:
+        raise ValueError("candidate producer embedding row_count is invalid")
+    if not isinstance(payload.get("examples"), (list, tuple)):
+        raise ValueError("candidate producer embedding examples are invalid")
+    if not isinstance(payload.get("attempt_chain"), (list, tuple)):
+        raise ValueError("candidate producer embedding attempt_chain is invalid")
+
+
+def _verify_candidate_producer_attempt(payload: Mapping[str, object]) -> None:
+    _verify_parent_artifact(payload, schema_version=TILED_SWIN_ATTEMPT_SCHEMA_V2, fields=V2_PRODUCER_ATTEMPT_FIELDS)
+    verify_v2_receipt_fields(_ordered_v2_payload(payload))
+    verify_artifact_file_receipt(payload["plan_receipt"])
+    ordinal = payload.get("attempt_ordinal")
+    if type(ordinal) is not int or ordinal != 1 or payload.get("prior_attempt_receipt") is not None:
+        raise ValueError("candidate producer attempt ordinal/chain is invalid")
+    for field in (
+        "started_prefix_count",
+        "completed_prefix_count",
+        "new_rows_verified",
+        "cumulative_active_runtime_nanoseconds",
+        "cumulative_resource_samples",
+        "cumulative_resource_log_bytes",
+    ):
+        if type(payload.get(field)) is not int or payload[field] < 0:
+            raise ValueError(f"candidate producer attempt counter is invalid: {field}")
+    if payload["started_prefix_count"] > payload["completed_prefix_count"] or payload["completed_prefix_count"] > 45:
+        raise ValueError("candidate producer attempt prefix counters are invalid")
+    if payload["new_rows_verified"] != payload["completed_prefix_count"] - payload["started_prefix_count"]:
+        raise ValueError("candidate producer attempt new_rows_verified is invalid")
+    _verify_member_resource_receipt(payload["resource_log_receipt"])
+
+
+def _verify_member_resource_receipt(value: object) -> None:
+    if not isinstance(value, Mapping) or set(value) != {"size_bytes", "file_sha256"}:
+        raise ValueError("candidate resource log receipt shape is invalid")
+    if type(value["size_bytes"]) is not int or value["size_bytes"] < 0 or not is_sha256(value["file_sha256"]):
+        raise ValueError("candidate resource log receipt values are invalid")
+
+
+def _ordered_v2_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    """Normalize an object decoded from sorted canonical JSON for legacy order checks."""
+    normalized = dict(payload)
+    receipts = payload.get("authorization_receipts")
+    if isinstance(receipts, Mapping) and set(receipts) == set(AUTHORIZATION_PROVIDER_ORDER):
+        normalized["authorization_receipts"] = {
+            provider: receipts[provider] for provider in AUTHORIZATION_PROVIDER_ORDER
+        }
+    return normalized
+
+
+def _verify_candidate_json_member(relative_path: str, payload: Mapping[str, object]) -> None:
+    if relative_path == "candidate_gate.json":
+        verify_candidate_gate(payload)
+    elif relative_path == "terminal_attempt/attempt_record.json":
+        _verify_candidate_producer_attempt(payload)
+    elif relative_path == "producer_tiled_swin_embeddings.json":
+        _verify_candidate_producer_embedding(payload)
+    elif relative_path == "verification_attempt/attempt_record.json":
+        from app.analysis.task0258_v2_verification import verify_verification_attempt
+
+        verify_internal_artifact_hash(payload)
+        verify_verification_attempt(_ordered_v2_payload(payload))
+        _verify_member_resource_receipt(payload["resource_log_receipt"])
+    elif relative_path == "verification_tiled_swin_embeddings.json":
+        from app.analysis.task0258_v2_verification import verify_verification_embedding
+
+        verify_internal_artifact_hash(payload)
+        verify_verification_embedding(_ordered_v2_payload(payload))
+    elif relative_path == "temporal_retrospective.json":
+        from app.analysis.vru_causal_temporal_retrospective import TEMPORAL_RETROSPECTIVE_SCHEMA
+
+        _verify_parent_artifact(
+            payload, schema_version=TEMPORAL_RETROSPECTIVE_SCHEMA, fields=_TEMPORAL_RETROSPECTIVE_FIELDS
+        )
+    elif relative_path in {"baseline_final_evaluator.json", "candidate_final_evaluator.json"}:
+        from app.analysis.vru_causal_temporal_retrospective import FINAL_EVALUATOR_SCHEMA
+
+        _verify_parent_artifact(payload, schema_version=FINAL_EVALUATOR_SCHEMA, fields=_FINAL_EVALUATOR_FIELDS)
+        expected_role = "baseline" if relative_path.startswith("baseline_") else "candidate"
+        if payload.get("evaluator_role") != expected_role:
+            raise ValueError("candidate evaluator role is not bound to its member path")
+    else:
+        raise ValueError(f"candidate JSON member path is not authorized: {relative_path}")
+
+
+def _verify_candidate_terminal_resource_log(encoded: bytes) -> int:
+    from app.analysis.vru_causal_temporal_retrospective import verify_resource_log_bytes
+
+    samples, _ = verify_resource_log_bytes(
+        encoded,
+        expected_attempt_ordinal=1,
+        prior_cumulative_samples=0,
+        prior_consecutive_breach_count=None,
+    )
+    return samples
+
+
+def _verify_candidate_verification_resource_log(encoded: bytes) -> int:
+    from app.analysis.task0258_v2_verification import verify_verification_resource_sample
+
+    if encoded and not encoded.endswith(b"\n"):
+        raise ValueError("candidate verification resource log is truncated")
+    rows = encoded.splitlines(keepends=True)
+    for ordinal, line in enumerate(rows, start=1):
+        payload = _decode_canonical_json_member("verification_attempt/resource_guard.jsonl", line)
+        verify_verification_resource_sample(payload)
+        if payload["attempt_sample_ordinal"] != ordinal or payload["cumulative_sample_ordinal"] != ordinal:
+            raise ValueError("candidate verification resource sample ordinals are not contiguous")
+    return len(rows)
+
+
+def verify_candidate_member_bytes(members: Mapping[str, bytes]) -> None:
+    """Validate the exact candidate ten-pack, including schema and log bindings."""
+    verify_candidate_member_coverage(list(members))
+    if any(not isinstance(data, bytes) for data in members.values()):
+        raise ValueError("candidate members must be byte strings")
+    decoded: dict[str, Mapping[str, object]] = {}
+    terminal_samples = _verify_candidate_terminal_resource_log(members[CANDIDATE_MEMBER_PATHS[0]])
+    verification_samples = _verify_candidate_verification_resource_log(members[CANDIDATE_MEMBER_PATHS[3]])
+    for relative_path in CANDIDATE_MEMBER_PATHS:
+        if relative_path.endswith(".json"):
+            payload = _decode_canonical_json_member(relative_path, members[relative_path])
+            _verify_candidate_json_member(relative_path, payload)
+            decoded[relative_path] = payload
+    terminal_attempt = decoded["terminal_attempt/attempt_record.json"]
+    verification_attempt = decoded["verification_attempt/attempt_record.json"]
+    terminal_log = members["terminal_attempt/resource_guard.jsonl"]
+    verification_log = members["verification_attempt/resource_guard.jsonl"]
+    terminal_receipt = terminal_attempt["resource_log_receipt"]
+    verification_receipt = verification_attempt["resource_log_receipt"]
+    for receipt, encoded, samples in (
+        (terminal_receipt, terminal_log, terminal_samples),
+        (verification_receipt, verification_log, verification_samples),
+    ):
+        if receipt["size_bytes"] != len(encoded) or receipt["file_sha256"] != sha256(encoded).hexdigest():
+            raise ValueError("candidate attempt resource receipt is not bound to its log bytes")
+    if terminal_attempt["cumulative_resource_samples"] != terminal_samples:
+        raise ValueError("candidate terminal attempt sample count is not bound to its log")
+    if terminal_attempt["cumulative_resource_log_bytes"] != len(terminal_log):
+        raise ValueError("candidate terminal attempt log byte count is not bound to its log")
+    if verification_attempt["ended_cumulative_resource_samples"] != verification_samples:
+        raise ValueError("candidate verification attempt sample count is not bound to its log")
+    if verification_attempt["ended_cumulative_resource_log_bytes"] != len(verification_log):
+        raise ValueError("candidate verification attempt log byte count is not bound to its log")
+
+    # The candidate gate carries two receipt edges that cannot be checked by
+    # validating the gate in isolation.  Bind them to the bytes in this exact
+    # ten-pack before publication; otherwise a well-shaped gate can cite an
+    # unrelated verification attempt or producer history chain.
+    candidate_gate = decoded["candidate_gate.json"]
+    verification_member_receipt = {
+        "artifact_sha256": verification_attempt["artifact_sha256"],
+        "file_sha256": sha256(members["verification_attempt/attempt_record.json"]).hexdigest(),
+    }
+    if candidate_gate["verification_attempt_receipt"] != verification_member_receipt:
+        raise ValueError("candidate gate verification attempt receipt is not bound to candidate bytes")
+
+    producer_embedding = decoded["producer_tiled_swin_embeddings.json"]
+    embedded_chain = producer_embedding["attempt_chain"]
+    gate_chain = candidate_gate["producer_attempt_chain"]
+    if len(gate_chain) != len(embedded_chain):
+        raise ValueError("candidate gate producer attempt chain is not bound to producer embedding")
+    for gate_row, embedded_row in zip(gate_chain, embedded_chain, strict=True):
+        if not isinstance(embedded_row, Mapping) or set(embedded_row) != {
+            "attempt_ordinal",
+            "attempt_record",
+            "resource_log",
+            "resume_output_cas",
+        }:
+            raise ValueError("candidate producer embedding attempt chain row is invalid")
+        if gate_row["attempt_ordinal"] != embedded_row["attempt_ordinal"]:
+            raise ValueError("candidate gate producer attempt ordinal is not bound to producer embedding")
+        if gate_row["attempt_record_receipt"] != embedded_row["attempt_record"]:
+            raise ValueError("candidate gate producer attempt receipt is not bound to producer embedding")
+        if gate_row["resource_log_receipt"] != embedded_row["resource_log"]:
+            raise ValueError("candidate gate producer resource receipt is not bound to producer embedding")
+        gate_resume = gate_row["resume_receipt"]
+        embedded_resume = embedded_row["resume_output_cas"]
+        if (gate_resume is None) != (embedded_resume is None):
+            raise ValueError("candidate gate producer resume receipt is not bound to producer embedding")
+        if gate_resume is not None:
+            if not isinstance(embedded_resume, Mapping) or set(embedded_resume) != {
+                "device",
+                "inode",
+                "size_bytes",
+                "internal_sha256",
+                "file_sha256",
+            }:
+                raise ValueError("candidate producer embedding resume CAS is invalid")
+            if any(
+                gate_resume[field] != embedded_resume[embedded_field]
+                for field, embedded_field in (
+                    ("size_bytes", "size_bytes"),
+                    ("internal_sha256", "internal_sha256"),
+                    ("file_sha256", "file_sha256"),
+                )
+            ):
+                raise ValueError("candidate gate producer resume receipt is not bound to producer embedding")
+
+
 def verify_failure_member_coverage(phase: str, paths: object) -> None:
     """Validate an exact terminal_failure_v2 member listing for ``phase``.
 
@@ -321,6 +626,60 @@ _TRUST_SPINE_RECEIPT_KINDS = {
     "static_inputs": "static_inputs",
 }
 
+_STORED_ARTIFACT_RECEIPT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "internal_sha256_field",
+        "internal_sha256",
+        "file_sha256",
+        "filename",
+        "size_bytes",
+    }
+)
+_PRIOR_ATTEMPT_RECEIPT_FIELDS = frozenset(
+    {"attempt_ordinal", "attempt_record_receipt", "resource_log_receipt", "resume_receipt"}
+)
+
+
+def _verify_file_receipt(value: object) -> None:
+    if not isinstance(value, Mapping) or set(value) != {"file_sha256", "filename", "size_bytes"}:
+        raise ValueError("FileReceipt shape is invalid")
+    if not is_sha256(value["file_sha256"]):
+        raise ValueError("FileReceipt file_sha256 is invalid")
+    if not isinstance(value["filename"], str) or not value["filename"] or "/" in value["filename"]:
+        raise ValueError("FileReceipt filename is invalid")
+    if not isinstance(value["size_bytes"], int) or isinstance(value["size_bytes"], bool) or value["size_bytes"] < 0:
+        raise ValueError("FileReceipt size_bytes is invalid")
+
+
+def _verify_stored_artifact_receipt(value: object) -> None:
+    if not isinstance(value, Mapping) or set(value) != _STORED_ARTIFACT_RECEIPT_FIELDS:
+        raise ValueError("StoredArtifactReceipt shape is invalid")
+    if not isinstance(value["schema_version"], str) or not value["schema_version"]:
+        raise ValueError("StoredArtifactReceipt schema_version is invalid")
+    if not isinstance(value["internal_sha256_field"], str) or not value["internal_sha256_field"]:
+        raise ValueError("StoredArtifactReceipt internal_sha256_field is invalid")
+    if not is_sha256(value["internal_sha256"]) or not is_sha256(value["file_sha256"]):
+        raise ValueError("StoredArtifactReceipt hashes are invalid")
+    if not isinstance(value["filename"], str) or not value["filename"] or "/" in value["filename"]:
+        raise ValueError("StoredArtifactReceipt filename is invalid")
+    if not isinstance(value["size_bytes"], int) or isinstance(value["size_bytes"], bool) or value["size_bytes"] < 0:
+        raise ValueError("StoredArtifactReceipt size_bytes is invalid")
+
+
+def _verify_prior_attempt_receipts(value: object) -> None:
+    if not isinstance(value, (list, tuple)) or len(value) > 2:
+        raise ValueError("prior_attempt_receipts must contain zero to two rows")
+    for ordinal, row in enumerate(value, start=1):
+        if not isinstance(row, Mapping) or set(row) != _PRIOR_ATTEMPT_RECEIPT_FIELDS:
+            raise ValueError("prior attempt receipt row shape is invalid")
+        if row["attempt_ordinal"] != ordinal or isinstance(row["attempt_ordinal"], bool):
+            raise ValueError("prior attempt receipt ordinal is invalid")
+        _verify_stored_artifact_receipt(row["attempt_record_receipt"])
+        _verify_file_receipt(row["resource_log_receipt"])
+        if row["resume_receipt"] is not None:
+            _verify_stored_artifact_receipt(row["resume_receipt"])
+
 
 def verify_common_false_fields(payload: Mapping[str, object], *, schema_version: str) -> None:
     """Validate schema_version/module_id/purpose and the five hard-false flags."""
@@ -343,6 +702,7 @@ def verify_candidate_gate(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-candidate-gate.v2` payload."""
     verify_exact_field_set(payload, CANDIDATE_GATE_FIELDS)
     verify_common_false_fields(payload, schema_version=CANDIDATE_GATE_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
     if payload["publication_state"] != "not_yet_observed":
         raise ValueError("candidate gate publication_state must be not_yet_observed")
     if payload["postpublication_verification_required"] is not True:
@@ -357,6 +717,11 @@ def verify_candidate_gate(payload: Mapping[str, object]) -> None:
         CANDIDATE_INPUT_RECEIPT_PROVIDERS,
         receipt_kinds=_TRUST_SPINE_RECEIPT_KINDS,
     )
+    producer_chain = payload["producer_attempt_chain"]
+    if not isinstance(producer_chain, (list, tuple)):
+        raise ValueError("candidate producer_attempt_chain must be a list")
+    _verify_prior_attempt_receipts(producer_chain)
+    verify_artifact_file_receipt(payload["verification_attempt_receipt"])
     downstream = payload["conditional_downstream"]
     if not isinstance(downstream, Mapping) or any(value is not False for value in downstream.values()):
         raise ValueError("candidate gate conditional_downstream must set every authority false")
@@ -366,6 +731,7 @@ def verify_mechanical_failure(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-mechanical-failure.v2` payload."""
     verify_exact_field_set(payload, MECHANICAL_FAILURE_FIELDS)
     verify_common_false_fields(payload, schema_version=MECHANICAL_FAILURE_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
     if payload["decision"] != "mechanical_failure":
         raise ValueError("mechanical failure decision must be mechanical_failure")
     failed_phase = payload["failed_phase"]
@@ -398,6 +764,7 @@ def verify_candidate_receipt_bundle(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-candidate-receipt-bundle.v1` payload."""
     verify_exact_field_set(payload, CANDIDATE_RECEIPT_BUNDLE_FIELDS)
     verify_common_false_fields(payload, schema_version=CANDIDATE_RECEIPT_BUNDLE_SCHEMA)
+    verify_internal_artifact_hash(payload)
     if payload["candidate_generation_name"] != "candidate_v2":
         raise ValueError("bundle candidate_generation_name must be candidate_v2")
     verify_artifact_file_receipt(payload["authorization_receipt"])
@@ -418,8 +785,41 @@ def verify_postpublication_verification(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-postpublication-verification.v2` payload."""
     verify_exact_field_set(payload, POSTPUBLICATION_VERIFICATION_FIELDS)
     verify_common_false_fields(payload, schema_version=POSTPUBLICATION_VERIFICATION_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
+    verify_authorization_receipts(payload["authorization_receipts"])
+    verify_run_history_contract_receipt(payload["run_history_contract_receipt"])
+    verify_artifact_file_receipt(payload["run_admission_receipt"])
+    verify_static_input_contract(payload["static_input_contract"])
+    verify_artifact_file_receipt(payload["candidate_receipt_bundle_receipt"])
+    candidate_members = payload["candidate_member_receipts"]
+    if not isinstance(candidate_members, (list, tuple)) or len(candidate_members) != len(CANDIDATE_MEMBER_PATHS):
+        raise ValueError("result candidate_member_receipts must contain all ten members")
+    for expected_path, row in zip(CANDIDATE_MEMBER_PATHS, candidate_members):
+        verify_generation_member_receipt(row)
+        if row["relative_path"] != expected_path:
+            raise ValueError("result candidate member receipt order mismatch")
+    _verify_prior_attempt_receipts(payload["prior_attempt_receipts"])
     if payload["candidate_generation_name"] != "candidate_v2":
         raise ValueError("result candidate_generation_name must be candidate_v2")
+    expected_member_rows = {row["relative_path"]: row for row in candidate_members}
+    for field, expected_path in (
+        ("producer_embedding_receipt", "producer_tiled_swin_embeddings.json"),
+        ("verification_embedding_receipt", "verification_tiled_swin_embeddings.json"),
+        ("verification_attempt_receipt", "verification_attempt/attempt_record.json"),
+    ):
+        verify_generation_member_receipt(payload[field])
+        if payload[field] != expected_member_rows[expected_path]:
+            raise ValueError(f"result {field} is not bound to its candidate member")
+    evaluator_receipts = payload["evaluator_receipts"]
+    if not isinstance(evaluator_receipts, Mapping) or set(evaluator_receipts) != {"baseline", "candidate"}:
+        raise ValueError("result evaluator_receipts shape is invalid")
+    for name, expected_path in (
+        ("baseline", "baseline_final_evaluator.json"),
+        ("candidate", "candidate_final_evaluator.json"),
+    ):
+        verify_generation_member_receipt(evaluator_receipts[name])
+        if evaluator_receipts[name] != expected_member_rows[expected_path]:
+            raise ValueError(f"result evaluator receipt {name} is not bound to its candidate member")
     checks = payload["ordered_check_results"]
     # all rows except the final error-bound row must pass
     verify_ordered_checks(checks[:-1], RESULT_ORDERED_CHECKS[:-1])
@@ -449,6 +849,7 @@ def verify_postpublication_failure(payload: Mapping[str, object]) -> None:
     """Validate a `agu.vru-causal-temporal-postpublication-failure.v2` payload."""
     verify_exact_field_set(payload, POSTPUBLICATION_FAILURE_FIELDS)
     verify_common_false_fields(payload, schema_version=POSTPUBLICATION_FAILURE_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
     if payload["decision"] != "mechanical_failure":
         raise ValueError("postverification failure decision must be mechanical_failure")
     if payload["final_result_published"] is not False:
@@ -512,6 +913,7 @@ __all__ = [
     "verify_postpublication_verification",
     "verify_postpublication_failure",
     "verify_candidate_member_coverage",
+    "verify_candidate_member_bytes",
     "verify_failure_member_coverage",
     "verify_generation_member_receipt",
 ]

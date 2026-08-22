@@ -19,6 +19,7 @@ Receipt shapes (amendment-001 §"Exact nested receipt vocabulary"):
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 
@@ -79,7 +80,11 @@ def is_sha256(value: object) -> bool:
 
 def is_safe_slug(value: object) -> bool:
     """Return True when ``value`` is a nonempty ``[A-Za-z0-9_-]`` slug."""
-    return isinstance(value, str) and bool(value) and value.replace("-", "").replace("_", "").isalnum()
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and all(char in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for char in value)
+    )
 
 
 def is_rfc3339(value: object) -> bool:
@@ -316,7 +321,7 @@ def _verify_file_receipt(value: object) -> None:
         raise ValueError("FileReceipt file_sha256 is invalid")
 
 
-def _verify_run_history_contract_receipt(value: object) -> None:
+def verify_run_history_contract_receipt(value: object) -> None:
     """Validate ``RunHistoryContractReceipt`` ``{run_identity_receipt, head_receipt, marker_count}``."""
     if not isinstance(value, Mapping) or set(value) != {
         "run_identity_receipt",
@@ -357,7 +362,7 @@ def verify_provider_slot(value: object, *, receipt_kind: str = "artifact") -> No
         if receipt_kind == "artifact":
             verify_artifact_file_receipt(receipt)
         elif receipt_kind == "run_history":
-            _verify_run_history_contract_receipt(receipt)
+            verify_run_history_contract_receipt(receipt)
         elif receipt_kind == "static_inputs":
             verify_static_input_contract(receipt)
         elif receipt_kind == "jsonl":
@@ -435,6 +440,8 @@ def compact_canonical_json(value: object) -> str:
         if v is None:
             return "null"
         if isinstance(v, (int, float)):
+            if isinstance(v, float) and not math.isfinite(v):
+                raise ValueError("canonical JSON does not permit non-finite floats")
             return str(v)
         if isinstance(v, str):
             return _json.dumps(v, separators=(",", ":"))
@@ -448,6 +455,21 @@ def canonical_artifact_sha256(value: object) -> str:
     import hashlib
 
     return hashlib.sha256(compact_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def verify_internal_artifact_hash(payload: Mapping[str, object]) -> None:
+    """Verify the self-hash carried by a canonical JSON artifact.
+
+    The ``artifact_sha256`` field is excluded from its own preimage. This is
+    deliberately separate from :func:`verify_artifact_file_receipt`, which is
+    an opaque receipt for bytes outside the current object.
+    """
+    if not isinstance(payload, Mapping) or not is_sha256(payload.get("artifact_sha256")):
+        raise ValueError("artifact_sha256 is invalid")
+    unsigned = {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    expected = canonical_artifact_sha256(unsigned)
+    if payload["artifact_sha256"] != expected:
+        raise ValueError("artifact_sha256 does not match canonical artifact bytes")
 
 
 __all__ = [
@@ -483,6 +505,8 @@ __all__ = [
     "verify_provider_slot",
     "verify_provider_slots",
     "verify_static_input_contract",
+    "verify_run_history_contract_receipt",
     "compact_canonical_json",
     "canonical_artifact_sha256",
+    "verify_internal_artifact_hash",
 ]

@@ -20,13 +20,13 @@ from app.analysis.task0258_module_a_v2 import (
     is_sha256,
     verify_artifact_file_receipt,
     verify_exact_field_set,
+    verify_internal_artifact_hash,
     verify_provider_slot,
     verify_v2_receipt_fields,
 )
 from app.analysis.task0258_v2_artifacts import verify_common_false_fields
 from app.analysis.task0258_v2_read_isolation import (
-    verify_read_isolation_attestation,
-    verify_read_isolation_policy,
+    verify_read_isolation_binding,
 )
 
 ROLE = "independent_empty_state_verification"
@@ -259,6 +259,7 @@ def verify_verification_embedding(payload: Mapping[str, object]) -> None:
     """Validate a ``agu.vru-causal-tiled-swin-verification-embeddings.v2`` payload."""
     verify_exact_field_set(payload, VERIFICATION_EMBEDDING_FIELDS)
     verify_common_false_fields(payload, schema_version=VERIFICATION_EMBEDDING_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
     if payload["role"] != ROLE:
         raise ValueError("verification embedding role is invalid")
     if payload["row_count"] != 45:
@@ -285,11 +286,11 @@ def verify_verification_attempt(payload: Mapping[str, object]) -> None:
     """Validate a ``agu.vru-causal-tiled-swin-verification-attempt.v2`` payload."""
     verify_exact_field_set(payload, VERIFICATION_ATTEMPT_FIELDS)
     verify_common_false_fields(payload, schema_version=VERIFICATION_ATTEMPT_SCHEMA_V2)
+    verify_internal_artifact_hash(payload)
     if payload["verification_ordinal"] != 1:
         raise ValueError("verification attempt ordinal must be 1")
     verify_v2_receipt_fields(payload)
-    verify_read_isolation_policy(payload["read_isolation_policy"])
-    verify_read_isolation_attestation(payload["read_isolation_attestation"])
+    verify_read_isolation_binding(payload["read_isolation_policy"], payload["read_isolation_attestation"])
     slot = payload["verification_embedding_slot"]
     verify_provider_slot(slot)
     if slot["provider"] != "verification_tiled_swin_embeddings":

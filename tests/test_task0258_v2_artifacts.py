@@ -11,6 +11,7 @@ from app.analysis.task0258_module_a_v2 import (
     MODULE_ID,
     POSTPUBLICATION_FAILURE_SCHEMA_V2,
     POSTPUBLICATION_VERIFICATION_SCHEMA_V2,
+    canonical_artifact_sha256,
 )
 from app.analysis.task0258_v2_artifacts import (
     CANDIDATE_INPUT_RECEIPT_PROVIDERS,
@@ -48,6 +49,13 @@ def _false_common(schema_version):
 
 def _receipt():
     return {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64}
+
+
+def _seal(payload):
+    payload["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    )
+    return payload
 
 
 def _slot(provider, state="verified"):
@@ -96,7 +104,7 @@ def _candidate_gate():
         {
             "input_receipts": _trust_slots(CANDIDATE_INPUT_RECEIPT_PROVIDERS),
             "producer_attempt_chain": [],
-            "verification_attempt_receipt": None,
+            "verification_attempt_receipt": _receipt(),
             "ordered_prepublication_check_results": [
                 {"check_name": name, "passed": True} for name in CANDIDATE_PREPUBLICATION_CHECKS
             ],
@@ -108,7 +116,7 @@ def _candidate_gate():
             "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def _mechanical_failure(phase="candidate_sealing"):
@@ -140,7 +148,7 @@ def _mechanical_failure(phase="candidate_sealing"):
             "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def test_verify_common_false_fields():
@@ -179,6 +187,10 @@ def test_candidate_gate_rejects():
     # a check row must not be False
     bad = _candidate_gate()
     bad["ordered_prepublication_check_results"][0]["passed"] = False
+    with pytest.raises(ValueError):
+        verify_candidate_gate(bad)
+    bad = _candidate_gate()
+    bad["verification_attempt_receipt"] = None
     with pytest.raises(ValueError):
         verify_candidate_gate(bad)
 
@@ -224,7 +236,7 @@ def _bundle():
             "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def test_candidate_receipt_bundle_valid():
@@ -244,23 +256,34 @@ def test_candidate_receipt_bundle_rejects():
 
 def _result(pass_error_bounds=True):
     p = _false_common(POSTPUBLICATION_VERIFICATION_SCHEMA_V2)
+    member_rows = [_member_row(path) for path in CANDIDATE_MEMBER_PATHS]
+    member_by_path = {row["relative_path"]: row for row in member_rows}
     p.update(
         {
             "candidate_generation_name": "candidate_v2",
-            "authorization_receipts": {},
-            "run_history_contract_receipt": {},
-            "run_admission_receipt": {},
+            "authorization_receipts": {
+                "parent_spec_approval": _receipt(),
+                "amendment_implementation_approval": _receipt(),
+                "amended_implementation_review": _receipt(),
+                "rerun_authorization": _receipt(),
+            },
+            "run_history_contract_receipt": {
+                "run_identity_receipt": _receipt(),
+                "head_receipt": _receipt(),
+                "marker_count": 0,
+            },
+            "run_admission_receipt": _receipt(),
             "static_input_contract": {
                 "temporal_plan_artifact_sha256": "0" * 64,
                 "temporal_plan_file_sha256": "0" * 64,
                 "task0257_receipts_projection_sha256": "0" * 64,
             },
-            "candidate_receipt_bundle_receipt": {},
-            "candidate_member_receipts": [],
+            "candidate_receipt_bundle_receipt": _receipt(),
+            "candidate_member_receipts": member_rows,
             "prior_attempt_receipts": [],
-            "producer_embedding_receipt": {},
-            "verification_embedding_receipt": {},
-            "verification_attempt_receipt": {},
+            "producer_embedding_receipt": member_by_path["producer_tiled_swin_embeddings.json"],
+            "verification_embedding_receipt": member_by_path["verification_tiled_swin_embeddings.json"],
+            "verification_attempt_receipt": member_by_path["verification_attempt/attempt_record.json"],
             "ordered_check_results": [
                 {"check_name": name, "passed": (name != "frozen_error_bounds" or pass_error_bounds)}
                 for name in RESULT_ORDERED_CHECKS
@@ -268,7 +291,10 @@ def _result(pass_error_bounds=True):
             "error_bound_result": {},
             "decision": "mechanical_pass" if pass_error_bounds else "temporal-hypothesis-rejected",
             "stop_reason": None if pass_error_bounds else "temporal-hypothesis-rejected",
-            "evaluator_receipts": {},
+            "evaluator_receipts": {
+                "baseline": member_by_path["baseline_final_evaluator.json"],
+                "candidate": member_by_path["candidate_final_evaluator.json"],
+            },
             "publication_observation": {
                 "candidate_visible": True,
                 "result_publication_state": "not_yet_observed",
@@ -278,7 +304,7 @@ def _result(pass_error_bounds=True):
             "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def test_postpublication_verification_valid():
@@ -297,6 +323,22 @@ def test_postpublication_verification_rejects():
         verify_postpublication_verification(bad)
     bad = _result(pass_error_bounds=True)
     bad["publication_observation"]["result_publication_state"] = "published"
+    with pytest.raises(ValueError):
+        verify_postpublication_verification(bad)
+    bad = _result(pass_error_bounds=True)
+    original_producer_row = dict(bad["producer_embedding_receipt"])
+    bad["candidate_member_receipts"][2]["file_sha256"] = "f" * 64
+    bad["producer_embedding_receipt"] = original_producer_row
+    bad["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bad.items() if key != "artifact_sha256"}
+    )
+    with pytest.raises(ValueError):
+        verify_postpublication_verification(bad)
+    bad = _result(pass_error_bounds=True)
+    bad["evaluator_receipts"]["baseline"] = bad["evaluator_receipts"]["candidate"]
+    bad["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bad.items() if key != "artifact_sha256"}
+    )
     with pytest.raises(ValueError):
         verify_postpublication_verification(bad)
 
@@ -327,10 +369,9 @@ def _postfailure(check="retrospective"):
             "stop_reason": check,
             "final_result_published": False,
             "conditional_downstream": {},
-            "artifact_sha256": "0" * 64,
         }
     )
-    return p
+    return _seal(p)
 
 
 def test_postpublication_failure_valid():
@@ -338,6 +379,7 @@ def test_postpublication_failure_valid():
     # global_resource_caps maps to limit_failure
     g = _postfailure("global_resource_caps")
     g["observed_result"]["observation_state"] = "limit_failure"
+    g = _seal(g)
     verify_postpublication_failure(g)
 
 

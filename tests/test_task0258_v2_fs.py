@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
+import app.analysis.task0258_v2_fs as fs
 from app.analysis.task0258_module_a_v2 import (
     canonical_artifact_sha256,
     compact_canonical_json,
 )
 from app.analysis.task0258_v2_fs import (
+    _provision_lock_file,
+    active_flock,
     atomic_write_bytes,
     atomic_write_json,
+    exclusive_flock,
+    exclusive_flock_at,
     publish_no_clobber,
+    read_regular_file_no_follow,
     verify_absent,
 )
 
@@ -119,5 +126,259 @@ def test_seal_generation_directory_coverage(tmp_path):
     # missing member fails before publish
     with pytest.raises(ValueError):
         seal_generation_directory(
-            root, "other", {p: b"x\n" for p in CANDIDATE_MEMBER_PATHS[:-1]}, CANDIDATE_MEMBER_PATHS, flock_path=flock
+            root,
+            "other",
+            {p: b"x\n" for p in CANDIDATE_MEMBER_PATHS[:-1]},
+            CANDIDATE_MEMBER_PATHS,
+            flock_path=flock,
         )
+
+
+def test_generation_rejects_traversal_and_symlinked_parent(tmp_path):
+    from app.analysis.task0258_v2_fs import build_generation_directory
+
+    with pytest.raises(ValueError):
+        build_generation_directory(tmp_path / "out", {"../escape.json": b"x"})
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    with pytest.raises(ValueError):
+        build_generation_directory(link, {"member.json": b"x"})
+
+
+def test_generation_stage_path_replacement_is_rejected_before_publish(tmp_path, monkeypatch):
+    root = tmp_path / "out"
+    root.mkdir()
+    stage_name = ".fixed-stage"
+    stage = root / stage_name
+    moved_stage = root / ".fixed-stage-moved"
+    original_assert = fs._assert_directory_path_matches_fd
+    replaced = False
+
+    def assert_then_replace(path, directory_fd, *, label):
+        nonlocal replaced
+        original_assert(path, directory_fd, label=label)
+        if label == "generation stage" and not replaced:
+            stage.rename(moved_stage)
+            stage.mkdir()
+            replaced = True
+
+    monkeypatch.setattr(fs, "_assert_directory_path_matches_fd", assert_then_replace)
+    with pytest.raises(ValueError, match="generation stage"):
+        fs.build_generation_directory(root, {"member.json": b"x\n"}, stage_name=stage_name)
+    assert stage.is_dir()
+    assert moved_stage.is_dir()
+
+
+def test_seal_generation_cleans_stage_when_reopen_fails(tmp_path, monkeypatch):
+    from app.analysis.task0258_v2_fs import seal_generation_directory
+
+    root = tmp_path / "out"
+    lock = root.parent / ".lock"
+    lock.write_text("")
+    stage_name = ".fixed-stage"
+    real_open_directory_at = fs._open_directory_at
+    open_count = 0
+
+    def fail_seal_reopen(parent_fd, name):
+        nonlocal open_count
+        open_count += 1
+        if open_count == 2:
+            raise ValueError("forced stage reopen failure")
+        return real_open_directory_at(parent_fd, name)
+
+    monkeypatch.setattr(fs, "_open_directory_at", fail_seal_reopen)
+    with pytest.raises(ValueError, match="forced stage reopen failure"):
+        seal_generation_directory(
+            root,
+            "candidate_v2",
+            {"member.json": b"x\n"},
+            ("member.json",),
+            flock_path=lock,
+            stage_name=stage_name,
+        )
+    assert not (root / stage_name).exists()
+
+
+def test_fixed_generation_stage_residue_is_rejected(tmp_path):
+    from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
+    from app.analysis.task0258_v2_fs import seal_generation_directory
+
+    root = tmp_path / "out"
+    root.mkdir()
+    lock = root / ".lock"
+    lock.write_text("")
+    stage_name = "." + "a" * 64 + ".verified-result-v2-stage"
+    stage = root / stage_name
+    stage.mkdir()
+    members = {path: b"x\n" for path in CANDIDATE_MEMBER_PATHS}
+
+    with pytest.raises(FileExistsError):
+        seal_generation_directory(
+            root,
+            "verified_result_v2",
+            members,
+            CANDIDATE_MEMBER_PATHS,
+            flock_path=lock,
+            stage_name=stage_name,
+        )
+
+    assert stage.is_dir()
+    assert not (root / "verified_result_v2").exists()
+
+
+def test_lock_handle_is_required_for_lock_bypass(tmp_path):
+    from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
+    from app.analysis.task0258_v2_fs import seal_generation_directory
+
+    root = tmp_path / "out"
+    members = {path: b"x\n" for path in CANDIDATE_MEMBER_PATHS}
+    lock = root.parent / ".lock"
+    with pytest.raises(TypeError):
+        seal_generation_directory(
+            root,
+            "candidate_v2",
+            members,
+            CANDIDATE_MEMBER_PATHS,
+            flock_path=lock,
+            held_lock=True,
+        )
+    assert not root.exists()
+
+
+def test_exclusive_flock_at_rejects_forged_path_parent_or_leaf(tmp_path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    directory_fd = fs._open_existing_directory_no_follow(left)
+    try:
+        with pytest.raises(ValueError, match="lock parent"):
+            with exclusive_flock_at(directory_fd, ".lock", right / ".lock"):
+                pass
+        with pytest.raises(ValueError, match="leaf"):
+            with exclusive_flock_at(directory_fd, ".lock-a", left / ".lock-b"):
+                pass
+    finally:
+        os.close(directory_fd)
+    assert not (left / ".lock").exists()
+    assert not (right / ".lock").exists()
+
+
+def test_lock_leaf_replacement_invalidates_old_handle_and_refuses_recreation(tmp_path):
+    lock = tmp_path / ".lock"
+    lock.write_text("original")
+    _provision_lock_file(lock)
+    directory_fd = fs._open_existing_directory_no_follow(tmp_path)
+    try:
+        with exclusive_flock_at(directory_fd, lock.name, lock) as old_handle:
+            original_identity = (lock.stat().st_dev, lock.stat().st_ino)
+            lock.unlink()
+            with pytest.raises(ValueError, match="missing"):
+                with exclusive_flock_at(directory_fd, lock.name, lock):
+                    pass
+
+            replacement = tmp_path / ".replacement"
+            replacement.write_text("replacement")
+            replacement.rename(lock)
+            replacement_identity = (lock.stat().st_dev, lock.stat().st_ino)
+            assert replacement_identity != original_identity
+            replacement_sidecar = tmp_path / ".replacement.identity"
+            replacement_sidecar.write_text(f"{replacement_identity[0]}:{replacement_identity[1]}\n")
+            replacement_sidecar.rename(tmp_path / ".lock.identity")
+            with pytest.raises(ValueError, match="identity"):
+                old_handle.assert_held(lock, directory_fd=directory_fd)
+            with pytest.raises(ValueError, match="identity"):
+                with exclusive_flock_at(directory_fd, lock.name, lock):
+                    pass
+    finally:
+        os.close(directory_fd)
+
+
+def test_lock_handle_rejects_parent_replacement_without_directory_fd(tmp_path):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    lock = parent / ".lock"
+    lock.write_text("")
+    _provision_lock_file(lock)
+    directory_fd = fs._open_existing_directory_no_follow(parent)
+    try:
+        with exclusive_flock_at(directory_fd, lock.name, lock) as handle:
+            moved_parent = tmp_path / "moved-parent"
+            parent.rename(moved_parent)
+            parent.mkdir()
+            os.link(moved_parent / lock.name, lock)
+            _provision_lock_file(lock)
+            with pytest.raises(ValueError, match="parent identity"):
+                handle.assert_held(lock)
+            with pytest.raises(ValueError, match="parent identity"):
+                active_flock(lock)
+    finally:
+        os.close(directory_fd)
+
+
+def test_flock_rechecks_parent_path_before_yield(tmp_path, monkeypatch):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    lock = parent / ".lock"
+    lock.write_text("")
+    _provision_lock_file(lock)
+    directory_fd = fs._open_existing_directory_no_follow(parent)
+    real_flock = fs.fcntl.flock
+    replaced = False
+
+    def flock_then_replace(fd, operation):
+        nonlocal replaced
+        result = real_flock(fd, operation)
+        if operation == fs.fcntl.LOCK_EX and not replaced:
+            parent.rename(tmp_path / "moved-parent")
+            parent.mkdir()
+            replaced = True
+        return result
+
+    monkeypatch.setattr(fs.fcntl, "flock", flock_then_replace)
+    try:
+        with pytest.raises(ValueError, match="lock parent"):
+            with exclusive_flock_at(directory_fd, lock.name, lock):
+                pass
+    finally:
+        os.close(directory_fd)
+
+
+def test_bounded_read_rejects_post_read_metadata_drift(tmp_path, monkeypatch):
+    import app.analysis.task0258_v2_fs as fs
+
+    path = tmp_path / "payload"
+    path.write_bytes(b"payload")
+    real_read = fs.os.read
+
+    def read_then_touch(fd, count):
+        data = real_read(fd, count)
+        path.write_bytes(b"changed-longer")
+        return data
+
+    monkeypatch.setattr(fs.os, "read", read_then_touch)
+    with pytest.raises(ValueError, match="changed during bounded read"):
+        read_regular_file_no_follow(path)
+
+
+def test_active_flock_is_scoped_and_verified(tmp_path):
+    lock = tmp_path / ".lock"
+    _provision_lock_file(lock)
+    with exclusive_flock(lock) as handle:
+        assert active_flock(lock) is handle
+        handle.assert_held(lock)
+        with pytest.raises(AttributeError, match="immutable"):
+            handle._path = tmp_path / "other.lock"
+        with pytest.raises(AttributeError, match="seal"):
+            handle._sealed = False
+        with pytest.raises(AttributeError, match="immutable"):
+            del handle._sealed
+    assert active_flock(lock) is None
+
+
+def test_no_follow_directory_flags_fail_closed_when_platform_flag_is_missing(monkeypatch):
+    monkeypatch.delattr(fs.os, "O_NOFOLLOW", raising=False)
+    with pytest.raises(OSError, match="required directory no-follow flags"):
+        fs._directory_open_flags()
