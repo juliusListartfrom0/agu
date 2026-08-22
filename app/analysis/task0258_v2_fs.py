@@ -248,11 +248,8 @@ def _hold_exclusive_flock(path: Path, fd: int, *, parent_identity: tuple[int, in
             os.close(fd)
 
 
-def _flock_open_flags(*, create: bool) -> int:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
-    if create:
-        flags |= os.O_CREAT
-    return flags
+def _flock_open_flags() -> int:
+    return os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
 
 
 def _provision_lock_file(path: Path) -> None:
@@ -279,12 +276,15 @@ def _provision_lock_file(path: Path) -> None:
 
 @contextmanager
 def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
-    """Create/open and hold a no-follow exclusive flock on a regular file."""
+    """Open and hold a no-follow exclusive flock on a persistent regular file."""
     path = Path(path)
     parent_fd = _open_existing_directory_no_follow(path.parent)
     try:
         parent_stat = os.fstat(parent_fd)
-        fd = os.open(path.name, _flock_open_flags(create=True), 0o600, dir_fd=parent_fd)
+        try:
+            fd = os.open(path.name, _flock_open_flags(), 0o600, dir_fd=parent_fd)
+        except FileNotFoundError as exc:
+            raise ValueError("persistent lock leaf is missing; refusing to recreate it") from exc
     finally:
         os.close(parent_fd)
     with _hold_exclusive_flock(
@@ -305,7 +305,7 @@ def exclusive_flock_at(directory_fd: int, lock_name: str, path: Path) -> Iterato
     _assert_directory_path_matches_fd(path.parent, directory_fd, label="lock parent")
     directory_stat = os.fstat(directory_fd)
     try:
-        fd = os.open(lock_name, _flock_open_flags(create=False), 0o600, dir_fd=directory_fd)
+        fd = os.open(lock_name, _flock_open_flags(), 0o600, dir_fd=directory_fd)
     except FileNotFoundError as exc:
         raise ValueError("persistent lock leaf is missing; refusing to recreate it") from exc
     with _hold_exclusive_flock(

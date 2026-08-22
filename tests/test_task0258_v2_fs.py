@@ -311,6 +311,7 @@ def test_bounded_read_rejects_post_read_metadata_drift(tmp_path, monkeypatch):
 
 def test_active_flock_is_scoped_and_verified(tmp_path):
     lock = tmp_path / ".lock"
+    lock.write_text("")
     with exclusive_flock(lock) as handle:
         assert active_flock(lock) is handle
         handle.assert_held(lock)

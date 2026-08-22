@@ -187,6 +187,7 @@ def test_registry_sealer_acquires_history_lock_when_not_supplied(tmp_path):
     registry = tmp_path / "registry"
     registry.mkdir()
     lock_path = registry / f".{AUTH}.history.lock"
+    lock_path.write_text("")
     executor = ThreadPoolExecutor(max_workers=1)
     try:
         with exclusive_flock(lock_path):
