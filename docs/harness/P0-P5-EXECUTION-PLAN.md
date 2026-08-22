@@ -274,6 +274,9 @@ model execution or readiness transition.
 
 ### P5 — Product evidence readiness
 
+- [x] Record the dated readiness audit at
+      `docs/specs/TASK-0258-temporal-canary/p5-readiness-audit-2026-08-22.md`.
+      This is an open-gate audit only; it does not complete P5.
 - [ ] Close a rights-cleared, production-distinct continuous source.
 - [ ] Complete independent label-hidden causal evidence.
 - [ ] Reach per-source held-production precision and recall of at least 0.85.
