@@ -36,9 +36,9 @@ model execution or readiness transition.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
-- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@29897ff` against
+- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@5549408` against
       `c5157f2`, with 46 changed files and diff SHA
-      `ca61dae84e91b1ce90a35306b07959e044c822aba521be075269fbd487a19de6`;
+      `5e88f55058e0563eef1cc1505d864ba7920d196eccced7c30face6b93b331f08`;
       the exact independent `Critical=0 / Required=0` receipt is still open.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 280 passed and
@@ -182,10 +182,14 @@ model execution or readiness transition.
       embedding/attempt validators verify internal artifact hashes; review
       locks use stable parent-directory FDs; candidate-published marker
       receipts are compared with the bundle; and candidate gate history is
-      checked against the pre-publication history prefix. The exact target is
-      `29897ff`; focused TASK-0258 tests are 281 passed and the full suite is
-      2,149 passed, 5 skipped, 15 warnings. This is local evidence only and is
-      not yet an independent sealed review receipt.
+      checked against the pre-publication history prefix. The follow-up target
+      `5549408` additionally binds candidate-gate verification/producer-chain
+      receipts to candidate bytes, binds held locks to their parent-directory
+      identities, proves bootstrap execution is tied to FD203, and requires
+      complete allowed-read/event coverage. Focused TASK-0258 tests are 284
+      passed and the full suite is 2,152 passed, 5 skipped, 15 warnings. This
+      is local evidence only and is not yet an independent sealed review
+      receipt.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
 

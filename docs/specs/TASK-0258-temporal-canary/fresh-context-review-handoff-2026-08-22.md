@@ -1,9 +1,9 @@
 # TASK-0258 Amendment-001 — current fresh-context review handoff
 
-Review target: `codex/agu-p1-remediation-2` at commit `29897ff`
+Review target: `codex/agu-p1-remediation-2` at commit `5549408`
 Baseline: `main` / `origin/main` at `c5157f2`
-Diff SHA-256 (`git diff --binary c5157f2...29897ff`):
-`ca61dae84e91b1ce90a35306b07959e044c822aba521be075269fbd487a19de6`
+Diff SHA-256 (`git diff --binary c5157f2...5549408`):
+`5e88f55058e0563eef1cc1505d864ba7920d196eccced7c30face6b93b331f08`
 Changed-file count: 46
 
 ## Purpose
@@ -27,7 +27,7 @@ repository artifacts together with the code:
 - `docs/harness/P0-P5-EXECUTION-PLAN.md`
 - `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`
 
-Review the complete `c5157f2...29897ff` scope, not only the latest local
+Review the complete `c5157f2...5549408` scope, not only the latest local
 fixes. In particular, adversarially review receipt/marker replay, publication
 locks and races, canonical/no-follow loaders, bootstrap and FD binding, worker
 process-tree cleanup, diagnostic-vs-production admission, and every place a
@@ -40,14 +40,14 @@ Use the canonical environment and record exact output:
 ```bash
 .venv/bin/python -m pytest -q tests/test_task0258_*.py
 .venv/bin/python -m pytest -q
-git diff --name-only c5157f2...b752a40 -- '*.py' | \\
+git diff --name-only c5157f2...5549408 -- '*.py' | \\
   xargs .venv/bin/python -m ruff check
 .venv/bin/python scripts/verify_harness.py
 .venv/bin/python scripts/task0258_local_simulation.py --json
 .venv/bin/python scripts/task0258_endpoint_security_capability.py --json
 ```
 
-The current local evidence is 281 focused TASK-0258 tests and 2,149 full-suite
+The current local evidence is 284 focused TASK-0258 tests and 2,152 full-suite
 tests, with 5 skips and 15 warnings; the local service hook also reached
 `/health`/`/ready`, submitted a lightweight task, and observed `completed`.
 The latest remediation closes the prior re-review's mutable `FlockHandle` seal
@@ -57,7 +57,11 @@ ten candidate members by path-specific schema, canonical JSON/JSONL encoding,
 resource-log receipts, and attempt/log counters; verification artifacts now
 verify their own internal hashes; review locks use stable parent directory FDs;
 and the candidate marker/bundle and pre-publication gate-history bindings are
-checked separately. The simulation and
+checked separately. The follow-up remediation also binds the candidate gate's
+verification-attempt receipt and producer chain to candidate members, ties
+held locks to their parent-directory identities, proves the executed bootstrap
+script is the inherited source FD, and requires complete read-isolation
+allowlist/event coverage. The simulation and
 capability probe must remain explicitly diagnostic-only and must report no
 production capability.
 The repository-wide `ruff check app scripts tests` baseline currently reports
