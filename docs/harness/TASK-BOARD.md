@@ -44,16 +44,16 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 > Current P1 review handoff (2026-08-22):
 > `docs/specs/TASK-0258-temporal-canary/fresh-context-review-handoff-2026-08-22.md`
-> fixes the exact target `codex/agu-p1-remediation-2@fad3196`, baseline `c5157f2`, 44-file
+> fixes the exact target `codex/agu-p1-remediation-2@2745384`, baseline `c5157f2`, 45-file
 > diff SHA, reproducible commands, and required independent `Critical=0 /
 > Required=0` receipt fields. It is a handoff only; it does not claim a passing
 > review or authorize P2/P3/P4/P5.
 
 > Latest P1 remediation (2026-08-22): branch `codex/agu-p1-remediation-2` is
-> pushed through `fad3196`; the focused suite is `273 passed` and the full
-> suite is `2,141 passed, 5 skipped, 15 warnings`. The independent `fad3196`
-> delta review is sealed `Critical=0 / Required=0 / Optional=0` for its two
-> changed files only. A fresh full 44-file review at the updated target is
+> pushed through `2745384`; the focused suite is `277 passed` and the full
+> suite is `2,145 passed, 5 skipped, 15 warnings`. The independent incremental
+> review of earlier deltas is sealed `Critical=0 / Required=0 / Optional=0`
+> only for those changed files. A fresh full 45-file review at the updated target is
 > still required before P1 can be closed or merged into `main`; P2 remains
 > externally blocked without Apple-granted Endpoint Security authorization.
 
