@@ -48,6 +48,13 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > Branch/push: `codex/agu-p2-free-route-audit@b07f78e`; merged to
 > `main@76e1c9d`; post-merge Harness passed.
 
+> P5 readiness audit (2026-08-22): P5 remains `not_ready`, independently of
+> the Apple gate. The source ledger is still `19 candidates / 0 eligible`, the
+> v8–v23 causal chain is pilot-only with held P/R `not_computable`, existing
+> nested diagnostics retain per-source failures, and the independent-VLM path
+> is not promotion-ready. P2/P3/P4 authority is also still open. See
+> `docs/specs/TASK-0258-temporal-canary/p5-readiness-audit-2026-08-22.md`.
+
 > Local Endpoint Security transcript handoff (2026-08-22):
 > `scripts/inspect_endpoint_security_transcript.py` safely validates an
 > absolute regular non-symlink C JSONL transcript and its clean finalization,
