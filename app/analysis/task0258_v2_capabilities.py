@@ -58,7 +58,6 @@ from app.analysis.task0258_v2_fs import (
     exclusive_flock_at,
     read_regular_file_at,
     read_regular_file_at_with_identity,
-    verify_generation_directory,
     verify_generation_directory_at,
 )
 from app.analysis.task0258_v2_pipeline import (
@@ -3279,21 +3278,6 @@ def bind_verified_review_no_write_preflight(
     )
 
 
-def _load_candidate_gate_artifact(
-    *, candidate_dir: Path, member_receipts: list[dict[str, object]]
-) -> VerifiedJsonArtifact:
-    gate_row = next((row for row in member_receipts if row["relative_path"] == "candidate_gate.json"), None)
-    if not isinstance(gate_row, Mapping) or gate_row["receipt_kind"] != "json":
-        raise ValueError("candidate gate member receipt is missing")
-    gate = _load_verified_json_artifact(
-        path=Path(candidate_dir) / "candidate_gate.json",
-        expected_artifact_sha256=gate_row["artifact_sha256"],
-        expected_file_sha256=gate_row["file_sha256"],
-    )
-    verify_candidate_gate(gate.payload)
-    return gate
-
-
 def _load_candidate_gate_artifact_at(
     *, candidate_dir: Path, candidate_dir_fd: int, member_receipts: list[dict[str, object]]
 ) -> VerifiedJsonArtifact:
@@ -3461,19 +3445,35 @@ def load_verified_candidate_receipt_bundle(
     expected_file_sha256: str,
 ) -> VerifiedJsonArtifact:
     """Replay a candidate bundle while holding the canonical output locks."""
+    bundle_path = Path(bundle_path)
     candidate_dir = Path(candidate_dir)
     if candidate_dir.name != "candidate_v2":
         raise ValueError("candidate bundle replay requires candidate_v2")
+    _verify_absolute_no_symlink_path(bundle_path)
     _verify_review_temp_directory(candidate_dir)
     output_lock = output_parent_flock_path(candidate_dir.parent)
-    with _exclusive_review_lock(output_lock):
-        return _load_verified_candidate_receipt_bundle_locked(
-            execution_context=execution_context,
-            bundle_path=bundle_path,
-            candidate_dir=candidate_dir,
-            expected_artifact_sha256=expected_artifact_sha256,
-            expected_file_sha256=expected_file_sha256,
-        )
+    with ExitStack() as resources:
+        output_parent_fd = _open_existing_directory_no_follow(output_lock.parent)
+        resources.callback(os.close, output_parent_fd)
+        bundle_parent_fd = _open_existing_directory_no_follow(bundle_path.parent)
+        resources.callback(os.close, bundle_parent_fd)
+        _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
+        with _exclusive_review_lock_at(output_parent_fd, output_lock):
+            output_root_fd = _open_directory_at(output_parent_fd, candidate_dir.parent.name)
+            resources.callback(os.close, output_root_fd)
+            candidate_dir_fd = _open_directory_at(output_root_fd, candidate_dir.name)
+            resources.callback(os.close, candidate_dir_fd)
+            _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
+            return _load_verified_candidate_receipt_bundle_locked(
+                execution_context=execution_context,
+                bundle_path=bundle_path,
+                candidate_dir=candidate_dir,
+                expected_artifact_sha256=expected_artifact_sha256,
+                expected_file_sha256=expected_file_sha256,
+                candidate_dir_fd=candidate_dir_fd,
+                output_root_fd=output_root_fd,
+                bundle_parent_fd=bundle_parent_fd,
+            )
 
 
 def _load_verified_candidate_receipt_bundle_locked(
@@ -3488,13 +3488,10 @@ def _load_verified_candidate_receipt_bundle_locked(
     bundle_parent_fd: int | None = None,
 ) -> VerifiedJsonArtifact:
     """Replay a candidate bundle while the output-parent lock is held."""
+    if candidate_dir_fd is None or output_root_fd is None or bundle_parent_fd is None:
+        raise ValueError("candidate bundle replay requires stable output and bundle descriptors")
     bundle_lock = Path(bundle_path).parent / ".candidate-receipt-bundle.lock"
-    lock_context = (
-        _exclusive_review_lock_at(bundle_parent_fd, bundle_lock)
-        if bundle_parent_fd is not None
-        else _exclusive_review_lock(bundle_lock)
-    )
-    with lock_context:
+    with _exclusive_review_lock_at(bundle_parent_fd, bundle_lock):
         return _load_verified_candidate_receipt_bundle_unlocked(
             execution_context=execution_context,
             bundle_path=bundle_path,
@@ -3524,52 +3521,33 @@ def _load_verified_candidate_receipt_bundle_unlocked(
     }:
         raise PermissionError("candidate bundle loader requires a verified review context")
     bundle_path = Path(bundle_path)
-    if bundle_parent_fd is None:
-        artifact = _load_verified_json_artifact(
-            path=bundle_path,
-            expected_artifact_sha256=expected_artifact_sha256,
-            expected_file_sha256=expected_file_sha256,
-        )
-    else:
-        if bundle_path.name != "candidate-receipt-bundle.json":
-            raise ValueError("candidate receipt bundle basename is not authorized")
-        _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
-        artifact = _load_verified_json_artifact_at(
-            directory_fd=bundle_parent_fd,
-            relative_path=bundle_path.name,
-            path=bundle_path,
-            expected_artifact_sha256=expected_artifact_sha256,
-            expected_file_sha256=expected_file_sha256,
-        )
+    if candidate_dir_fd is None or output_root_fd is None or bundle_parent_fd is None:
+        raise ValueError("candidate bundle replay requires stable replay descriptors")
+    _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
+    artifact = _load_verified_json_artifact_at(
+        directory_fd=bundle_parent_fd,
+        relative_path=bundle_path.name,
+        path=bundle_path,
+        expected_artifact_sha256=expected_artifact_sha256,
+        expected_file_sha256=expected_file_sha256,
+    )
     verify_candidate_receipt_bundle(artifact.payload)
     candidate_dir = Path(candidate_dir)
     if candidate_dir.name != "candidate_v2":
         raise ValueError("candidate bundle replay requires candidate_v2")
-    if (candidate_dir_fd is None) != (output_root_fd is None):
-        raise ValueError("candidate replay descriptors must be supplied as a pair")
-    if candidate_dir_fd is None:
-        _verify_review_temp_directory(candidate_dir)
-        verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
-        actual_member_receipts = build_member_receipts(candidate_dir)
-        if list(artifact.payload["ordered_member_receipts"]) != actual_member_receipts:
-            raise ValueError("candidate bundle member receipts do not match candidate_v2 bytes")
-        _load_candidate_gate_artifact(candidate_dir=candidate_dir, member_receipts=actual_member_receipts)
-        verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
-    else:
-        _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
-        verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
-        actual_member_receipts = build_member_receipts(candidate_dir, candidate_dir_fd=candidate_dir_fd)
-        if list(artifact.payload["ordered_member_receipts"]) != actual_member_receipts:
-            raise ValueError("candidate bundle member receipts do not match candidate_v2 bytes")
-        _load_candidate_gate_artifact_at(
-            candidate_dir=candidate_dir,
-            candidate_dir_fd=candidate_dir_fd,
-            member_receipts=actual_member_receipts,
-        )
-        verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
-        _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
-    if bundle_parent_fd is not None:
-        _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
+    _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
+    verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
+    actual_member_receipts = build_member_receipts(candidate_dir, candidate_dir_fd=candidate_dir_fd)
+    if list(artifact.payload["ordered_member_receipts"]) != actual_member_receipts:
+        raise ValueError("candidate bundle member receipts do not match candidate_v2 bytes")
+    _load_candidate_gate_artifact_at(
+        candidate_dir=candidate_dir,
+        candidate_dir_fd=candidate_dir_fd,
+        member_receipts=actual_member_receipts,
+    )
+    verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
+    _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
+    _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
     return artifact
 
 

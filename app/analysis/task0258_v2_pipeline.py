@@ -47,8 +47,6 @@ from app.analysis.task0258_v2_fs import (
     read_regular_file_at,
     read_regular_file_no_follow,
     seal_generation_directory,
-    verify_absent,
-    verify_generation_directory,
     verify_generation_directory_at,
 )
 from app.analysis.task0258_v2_gate import (
@@ -127,8 +125,8 @@ def seal_candidate_v2(
     verify_candidate_member_bytes(candidate_members)
     authorization_sha256 = _candidate_authorization_sha256(candidate_members)
 
-    def validate_topology() -> None:
-        _require_candidate_publication_topology(output_root)
+    def validate_topology_at(output_root_fd: int) -> None:
+        _require_candidate_publication_topology_at(output_root_fd)
 
     return seal_generation_directory(
         output_root,
@@ -137,7 +135,7 @@ def seal_candidate_v2(
         CANDIDATE_MEMBER_PATHS,
         flock_path=flock_path,
         stage_name=f".{authorization_sha256}.candidate-v2-stage",
-        pre_publish_validator=validate_topology,
+        pre_publish_validator_at=validate_topology_at,
     )
 
 
@@ -298,6 +296,7 @@ def seal_candidate_receipt_bundle(
         resources.callback(os.close, output_parent_fd)
         bundle_parent_fd = _open_existing_directory_no_follow(bundle_path.parent)
         resources.callback(os.close, bundle_parent_fd)
+        _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
         with exclusive_flock_at(output_parent_fd, output_flock_path.name, output_flock_path):
             output_root_fd = _open_directory_at(output_parent_fd, candidate_dir.parent.name)
             resources.callback(os.close, output_root_fd)
@@ -351,6 +350,7 @@ def read_published_candidate_receipt_bundle(
         resources.callback(os.close, output_parent_fd)
         bundle_parent_fd = _open_existing_directory_no_follow(bundle_path.parent)
         resources.callback(os.close, bundle_parent_fd)
+        _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
         with exclusive_flock_at(output_parent_fd, output_flock_path.name, output_flock_path):
             output_root_fd = _open_directory_at(output_parent_fd, candidate_dir.parent.name)
             resources.callback(os.close, output_root_fd)
@@ -467,8 +467,8 @@ def seal_verified_result(
     if not is_sha256(authorization_sha256):
         raise ValueError("verified result rerun authorization SHA is invalid")
 
-    def validate_topology() -> None:
-        _require_candidate_terminal_topology(output_root, "verified_result_v2")
+    def validate_topology_at(output_root_fd: int) -> None:
+        _require_candidate_terminal_topology_at(output_root_fd, "verified_result_v2")
 
     registry_bytes = (compact_canonical_json(registry_payload) + "\n").encode("utf-8")
     return seal_generation_directory(
@@ -478,7 +478,7 @@ def seal_verified_result(
         ("verification_registry.json",),
         flock_path=flock_path,
         stage_name=f".{authorization_sha256}.verified-result-v2-stage",
-        pre_publish_validator=validate_topology,
+        pre_publish_validator_at=validate_topology_at,
         held_lock=output_lock,
     )
 
@@ -545,8 +545,8 @@ def seal_postverification_failure(
     if not is_sha256(authorization_sha256):
         raise ValueError("postverification failure authorization SHA is invalid")
 
-    def validate_topology() -> None:
-        _require_candidate_terminal_topology(output_root, "postverification_failure_v2")
+    def validate_topology_at(output_root_fd: int) -> None:
+        _require_candidate_terminal_topology_at(output_root_fd, "postverification_failure_v2")
 
     failure_bytes = (compact_canonical_json(failure_payload) + "\n").encode("utf-8")
     return seal_generation_directory(
@@ -556,21 +556,21 @@ def seal_postverification_failure(
         ("failure.json",),
         flock_path=flock_path,
         stage_name=f".{authorization_sha256}.postverification-failure-v2-stage",
-        pre_publish_validator=validate_topology,
+        pre_publish_validator_at=validate_topology_at,
         held_lock=output_lock,
     )
 
 
-def _require_candidate_terminal_topology(output_root: Path, target_name: str) -> None:
+def _require_candidate_terminal_topology_at(output_root_fd: int, target_name: str) -> None:
     try:
-        verify_generation_directory(output_root / "candidate_v2", CANDIDATE_MEMBER_PATHS)
+        verify_generation_directory_at(output_root_fd, "candidate_v2", CANDIDATE_MEMBER_PATHS)
         for name in ("terminal_failure_v2", "verified_result_v2", "postverification_failure_v2"):
-            verify_absent(output_root / name)
+            _verify_absent_at(output_root_fd, name)
     except (FileExistsError, ValueError) as exc:
         raise ValueError(f"terminal publication topology is invalid for {target_name}") from exc
 
 
-def _require_candidate_publication_topology(output_root: Path) -> None:
+def _require_candidate_publication_topology_at(output_root_fd: int) -> None:
     try:
         for name in (
             "candidate_v2",
@@ -578,7 +578,7 @@ def _require_candidate_publication_topology(output_root: Path) -> None:
             "verified_result_v2",
             "postverification_failure_v2",
         ):
-            verify_absent(output_root / name)
+            _verify_absent_at(output_root_fd, name)
     except FileExistsError as exc:
         raise ValueError("candidate publication topology is already occupied") from exc
 

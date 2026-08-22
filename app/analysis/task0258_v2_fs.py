@@ -518,6 +518,27 @@ def _open_relative_parent_fd(directory_fd: int, relative_path: str) -> tuple[int
         raise
 
 
+def _ensure_relative_directory_at(directory_fd: int, relative_path: str) -> int:
+    """Create/open a relative directory tree below a stable directory FD."""
+    if relative_path in {"", "."}:
+        return os.dup(directory_fd)
+    _validate_member_path(relative_path)
+    current_fd = os.dup(directory_fd)
+    try:
+        for component in PurePosixPath(relative_path).parts:
+            try:
+                next_fd = os.open(component, _directory_open_flags(), dir_fd=current_fd)
+            except FileNotFoundError:
+                os.mkdir(component, 0o700, dir_fd=current_fd)
+                next_fd = os.open(component, _directory_open_flags(), dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
 def read_regular_file_at_with_identity(
     directory_fd: int, relative_path: str, *, maximum_bytes: int = 16_777_216
 ) -> tuple[bytes, tuple[int, int, int]]:
@@ -606,22 +627,33 @@ def build_generation_directory(
     if stage_name is not None:
         _validate_fixed_stage_name(stage_name)
     stage = parent / (stage_name or f".task0258-{secrets.token_hex(8)}")
+    stage_fd: int | None = None
     try:
         assert parent_fd is not None
         os.mkdir(stage.name, 0o700, dir_fd=parent_fd)
+        stage_fd = _open_directory_at(parent_fd, stage.name)
+        _assert_directory_path_matches_fd(stage, stage_fd, label="generation stage")
+        for relpath, data in members.items():
+            relative = PurePosixPath(relpath)
+            member_parent_fd = _ensure_relative_directory_at(stage_fd, str(relative.parent))
+            try:
+                atomic_write_bytes_at(member_parent_fd, relative.name, data, mode=0o600)
+            finally:
+                os.close(member_parent_fd)
+            _assert_directory_path_matches_fd(stage, stage_fd, label="generation stage")
+        _verify_generation_directory_fd(stage_fd, tuple(members))
+    except BaseException:
+        if stage_fd is not None:
+            try:
+                _remove_directory_tree_at(parent_fd, stage.name, expected_fd=stage_fd)
+            except (OSError, ValueError):
+                pass
+        raise
     finally:
+        if stage_fd is not None:
+            os.close(stage_fd)
         if owns_parent_fd:
             os.close(parent_fd)
-    try:
-        for relpath, data in members.items():
-            target = stage / relpath
-            _ensure_directory_no_follow(target.parent)
-            atomic_write_bytes(target, data, mode=0o600)
-    except BaseException:
-        import shutil
-
-        shutil.rmtree(stage, ignore_errors=True)
-        raise
     return stage
 
 
@@ -632,6 +664,37 @@ def _verify_absent_at(directory_fd: int, name: str) -> None:
     except FileNotFoundError:
         return
     raise FileExistsError(f"target already exists: {name}")
+
+
+def _remove_directory_tree_at(directory_fd: int, name: str, *, expected_fd: int | None = None) -> None:
+    """Remove an owned directory tree relative to a stable parent FD."""
+    _validate_leaf_name(name)
+    try:
+        entry_stat = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if expected_fd is not None:
+        expected_stat = os.fstat(expected_fd)
+        if (entry_stat.st_dev, entry_stat.st_ino) != (expected_stat.st_dev, expected_stat.st_ino):
+            raise ValueError("directory cleanup target no longer matches its stable FD")
+    if not stat.S_ISDIR(entry_stat.st_mode):
+        os.unlink(name, dir_fd=directory_fd)
+        return
+    root_fd = _open_directory_at(directory_fd, name)
+    try:
+        for child_name in os.listdir(root_fd):
+            child_stat = os.stat(child_name, dir_fd=root_fd, follow_symlinks=False)
+            if stat.S_ISDIR(child_stat.st_mode):
+                _remove_directory_tree_at(root_fd, child_name)
+            else:
+                os.unlink(child_name, dir_fd=root_fd)
+        current_stat = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        opened_stat = os.fstat(root_fd)
+        if (current_stat.st_dev, current_stat.st_ino) != (opened_stat.st_dev, opened_stat.st_ino):
+            raise ValueError("directory cleanup target changed during removal")
+    finally:
+        os.close(root_fd)
+    os.rmdir(name, dir_fd=directory_fd)
 
 
 def _publish_generation_directory_locked(staged: Path, final: Path) -> None:
@@ -762,6 +825,7 @@ def seal_generation_directory(
     flock_path: Path,
     stage_name: str | None = None,
     pre_publish_validator: Callable[[], None] | None = None,
+    pre_publish_validator_at: Callable[[int], None] | None = None,
     held_lock: FlockHandle | None = None,
     parent_fd: int | None = None,
 ) -> Path:
@@ -796,6 +860,8 @@ def seal_generation_directory(
             raise ValueError("generation parent descriptor is not a directory")
     lock_parent_fd = _open_existing_directory_no_follow(Path(flock_path).parent)
     final = parent / final_name
+    staged: Path | None = None
+    staged_fd: int | None = None
     try:
         if held_lock is None:
             held_lock = active_flock(flock_path)
@@ -807,20 +873,36 @@ def seal_generation_directory(
             else exclusive_flock_at(lock_parent_fd, Path(flock_path).name, flock_path)
         )
         with lock_context as _active_lock:
+            _assert_directory_path_matches_fd(parent, parent_fd, label="generation parent")
+            if pre_publish_validator_at is not None:
+                pre_publish_validator_at(parent_fd)
             if pre_publish_validator is not None:
                 pre_publish_validator()
             staged = build_generation_directory(parent, members, stage_name=stage_name, parent_fd=parent_fd)
+            staged_fd = _open_directory_at(parent_fd, staged.name)
+            _assert_directory_path_matches_fd(staged, staged_fd, label="generation stage")
+            _verify_generation_directory_fd(staged_fd, expected_paths)
             try:
                 _publish_generation_directory_locked_at(parent_fd, staged.name, final_name)
-                verify_generation_directory(final, expected_paths)
-                if stage_name is not None and (staged.exists() or staged.is_symlink()):
-                    raise ValueError("fixed generation stage remained after publication")
+                _assert_directory_path_matches_fd(parent, parent_fd, label="generation parent")
+                verify_generation_directory_at(parent_fd, final_name, expected_paths)
+                final_fd = _open_directory_at(parent_fd, final_name)
+                try:
+                    _assert_directory_path_matches_fd(final, final_fd, label="published generation")
+                finally:
+                    os.close(final_fd)
+                _verify_absent_at(parent_fd, staged.name)
             except BaseException:
-                if staged.exists() or staged.is_symlink():
-                    import shutil
-
-                    shutil.rmtree(staged, ignore_errors=True)
+                if staged is not None and staged_fd is not None:
+                    try:
+                        _remove_directory_tree_at(parent_fd, staged.name, expected_fd=staged_fd)
+                    except (OSError, ValueError):
+                        pass
                 raise
+            finally:
+                if staged_fd is not None:
+                    os.close(staged_fd)
+                    staged_fd = None
         return final
     finally:
         os.close(lock_parent_fd)

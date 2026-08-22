@@ -144,6 +144,30 @@ def test_generation_rejects_traversal_and_symlinked_parent(tmp_path):
         build_generation_directory(link, {"member.json": b"x"})
 
 
+def test_generation_stage_path_replacement_is_rejected_before_publish(tmp_path, monkeypatch):
+    root = tmp_path / "out"
+    root.mkdir()
+    stage_name = ".fixed-stage"
+    stage = root / stage_name
+    moved_stage = root / ".fixed-stage-moved"
+    original_assert = fs._assert_directory_path_matches_fd
+    replaced = False
+
+    def assert_then_replace(path, directory_fd, *, label):
+        nonlocal replaced
+        original_assert(path, directory_fd, label=label)
+        if label == "generation stage" and not replaced:
+            stage.rename(moved_stage)
+            stage.mkdir()
+            replaced = True
+
+    monkeypatch.setattr(fs, "_assert_directory_path_matches_fd", assert_then_replace)
+    with pytest.raises(ValueError, match="generation stage"):
+        fs.build_generation_directory(root, {"member.json": b"x\n"}, stage_name=stage_name)
+    assert stage.is_dir()
+    assert moved_stage.is_dir()
+
+
 def test_fixed_generation_stage_residue_is_rejected(tmp_path):
     from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
     from app.analysis.task0258_v2_fs import seal_generation_directory
