@@ -36,6 +36,10 @@ model execution or readiness transition.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
+- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@b752a40` against
+      `c5157f2`, with 45 changed files and diff SHA
+      `efddaf484b7dc63e80d4856efcacc54052ea87be453127d602797f620d268e51`;
+      the exact independent `Critical=0 / Required=0` receipt is still open.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 280 passed and
       full suite is 2,148 passed, 5 skipped, 15 warnings. The review-only JSON
