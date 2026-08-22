@@ -233,6 +233,10 @@ model execution or readiness transition.
       `scripts/task0258_endpoint_security_capability.py --signed-artifact
       <path> --json`; the default probe intentionally continues to inspect its
       temporary compile.
+- [x] Record the local-only P2 handoff on `codex/agu-p2-platform-gate`:
+      `docs/specs/TASK-0258-temporal-canary/p2-local-validation-2026-08-22.md`.
+      It confirms the diagnostic/synthetic boundary and records the exact
+      external authorization blocker; it is not a P2 completion receipt.
 - [ ] Complete macOS Endpoint Security/syscall read-isolation observation.
 - [ ] Complete the OS-enforced FD review sandbox and verify worker/process
       cleanup. The pure bootstrap now rejects arbitrary target argv, fixes the
