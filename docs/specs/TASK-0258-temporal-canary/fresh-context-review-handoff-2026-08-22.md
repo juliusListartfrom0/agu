@@ -1,10 +1,10 @@
 # TASK-0258 Amendment-001 — current fresh-context review handoff
 
-Review target: `codex/agu-p1-remediation-2` at commit `b752a40`
+Review target: `codex/agu-p1-remediation-2` at commit `29897ff`
 Baseline: `main` / `origin/main` at `c5157f2`
-Diff SHA-256 (`git diff --binary c5157f2...b752a40`):
-`efddaf484b7dc63e80d4856efcacc54052ea87be453127d602797f620d268e51`
-Changed-file count: 45
+Diff SHA-256 (`git diff --binary c5157f2...29897ff`):
+`ca61dae84e91b1ce90a35306b07959e044c822aba521be075269fbd487a19de6`
+Changed-file count: 46
 
 ## Purpose
 
@@ -27,7 +27,7 @@ repository artifacts together with the code:
 - `docs/harness/P0-P5-EXECUTION-PLAN.md`
 - `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`
 
-Review the complete `c5157f2...b752a40` scope, not only the latest local
+Review the complete `c5157f2...29897ff` scope, not only the latest local
 fixes. In particular, adversarially review receipt/marker replay, publication
 locks and races, canonical/no-follow loaders, bootstrap and FD binding, worker
 process-tree cleanup, diagnostic-vs-production admission, and every place a
@@ -47,12 +47,17 @@ git diff --name-only c5157f2...b752a40 -- '*.py' | \\
 .venv/bin/python scripts/task0258_endpoint_security_capability.py --json
 ```
 
-The current local evidence is 280 focused TASK-0258 tests and 2,148 full-suite
+The current local evidence is 281 focused TASK-0258 tests and 2,149 full-suite
 tests, with 5 skips and 15 warnings; the local service hook also reached
 `/health`/`/ready`, submitted a lightweight task, and observed `completed`.
 The latest remediation closes the prior re-review's mutable `FlockHandle` seal
 state and path-based registry write findings by using immutable seal state and
-one locked, descriptor-relative registry transaction. The simulation and
+one locked, descriptor-relative registry transaction. It also validates all
+ten candidate members by path-specific schema, canonical JSON/JSONL encoding,
+resource-log receipts, and attempt/log counters; verification artifacts now
+verify their own internal hashes; review locks use stable parent directory FDs;
+and the candidate marker/bundle and pre-publication gate-history bindings are
+checked separately. The simulation and
 capability probe must remain explicitly diagnostic-only and must report no
 production capability.
 The repository-wide `ruff check app scripts tests` baseline currently reports

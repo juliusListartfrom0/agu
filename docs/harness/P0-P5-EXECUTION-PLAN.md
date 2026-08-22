@@ -36,9 +36,9 @@ model execution or readiness transition.
 - [ ] Verify implementation-scope baseline/delta, review inputs, resource policy,
       and `Critical=0 / Required=0`.
 - [ ] Seal the amended implementation-review receipt.
-- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@b752a40` against
-      `c5157f2`, with 45 changed files and diff SHA
-      `efddaf484b7dc63e80d4856efcacc54052ea87be453127d602797f620d268e51`;
+- [ ] Fresh-review target is now `codex/agu-p1-remediation-2@29897ff` against
+      `c5157f2`, with 46 changed files and diff SHA
+      `ca61dae84e91b1ce90a35306b07959e044c822aba521be075269fbd487a19de6`;
       the exact independent `Critical=0 / Required=0` receipt is still open.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 280 passed and
@@ -176,6 +176,16 @@ model execution or readiness transition.
       Diff-scoped Ruff over the TASK-0258 Python change set passes; a full
       repository Ruff audit still reports 52 pre-existing findings outside
       this scope and is not silently broadened into this phase.
+- [x] Harden the post-review candidate replay boundary: all ten candidate
+      members are path-specific schema-validated, canonical JSON/JSONL checked,
+      and bound to attempt resource-log receipts/counters; verification
+      embedding/attempt validators verify internal artifact hashes; review
+      locks use stable parent-directory FDs; candidate-published marker
+      receipts are compared with the bundle; and candidate gate history is
+      checked against the pre-publication history prefix. The exact target is
+      `29897ff`; focused TASK-0258 tests are 281 passed and the full suite is
+      2,149 passed, 5 skipped, 15 warnings. This is local evidence only and is
+      not yet an independent sealed review receipt.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
 
