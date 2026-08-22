@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 
@@ -1618,6 +1619,81 @@ def test_verification_attempt_rejects_history_from_another_registry(tmp_path):
     )
     history.directory = tmp_path / "different-registry"
     with pytest.raises(ValueError, match="same registry"):
+        bind_verified_review_attempt_to_run_spine(
+            attempt=loaded_attempt,
+            run_admission=admission_fixture["admission"],
+            run_history=history,
+        )
+
+
+def _load_bound_attempt_for_fixture(admission_fixture):
+    attempt_fixture = _verification_attempt_fixture(admission_fixture["root"])
+    attempt = dict(attempt_fixture["attempt"])
+    admission = admission_fixture["admission"].admission
+    history = admission_fixture["history"]
+    history_contract = {
+        "run_identity_receipt": _payload_receipt(history.payloads[1]),
+        "head_receipt": _payload_receipt(history.payloads[-1]),
+        "marker_count": len(history.payloads) - 2,
+    }
+    attempt["authorization_receipts"] = {
+        **attempt["authorization_receipts"],
+        "rerun_authorization": admission.payload["authorization_receipt"],
+    }
+    attempt["run_identity_receipt"] = history_contract["run_identity_receipt"]
+    attempt["history_head_receipt"] = history_contract["head_receipt"]
+    attempt["run_admission_receipt"] = _payload_receipt(admission.payload)
+    policy = dict(attempt["read_isolation_policy"])
+    policy["run_identity_receipt"] = attempt["run_identity_receipt"]
+    policy["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in policy.items() if key != "artifact_sha256"}
+    )
+    attestation = dict(attempt["read_isolation_attestation"])
+    attestation["policy_artifact_sha256"] = policy["artifact_sha256"]
+    attestation["run_identity_receipt"] = attempt["run_identity_receipt"]
+    attestation["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in attestation.items() if key != "artifact_sha256"}
+    )
+    attempt["read_isolation_policy"] = policy
+    attempt["read_isolation_attestation"] = attestation
+    attempt["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in attempt.items() if key != "artifact_sha256"}
+    )
+    raw = (compact_canonical_json(attempt) + "\n").encode()
+    attempt_fixture["attempt_path"].write_bytes(raw)
+    return load_verified_verification_attempt(
+        execution_context=attempt_fixture["review"],
+        attempt_path=attempt_fixture["attempt_path"],
+        expected_artifact_sha256=attempt["artifact_sha256"],
+        expected_file_sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+
+def test_verification_attempt_rejects_registry_identity_replacement(tmp_path):
+    admission_fixture = _admission_fixture(tmp_path)
+    loaded_attempt = _load_bound_attempt_for_fixture(admission_fixture)
+    history = admission_fixture["history"]
+    registry = admission_fixture["registry"]
+    replacement = tmp_path / "registry-replacement"
+    shutil.copytree(registry, replacement)
+    shutil.rmtree(registry)
+    replacement.rename(registry)
+
+    with pytest.raises(ValueError, match="registry|history"):
+        bind_verified_review_attempt_to_run_spine(
+            attempt=loaded_attempt,
+            run_admission=admission_fixture["admission"],
+            run_history=history,
+        )
+
+
+def test_verification_attempt_rejects_registry_head_drift_after_load(tmp_path):
+    admission_fixture = _admission_fixture(tmp_path)
+    loaded_attempt = _load_bound_attempt_for_fixture(admission_fixture)
+    history = admission_fixture["history"]
+    (admission_fixture["registry"] / "unexpected.json").write_bytes(b"{}\n")
+
+    with pytest.raises(ValueError, match="registry|history"):
         bind_verified_review_attempt_to_run_spine(
             attempt=loaded_attempt,
             run_admission=admission_fixture["admission"],

@@ -151,7 +151,7 @@ def append_run_history_marker(
     verify_run_history_marker(payload)
     lock_path = registry_dir / f".{auth_sha256}.history.lock"
     with exclusive_flock(lock_path):
-        replayed = replay_run_history_registry(registry_dir, auth_sha256)
+        replayed = replay_run_history_registry(registry_dir, auth_sha256, lock_held=True)
         claim = replayed[0]
         completion = replayed[1]
         authorization_receipt = claim["authorization_receipt"]

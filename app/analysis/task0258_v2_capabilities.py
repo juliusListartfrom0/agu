@@ -623,7 +623,7 @@ class VerifiedModuleAStaticInputs:
 
 
 class VerifiedRunHistoryLedger:
-    __slots__ = ("_token", "directory", "authorization_sha256", "payloads")
+    __slots__ = ("_token", "directory", "authorization_sha256", "payloads", "_directory_identity")
 
     def __new__(cls, token: object = None, **kwargs: object):
         if token is not _RUN_HISTORY_TOKEN:
@@ -635,6 +635,12 @@ class VerifiedRunHistoryLedger:
         self.directory = kwargs["directory"]
         self.authorization_sha256 = kwargs["authorization_sha256"]
         self.payloads = tuple(kwargs["payloads"])
+        identity = kwargs["directory_identity"]
+        self._directory_identity = (identity["device"], identity["inode"])
+
+    @property
+    def directory_identity(self) -> tuple[int, int]:
+        return self._directory_identity
 
 
 class VerifiedReviewRunAdmission:
@@ -2773,6 +2779,42 @@ def _history_contract(ledger: VerifiedRunHistoryLedger) -> dict[str, object]:
     }
 
 
+def _replay_history_with_identity(
+    *, directory: Path, authorization_sha256: str, lock_held: bool = False
+) -> tuple[list[Mapping[str, object]], tuple[int, int]]:
+    """Replay a history ledger and bind the snapshot to one physical directory.
+
+    The lock is held across both directory identity checks and the descriptor-
+    relative replay. This prevents a loaded review object from silently using
+    a duplicated registry or a changed durable head.
+    """
+    def replay_locked() -> tuple[list[Mapping[str, object]], tuple[int, int]]:
+        before = _verify_real_directory(directory)
+        payloads = replay_run_history_registry(directory, authorization_sha256, lock_held=True)
+        after = _verify_real_directory(directory)
+        if before != after:
+            raise ValueError("run history registry identity changed during replay")
+        return payloads, after
+
+    if lock_held:
+        return replay_locked()
+    lock_path = Path(directory) / f".{authorization_sha256}.history.lock"
+    with exclusive_flock(lock_path):
+        return replay_locked()
+
+
+def _revalidate_run_history_ledger(ledger: VerifiedRunHistoryLedger) -> None:
+    """Reject a stale, relocated, or mutated loaded history snapshot."""
+    payloads, identity = _replay_history_with_identity(
+        directory=Path(ledger.directory),
+        authorization_sha256=ledger.authorization_sha256,
+    )
+    if identity != ledger.directory_identity:
+        raise ValueError("run history registry physical identity drifted")
+    if tuple(payloads) != ledger.payloads:
+        raise ValueError("run history durable head drifted after load")
+
+
 def bind_verified_review_attempt_to_run_spine(
     *,
     attempt: VerifiedReviewVerificationAttempt,
@@ -2795,6 +2837,15 @@ def bind_verified_review_attempt_to_run_spine(
 
     payload = attempt.artifact.payload
     admission_payload = run_admission.admission.payload
+    history_registry = Path(run_history.directory)
+    admission_registry = Path(run_admission.claim.path).parent
+    if history_registry != admission_registry:
+        raise ValueError("run admission and history must use the same registry")
+    _verify_absolute_no_symlink_path(history_registry)
+    _revalidate_run_history_ledger(run_history)
+    admission_identity = _verify_real_directory(admission_registry)
+    if admission_identity != run_history.directory_identity:
+        raise ValueError("run admission and history registry identities are not the same")
     history_contract = _history_contract(run_history)
     authorization_receipts = payload["authorization_receipts"]
     if not isinstance(authorization_receipts, Mapping):
@@ -2805,10 +2856,6 @@ def bind_verified_review_attempt_to_run_spine(
         raise ValueError("attempt run identity receipt is not bound to history")
     if payload["history_head_receipt"] != history_contract["head_receipt"]:
         raise ValueError("attempt history head receipt is not bound to history")
-    admission_registry = Path(run_admission.claim.path).parent
-    history_registry = Path(run_history.directory)
-    if history_registry != admission_registry:
-        raise ValueError("run admission and history must use the same registry")
     history_claim = run_history.payloads[0]
     history_completion = run_history.payloads[1]
     if history_claim != run_admission.claim.payload or history_completion != run_admission.completion.payload:
@@ -2873,6 +2920,7 @@ def bind_verified_review_no_write_preflight(
         raise TypeError("no-write preflight admission is invalid")
     if type(history) is not VerifiedRunHistoryLedger or history._token is not _RUN_HISTORY_TOKEN:
         raise TypeError("no-write preflight history is invalid")
+    _revalidate_run_history_ledger(history)
 
     output_root = Path(admission.admission.payload["output_root_absolute_path"])
     output_identity = _verify_review_temp_directory(output_root)
@@ -2901,7 +2949,10 @@ def bind_verified_review_no_write_preflight(
         raise ValueError("no-write preflight registry and output root must be distinct")
     expected_registry_names = registry_history_filenames(registry, history.authorization_sha256)
     actual_registry_entries = list(registry.iterdir())
-    if {entry.name for entry in actual_registry_entries} != set(expected_registry_names):
+    expected_registry_names_with_lock = set(expected_registry_names) | {
+        f".{history.authorization_sha256}.history.lock"
+    }
+    if {entry.name for entry in actual_registry_entries} != expected_registry_names_with_lock:
         raise ValueError("no-write preflight registry contains unstable residue")
     if any(entry.is_symlink() or not entry.is_file() for entry in actual_registry_entries):
         raise ValueError("no-write preflight registry contains a non-regular member")
@@ -3208,6 +3259,7 @@ def _load_verified_terminal_artifact_unlocked(
         raise TypeError("terminal loader requires a verified review-only admission")
     if type(run_history) is not VerifiedRunHistoryLedger:
         raise TypeError("terminal loader requires a verified run-history ledger")
+    _revalidate_run_history_ledger(run_history)
     targets = {
         "verified_result": ("verified_result_v2", "verification_registry.json"),
         "postverification_failure": ("postverification_failure_v2", "failure.json"),
@@ -3357,12 +3409,16 @@ def load_verified_run_history_ledger(
     """Replay a complete durable registry and return an opaque ledger."""
     _verify_sha(authorization_sha256, "authorization hash")
     directory = Path(registry_directory)
-    payloads = replay_run_history_registry(directory, authorization_sha256)
+    payloads, identity = _replay_history_with_identity(
+        directory=directory,
+        authorization_sha256=authorization_sha256,
+    )
     return VerifiedRunHistoryLedger(
         _RUN_HISTORY_TOKEN,
         directory=directory,
         authorization_sha256=authorization_sha256,
         payloads=payloads,
+        directory_identity={"device": identity[0], "inode": identity[1]},
     )
 
 
