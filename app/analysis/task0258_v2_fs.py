@@ -138,6 +138,9 @@ class FlockHandle:
             else:
                 parent_fd = _open_existing_directory_no_follow(Path(path).parent)
                 owns_parent_fd = True
+                parent_stat = os.fstat(parent_fd)
+                if (parent_stat.st_dev, parent_stat.st_ino) != self._parent_identity:
+                    raise ValueError("the supplied lock handle path parent identity drifted")
             try:
                 current_stat = os.stat(Path(path).name, dir_fd=parent_fd, follow_symlinks=False)
                 if (
@@ -295,6 +298,10 @@ def _hold_exclusive_flock(
         held_leaf_identity = (held_leaf_stat.st_dev, held_leaf_stat.st_ino)
         if held_leaf_identity != (leaf_stat.st_dev, leaf_stat.st_ino):
             raise ValueError("lock leaf identity changed before flock acquisition")
+        directory_stat = os.fstat(directory_fd)
+        if (directory_stat.st_dev, directory_stat.st_ino) != parent_identity:
+            raise ValueError("lock parent descriptor identity changed before flock acquisition")
+        _assert_directory_path_matches_fd(Path(path).parent, directory_fd, label="lock parent")
         _assert_lock_identity_at(directory_fd, Path(path).name, held_leaf_identity)
         current_stat = os.stat(Path(path).name, dir_fd=directory_fd, follow_symlinks=False)
         if not stat.S_ISREG(current_stat.st_mode) or (current_stat.st_dev, current_stat.st_ino) != held_leaf_identity:

@@ -296,6 +296,56 @@ def test_lock_leaf_replacement_invalidates_old_handle_and_refuses_recreation(tmp
         os.close(directory_fd)
 
 
+def test_lock_handle_rejects_parent_replacement_without_directory_fd(tmp_path):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    lock = parent / ".lock"
+    lock.write_text("")
+    _provision_lock_file(lock)
+    directory_fd = fs._open_existing_directory_no_follow(parent)
+    try:
+        with exclusive_flock_at(directory_fd, lock.name, lock) as handle:
+            moved_parent = tmp_path / "moved-parent"
+            parent.rename(moved_parent)
+            parent.mkdir()
+            os.link(moved_parent / lock.name, lock)
+            _provision_lock_file(lock)
+            with pytest.raises(ValueError, match="parent identity"):
+                handle.assert_held(lock)
+            with pytest.raises(ValueError, match="parent identity"):
+                active_flock(lock)
+    finally:
+        os.close(directory_fd)
+
+
+def test_flock_rechecks_parent_path_before_yield(tmp_path, monkeypatch):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    lock = parent / ".lock"
+    lock.write_text("")
+    _provision_lock_file(lock)
+    directory_fd = fs._open_existing_directory_no_follow(parent)
+    real_flock = fs.fcntl.flock
+    replaced = False
+
+    def flock_then_replace(fd, operation):
+        nonlocal replaced
+        result = real_flock(fd, operation)
+        if operation == fs.fcntl.LOCK_EX and not replaced:
+            parent.rename(tmp_path / "moved-parent")
+            parent.mkdir()
+            replaced = True
+        return result
+
+    monkeypatch.setattr(fs.fcntl, "flock", flock_then_replace)
+    try:
+        with pytest.raises(ValueError, match="lock parent"):
+            with exclusive_flock_at(directory_fd, lock.name, lock):
+                pass
+    finally:
+        os.close(directory_fd)
+
+
 def test_bounded_read_rejects_post_read_metadata_drift(tmp_path, monkeypatch):
     import app.analysis.task0258_v2_fs as fs
 
