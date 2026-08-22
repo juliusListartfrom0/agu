@@ -38,7 +38,7 @@ model execution or readiness transition.
 - [ ] Seal the amended implementation-review receipt.
 - [x] Remediate the repository-local receipt, replay, path, bootstrap, worker,
       and review-only loader findings; current focused suite is 273 passed and
-      full suite is 2,140 passed, 5 skipped, 15 warnings. The review-only JSON
+      full suite is 2,141 passed, 5 skipped, 15 warnings. The review-only JSON
       loaders now reopen bounded temporary files through descriptor-relative
       no-follow reads and reject symlinked temporary parents. Run-history marker
       append now validates the authorization SHA before constructing any lock

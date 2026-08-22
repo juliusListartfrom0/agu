@@ -47,7 +47,7 @@ git diff --name-only c5157f2...fad3196 -- '*.py' | \\
 .venv/bin/python scripts/task0258_endpoint_security_capability.py --json
 ```
 
-The current local evidence is 273 focused TASK-0258 tests and 2,140 full-suite
+The current local evidence is 273 focused TASK-0258 tests and 2,141 full-suite
 tests, with 5 skips and 15 warnings. The simulation and capability probe must
 remain explicitly diagnostic-only and must report no production capability.
 The repository-wide `ruff check app scripts tests` baseline currently reports

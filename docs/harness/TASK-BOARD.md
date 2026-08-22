@@ -51,7 +51,7 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 > Latest P1 remediation (2026-08-22): branch `codex/agu-p1-remediation-2` is
 > pushed through `fad3196`; the focused suite is `273 passed` and the full
-> suite is `2,140 passed, 5 skipped, 15 warnings`. The independent `fad3196`
+> suite is `2,141 passed, 5 skipped, 15 warnings`. The independent `fad3196`
 > delta review is sealed `Critical=0 / Required=0 / Optional=0` for its two
 > changed files only. A fresh full 44-file review at the updated target is
 > still required before P1 can be closed or merged into `main`; P2 remains
