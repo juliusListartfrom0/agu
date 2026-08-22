@@ -2805,6 +2805,20 @@ def bind_verified_review_attempt_to_run_spine(
         raise ValueError("attempt run identity receipt is not bound to history")
     if payload["history_head_receipt"] != history_contract["head_receipt"]:
         raise ValueError("attempt history head receipt is not bound to history")
+    admission_registry = Path(run_admission.claim.path).parent
+    history_registry = Path(run_history.directory)
+    if history_registry != admission_registry:
+        raise ValueError("run admission and history must use the same registry")
+    history_claim = run_history.payloads[0]
+    history_completion = run_history.payloads[1]
+    if history_claim != run_admission.claim.payload or history_completion != run_admission.completion.payload:
+        raise ValueError("run admission and history claim/completion bytes are not the same registry spine")
+    if (
+        history_claim["run_id"] != admission_payload["run_id"]
+        or history_claim["nonce"] != admission_payload["nonce"]
+        or history_claim["output_root_absolute_path"] != admission_payload["output_root_absolute_path"]
+    ):
+        raise ValueError("run admission and history identity/root are not bound")
     if authorization_receipts["rerun_authorization"] != admission_payload["authorization_receipt"]:
         raise ValueError("attempt rerun authorization is not bound to admission")
     if run_history.authorization_sha256 != admission_payload["authorization_receipt"]["artifact_sha256"]:

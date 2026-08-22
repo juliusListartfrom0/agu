@@ -7,6 +7,7 @@ import hashlib
 import pytest
 
 from app.analysis.task0258_module_a_v2 import MODULE_ID, canonical_artifact_sha256, compact_canonical_json
+from app.analysis.task0258_run_history import replay_run_history_registry
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_pipeline import (
     build_candidate_gate_payload,
@@ -428,3 +429,12 @@ def test_run_v2_pipeline_end_to_end(tmp_path):
     assert result["candidate"] == root / "candidate_v2"
     assert result["bundle"] == bundle_path
     assert result["result"] == root / "verified_result_v2"
+    history = replay_run_history_registry(reg, "0" * 64)
+    assert [row["event"] for row in history[2:]] == [
+        "producer_attempt_1_admitted",
+        "producer_attempt_1_completed_private",
+        "verification_attempt_admitted",
+        "verification_attempt_completed_private",
+        "candidate_published",
+        "verified_result_published",
+    ]

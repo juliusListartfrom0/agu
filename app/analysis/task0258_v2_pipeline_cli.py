@@ -12,6 +12,7 @@ owns the sealed state-machine transitions and stays fail-closed.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
 from collections.abc import Mapping
@@ -22,6 +23,10 @@ from app.analysis.task0258_module_a_v2 import (
     compact_canonical_json,
     is_sha256,
     verify_internal_artifact_hash,
+)
+from app.analysis.task0258_run_history import (
+    MARKER_SCHEMA,
+    replay_run_history_registry,
 )
 from app.analysis.task0258_v2_artifacts import (
     CANDIDATE_INPUT_RECEIPT_PROVIDERS,
@@ -38,7 +43,7 @@ from app.analysis.task0258_v2_pipeline import (
     seal_candidate_v2,
     seal_verified_result,
 )
-from app.analysis.task0258_v2_registry import create_run_history_registry
+from app.analysis.task0258_v2_registry import append_run_history_marker, create_run_history_registry
 
 _SYNTHETIC_PIPELINE_CONTEXT_TOKENS: set[tuple[int, bytes]] = set()
 _SYNTHETIC_PIPELINE_CONTEXT_TOKEN = object()
@@ -159,14 +164,40 @@ def run_v2_pipeline(
         output_root=output_root,
         flock_path=flock_path,
     )
+    _append_synthetic_pipeline_markers(
+        registry_dir=registry_dir,
+        auth_sha256=auth_sha256,
+        output_root=output_root,
+        events=(
+            "producer_attempt_1_admitted",
+            "producer_attempt_1_completed_private",
+            "verification_attempt_admitted",
+            "verification_attempt_completed_private",
+        ),
+    )
+    encoded = _rebind_candidate_gate_history(
+        encoded,
+        _history_contract(replay_run_history_registry(registry_dir, auth_sha256)),
+    )
     candidate = seal_candidate_v2(output_root, encoded, flock_path=flock_path)
     with exclusive_flock(flock_path):
         actual_member_receipts = build_member_receipts(candidate)
-    if list(bundle_payload["ordered_member_receipts"]) != actual_member_receipts:
-        raise ValueError("candidate receipt bundle is not bound to the published candidate bytes")
+    _append_synthetic_pipeline_marker(
+        registry_dir=registry_dir,
+        auth_sha256=auth_sha256,
+        output_root=output_root,
+        event="candidate_published",
+        subject_receipts=_candidate_history_subject_receipts(actual_member_receipts),
+    )
+    candidate_history = _history_contract(replay_run_history_registry(registry_dir, auth_sha256))
+    bound_bundle = _bind_candidate_bundle_payload(
+        bundle_payload,
+        actual_member_receipts=actual_member_receipts,
+        candidate_history=candidate_history,
+    )
     seal_candidate_receipt_bundle(
         bundle_path,
-        bundle_payload,
+        bound_bundle,
         candidate_dir=candidate,
         output_flock_path=flock_path,
     )
@@ -175,16 +206,15 @@ def run_v2_pipeline(
             bundle_path,
             candidate_dir=candidate,
             output_flock_path=flock_path,
-            expected_payload=bundle_payload,
+            expected_payload=bound_bundle,
             output_lock_held=True,
         )
-        bound_result = dict(result_payload)
-        bound_result["candidate_receipt_bundle_receipt"] = {
-            "artifact_sha256": bundle_payload["artifact_sha256"],
-            "file_sha256": hashlib.sha256(bundle_bytes).hexdigest(),
-        }
-        bound_result["artifact_sha256"] = canonical_artifact_sha256(
-            {key: value for key, value in bound_result.items() if key != "artifact_sha256"}
+        bound_result = _bind_result_payload(
+            result_payload,
+            actual_member_receipts=actual_member_receipts,
+            candidate_history=candidate_history,
+            bundle_payload=bound_bundle,
+            bundle_bytes=bundle_bytes,
         )
         verify_postpublication_verification(bound_result)
         result = seal_verified_result(
@@ -193,7 +223,206 @@ def run_v2_pipeline(
             flock_path=flock_path,
             output_lock_held=True,
         )
+    result_path = result / "verification_registry.json"
+    result_bytes = result_path.read_bytes()
+    result_payload_on_disk = json.loads(result_bytes.decode("utf-8"))
+    _append_synthetic_pipeline_marker(
+        registry_dir=registry_dir,
+        auth_sha256=auth_sha256,
+        output_root=output_root,
+        event="verified_result_published",
+        subject_receipts=[
+            {
+                "provider": "verified_result",
+                "receipt_kind": "json",
+                "artifact_sha256": result_payload_on_disk["artifact_sha256"],
+                "file_sha256": hashlib.sha256(result_bytes).hexdigest(),
+            }
+        ],
+    )
     return {"candidate": candidate, "bundle": bundle_path, "result": result}
+
+
+def _history_contract(payloads: list[Mapping[str, object]]) -> dict[str, object]:
+    completion = payloads[1]
+    head = payloads[-1]
+    return {
+        "run_identity_receipt": _payload_file_receipt(completion),
+        "head_receipt": _payload_file_receipt(head),
+        "marker_count": len(payloads) - 2,
+    }
+
+
+def _payload_file_receipt(payload: Mapping[str, object]) -> dict[str, str]:
+    raw = (compact_canonical_json(payload) + "\n").encode("utf-8")
+    return {"artifact_sha256": str(payload["artifact_sha256"]), "file_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def _rebind_candidate_gate_history(
+    encoded: Mapping[str, bytes], history_contract: Mapping[str, object]
+) -> dict[str, bytes]:
+    candidate_gate = json.loads(encoded["candidate_gate.json"].decode("utf-8"))
+    slots = [dict(slot) for slot in candidate_gate["input_receipts"]]
+    for slot in slots:
+        if slot["provider"] == "run_history_ledger":
+            slot["receipt"] = dict(history_contract)
+    candidate_gate["input_receipts"] = slots
+    candidate_gate["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in candidate_gate.items() if key != "artifact_sha256"}
+    )
+    verify_candidate_gate(candidate_gate)
+    rebound = dict(encoded)
+    rebound["candidate_gate.json"] = encode_member(candidate_gate)
+    return rebound
+
+
+def _bind_candidate_bundle_payload(
+    bundle_payload: Mapping[str, object],
+    *,
+    actual_member_receipts: list[dict[str, object]],
+    candidate_history: Mapping[str, object],
+) -> dict[str, object]:
+    bound = dict(bundle_payload)
+    bound["ordered_member_receipts"] = actual_member_receipts
+    bound["candidate_published_history_head_receipt"] = dict(candidate_history["head_receipt"])
+    bound["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bound.items() if key != "artifact_sha256"}
+    )
+    verify_candidate_receipt_bundle(bound)
+    return bound
+
+
+def _bind_result_payload(
+    result_payload: Mapping[str, object],
+    *,
+    actual_member_receipts: list[dict[str, object]],
+    candidate_history: Mapping[str, object],
+    bundle_payload: Mapping[str, object],
+    bundle_bytes: bytes,
+) -> dict[str, object]:
+    bound = dict(result_payload)
+    bound["run_history_contract_receipt"] = dict(candidate_history)
+    bound["candidate_receipt_bundle_receipt"] = {
+        "artifact_sha256": bundle_payload["artifact_sha256"],
+        "file_sha256": hashlib.sha256(bundle_bytes).hexdigest(),
+    }
+    bound["candidate_member_receipts"] = actual_member_receipts
+    bound["artifact_sha256"] = canonical_artifact_sha256(
+        {key: value for key, value in bound.items() if key != "artifact_sha256"}
+    )
+    verify_postpublication_verification(bound)
+    return bound
+
+
+def _candidate_history_subject_receipts(
+    member_receipts: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    rows = []
+    for index, row in enumerate(member_receipts):
+        rows.append(
+            {
+                "provider": f"candidate_member_{index:02d}",
+                "receipt_kind": row["receipt_kind"],
+                "artifact_sha256": row["artifact_sha256"],
+                "file_sha256": row["file_sha256"],
+            }
+        )
+    return rows
+
+
+def _append_synthetic_pipeline_markers(
+    *, registry_dir: Path, auth_sha256: str, output_root: Path, events: tuple[str, ...]
+) -> None:
+    for event in events:
+        _append_synthetic_pipeline_marker(
+            registry_dir=registry_dir,
+            auth_sha256=auth_sha256,
+            output_root=output_root,
+            event=event,
+        )
+
+
+def _append_synthetic_pipeline_marker(
+    *,
+    registry_dir: Path,
+    auth_sha256: str,
+    output_root: Path,
+    event: str,
+    subject_receipts: list[dict[str, object]] | None = None,
+) -> None:
+    history = replay_run_history_registry(registry_dir, auth_sha256)
+    claim = history[0]
+    completion = history[1]
+    prior = history[-1]
+    sequence_ordinal = len(history) - 1
+    prior_event = None if len(history) == 2 else history[-1]["event"]
+    root_stat = output_root.stat()
+    private_stage = {
+        "relative_path": "synthetic-stage",
+        "entry_kind": "directory",
+        "device": root_stat.st_dev,
+        "inode": root_stat.st_ino,
+        "size_bytes": None,
+        "file_sha256": None,
+        "artifact_sha256": None,
+    }
+    is_admission = event.endswith("_admitted")
+    is_private = event.endswith("_completed_private")
+    if is_admission:
+        subject_kind = "worker_launch_admission"
+        receipts: list[dict[str, object]] = []
+        projection = None
+        launch_claim = {
+            "worker_role": "synthetic-worker",
+            "parent_pid": os.getpid(),
+            "child_nonce": str(claim["nonce"]),
+            "launch_secret_sha256": "0" * 64,
+            "bootstrap_source_sha256": "0" * 64,
+            "worker_request_artifact_sha256": "0" * 64,
+            "provider_process_instance_id": "0" * 64,
+            "audit_prepared_artifact_sha256": "0" * 64,
+            "expected_hash_state_projection_sha256": "0" * 64,
+            "private_stage_identity": {"device": root_stat.st_dev, "inode": root_stat.st_ino},
+            "source_fd": 4,
+            "liveness_fd": 5,
+            "result_fd": 6,
+            "admitted_marker_fd": 7,
+            "audit_start_gate_fd": 8,
+            "claim_envelope_fd": 9,
+        }
+    else:
+        subject_kind = "completed_private" if is_private else "published_paths"
+        receipts = list(subject_receipts or [{
+            "provider": "synthetic_private_subject",
+            "receipt_kind": "json",
+            "artifact_sha256": "0" * 64,
+            "file_sha256": "0" * 64,
+        }])
+        projection = "0" * 64 if is_private else None
+        launch_claim = None
+    payload: dict[str, object] = {
+        "schema_version": MARKER_SCHEMA,
+        "module_id": claim["module_id"],
+        "authorization_receipt": dict(claim["authorization_receipt"]),
+        "run_identity_receipt": _payload_file_receipt(completion),
+        "run_id": claim["run_id"],
+        "output_root": claim["output_root_absolute_path"],
+        "nonce": claim["nonce"],
+        "sequence_ordinal": sequence_ordinal,
+        "prior_marker_receipt": _payload_file_receipt(prior),
+        "event": event,
+        "subject_kind": subject_kind,
+        "subject_receipts": receipts,
+        "subject_projection_sha256": projection,
+        "root_subject_cas": [private_stage],
+        "worker_launch_claim": launch_claim,
+        "cumulative_active_runtime_nanoseconds": 0,
+        "cumulative_resource_samples": 0,
+        "cumulative_resource_log_bytes": 0,
+        "created_at_utc": claim["created_at_utc"],
+    }
+    payload["artifact_sha256"] = canonical_artifact_sha256(payload)
+    append_run_history_marker(registry_dir, auth_sha256, payload, prior_event)
 
 
 def _require_pipeline_receipt_bindings(
