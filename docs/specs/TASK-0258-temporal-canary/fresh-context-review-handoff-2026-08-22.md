@@ -1,9 +1,9 @@
 # TASK-0258 Amendment-001 — current fresh-context review handoff
 
-Review target: `codex/agu-p1-remediation-2` at commit `4f8678f`
+Review target: `codex/agu-p1-remediation-2` at commit `2bb1fc2`
 Baseline: `main` / `origin/main` at `c5157f2`
-Diff SHA-256 (`git diff --binary c5157f2...4f8678f`):
-`4e56d600644fd89d004faaa1fd2217c8cb25f0be210312b52602ad2c3eb90369`
+Diff SHA-256 (`git diff --binary c5157f2...2bb1fc2`):
+`5364ca7f75fa517e1b86cf62c829b614bf212cf609f066310551f843d1bde055`
 Changed-file count: 46
 
 ## Purpose
@@ -27,7 +27,7 @@ repository artifacts together with the code:
 - `docs/harness/P0-P5-EXECUTION-PLAN.md`
 - `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`
 
-Review the complete `c5157f2...4f8678f` scope, not only the latest local
+Review the complete `c5157f2...2bb1fc2` scope, not only the latest local
 fixes. In particular, adversarially review receipt/marker replay, publication
 locks and races, canonical/no-follow loaders, bootstrap and FD binding, worker
 process-tree cleanup, diagnostic-vs-production admission, and every place a
@@ -40,7 +40,7 @@ Use the canonical environment and record exact output:
 ```bash
 .venv/bin/python -m pytest -q tests/test_task0258_*.py
 .venv/bin/python -m pytest -q
-git diff --name-only c5157f2...4f8678f -- '*.py' | \\
+git diff --name-only c5157f2...2bb1fc2 -- '*.py' | \\
   xargs .venv/bin/python -m ruff check
 .venv/bin/python scripts/verify_harness.py
 .venv/bin/python scripts/task0258_local_simulation.py --json
@@ -125,7 +125,7 @@ the independent review of `9fd347a`:
    replay; the CLI already uses the stable self-owned lock transaction.
 
 `318` focused TASK-0258 tests, `2,186` full-suite tests, Harness, simulation,
-and capability probe pass. A fresh independent review of `4f8678f` is
+and capability probe pass. A fresh independent review of `2bb1fc2` is
 required; P1 remains open until its sealed receipt reports
 `scope_complete=true`, `Critical=0`, and `Required=0`.
 
@@ -145,15 +145,16 @@ process group before escalating to SIGKILL, with a real forked-descendant
 regression. These controls remain local evidence and do not create P2/P5
 authority.
 
-The current `4f8678f` remediation closes the remaining Required lock-leaf
+The current `2bb1fc2` remediation closes the remaining Required lock-leaf
 finding from the exact review of `d009687`: every `FlockHandle` records the
 opened lock leaf's device/inode identity, revalidates the current leaf through
 the stable parent descriptor, and rejects missing, replaced, or non-regular
-leaves. Descriptor-relative acquisition no longer uses `O_CREAT`; lock files
-are provisioned only at explicit publication/registry initialization points.
-The regression covers unlink/recreate while an old handle is live and proves
-that the old handle is invalid. Local evidence is now 318 focused TASK-0258
-tests and 2,186 full-suite tests; this remains local review-only evidence.
+leaves. All lock acquisition entry points now refuse implicit `O_CREAT`;
+lock files are provisioned only at explicit publication/registry
+initialization points. The regression covers unlink/recreate while an old
+handle is live and proves that the old handle is invalid. Local evidence is
+now 318 focused TASK-0258 tests and 2,186 full-suite tests; this remains local
+review-only evidence.
 
 ## Required review output
 
