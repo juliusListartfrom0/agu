@@ -253,6 +253,11 @@ model execution or readiness transition.
 
 - [x] Exercise local review-only replay of the exact authorization graph; it
       returns `production_capability=false` and does not consume a run.
+- [x] Record the P3 local review-only validation on
+      `codex/agu-p3-review-only-audit`:
+      `docs/specs/TASK-0258-temporal-canary/p3-review-only-validation-2026-08-22.md`.
+      The focused graph checks pass, but this is not an exact-SHA production
+      authorization and does not permit P4.
 - [ ] Issue a separate exact-SHA v2 rerun authorization.
 - [ ] Keep Module B, runtime, promotion, readiness, and blind inference false.
 
