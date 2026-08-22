@@ -30,6 +30,7 @@ from app.analysis.task0258_v2_artifacts import (
     verify_candidate_receipt_bundle,
     verify_postpublication_verification,
 )
+from app.analysis.task0258_v2_fs import exclusive_flock
 from app.analysis.task0258_v2_pipeline import (
     build_member_receipts,
     read_published_candidate_receipt_bundle,
@@ -38,7 +39,6 @@ from app.analysis.task0258_v2_pipeline import (
     seal_verified_result,
 )
 from app.analysis.task0258_v2_registry import create_run_history_registry
-from app.analysis.task0258_v2_fs import exclusive_flock
 
 _SYNTHETIC_PIPELINE_CONTEXT_TOKENS: set[tuple[int, bytes]] = set()
 _SYNTHETIC_PIPELINE_CONTEXT_TOKEN = object()
