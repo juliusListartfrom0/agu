@@ -1,9 +1,9 @@
 # TASK-0258 Amendment-001 — current fresh-context review handoff
 
-Review target: `codex/agu-p1-remediation-2` at commit `9fd347a`
+Review target: `codex/agu-p1-remediation-2` at commit `afbfef0`
 Baseline: `main` / `origin/main` at `c5157f2`
-Diff SHA-256 (`git diff --binary c5157f2...9fd347a`):
-`572cb0f21895b2d1c7f865c29b753efb29e1cf34c5298f95a80c5ceedcebb7c5`
+Diff SHA-256 (`git diff --binary c5157f2...afbfef0`):
+`872dfb1d3dec2b7331314c48083865822c60103c9f21649714e17d83bb7f5f2d`
 Changed-file count: 46
 
 ## Purpose
@@ -27,7 +27,7 @@ repository artifacts together with the code:
 - `docs/harness/P0-P5-EXECUTION-PLAN.md`
 - `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`
 
-Review the complete `c5157f2...9fd347a` scope, not only the latest local
+Review the complete `c5157f2...afbfef0` scope, not only the latest local
 fixes. In particular, adversarially review receipt/marker replay, publication
 locks and races, canonical/no-follow loaders, bootstrap and FD binding, worker
 process-tree cleanup, diagnostic-vs-production admission, and every place a
@@ -40,14 +40,14 @@ Use the canonical environment and record exact output:
 ```bash
 .venv/bin/python -m pytest -q tests/test_task0258_*.py
 .venv/bin/python -m pytest -q
-git diff --name-only c5157f2...9fd347a -- '*.py' | \\
+git diff --name-only c5157f2...afbfef0 -- '*.py' | \\
   xargs .venv/bin/python -m ruff check
 .venv/bin/python scripts/verify_harness.py
 .venv/bin/python scripts/task0258_local_simulation.py --json
 .venv/bin/python scripts/task0258_endpoint_security_capability.py --json
 ```
 
-The current local evidence is 290 focused TASK-0258 tests and 2,158 full-suite
+The current local evidence is 295 focused TASK-0258 tests and 2,163 full-suite
 tests, with 5 skips and 15 warnings; the local service hook also reached
 `/health`/`/ready`, submitted a lightweight task, and observed `completed`.
 The latest remediation closes the prior re-review's mutable `FlockHandle` seal
@@ -84,7 +84,7 @@ of a caller-selected output lock in `create_run_history_registry`. The
 Optional finding was that an arbitrary self-signed `Authority=` could be
 classified as signed. These are now covered by the `313582b` and `d8569a8`
 fixes plus regression tests. This is not a sealed 0/0 receipt; P1 remains
-open pending a new review of `9fd347a`.
+open pending a new review of `afbfef0`.
 
 ## Current remediation and review status (2026-08-22)
 
@@ -101,10 +101,33 @@ Commit `9fd347a` addresses the previous review's three Required findings:
    the exact registry-directory FD.
 
 `290` focused TASK-0258 tests, `2,158` full-suite tests, Harness, local service
-curl, simulation, and the capability probe pass. A clean archive replay of the
-exact target also passes `290` focused tests. A new independent reviewer is
-currently reviewing `9fd347a`; until its sealed receipt reports
+curl, simulation, and the capability probe passed for `9fd347a`. Its
+independent review was complete in scope but returned four Required and one
+Optional finding, so it was not a sealed receipt. Those findings are addressed
+by the current `afbfef0` target below; until a new sealed receipt reports
 `scope_complete=true`, `Critical=0`, and `Required=0`, P1 remains open.
+
+## Current remediation round (2026-08-22)
+
+Commit `afbfef0` addresses the four Required and one Optional findings from
+the independent review of `9fd347a`:
+
+1. Review capabilities retain immutable internal snapshots and return fresh
+   verifier-compatible dict/list copies; public-field tampering is detected on
+   access instead of relying on mutable built-in subclasses.
+2. Bundle publication and replay revalidate that the requested bundle parent
+   path still names the opened directory after descriptor-relative work.
+3. Bundle publication/replay register every opened descriptor immediately in an
+   `ExitStack`, including failures during candidate-directory opening.
+4. Registry sealers reject a caller-supplied registry FD unless it is paired
+   with the matching held history lock.
+5. The obsolete caller-held output-lock parameter was removed from bundle
+   replay; the CLI already uses the stable self-owned lock transaction.
+
+`295` focused TASK-0258 tests, `2,163` full-suite tests, Harness, simulation,
+capability probe, and clean-archive replay (`295 passed`) pass. A fresh
+independent review of `afbfef0` is required; P1 remains open until its sealed
+receipt reports `scope_complete=true`, `Critical=0`, and `Required=0`.
 
 ## Required review output
 
