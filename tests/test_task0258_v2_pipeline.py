@@ -7,6 +7,7 @@ import json
 import pytest
 from task0258_candidate_fixtures import candidate_members
 
+from app.analysis import task0258_v2_pipeline as pipeline_module
 from app.analysis.task0258_module_a_v2 import canonical_artifact_sha256, compact_canonical_json
 from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
 from app.analysis.task0258_v2_pipeline import (
@@ -201,13 +202,19 @@ def test_candidate_publication_rejects_existing_terminal_generation(tmp_path):
     assert not (out / "candidate_v2").exists()
 
 
-def test_candidate_receipt_bundle(tmp_path):
+def test_candidate_receipt_bundle(tmp_path, monkeypatch):
     members = _make_members()
     out = tmp_path / "out"
     out.mkdir()
     lock = out.parent / ".task0258-output.lock"
     lock.write_text("")
     final = seal_candidate_v2(out, members, flock_path=lock)
+    monkeypatch.setattr(
+        pipeline_module,
+        "exclusive_flock",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("path-based flock is not allowed")),
+        raising=False,
+    )
     bundle = build_candidate_receipt_bundle_payload(
         authorization_receipt=_receipt(),
         run_identity_receipt=_receipt(),

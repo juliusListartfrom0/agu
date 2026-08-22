@@ -150,21 +150,20 @@ def seal_run_consumption_claim(
     if not isinstance(authorization_receipt, dict) or authorization_receipt.get("artifact_sha256") != auth_sha256:
         raise ValueError("claim authorization is not bound to the registry name")
     registry_dir = Path(registry_dir)
-    if registry_fd is None:
-        _ensure_directory_no_follow(registry_dir)
-    lock_path = registry_dir / f".{auth_sha256}.history.lock"
-    if registry_fd is not None:
-        if held_lock is None:
-            raise ValueError("registry directory descriptor requires its held history lock")
-        held_lock.assert_held(lock_path, directory_fd=registry_fd)
-    elif held_lock is not None:
-        held_lock.assert_held(lock_path)
     owns_directory_fd = registry_fd is None
     if owns_directory_fd:
+        _ensure_directory_no_follow(registry_dir)
         registry_fd = _open_existing_directory_no_follow(registry_dir)
+    assert registry_fd is not None
+    lock_path = registry_dir / f".{auth_sha256}.history.lock"
+    if held_lock is not None:
+        held_lock.assert_held(lock_path, directory_fd=registry_fd)
+    lock_context = (
+        nullcontext(held_lock) if held_lock is not None else exclusive_flock_at(registry_fd, lock_path.name, lock_path)
+    )
     try:
-        assert registry_fd is not None
-        atomic_write_json_at(registry_fd, claim_filename(auth_sha256), payload)
+        with lock_context:
+            atomic_write_json_at(registry_fd, claim_filename(auth_sha256), payload)
     finally:
         if owns_directory_fd:
             os.close(registry_fd)
@@ -191,21 +190,20 @@ def seal_run_consumption_completed(
     if not isinstance(authorization_receipt, dict) or authorization_receipt.get("artifact_sha256") != auth_sha256:
         raise ValueError("completion authorization is not bound to the registry name")
     registry_dir = Path(registry_dir)
-    if registry_fd is None:
-        _ensure_directory_no_follow(registry_dir)
-    lock_path = registry_dir / f".{auth_sha256}.history.lock"
-    if registry_fd is not None:
-        if held_lock is None:
-            raise ValueError("registry directory descriptor requires its held history lock")
-        held_lock.assert_held(lock_path, directory_fd=registry_fd)
-    elif held_lock is not None:
-        held_lock.assert_held(lock_path)
     owns_directory_fd = registry_fd is None
     if owns_directory_fd:
+        _ensure_directory_no_follow(registry_dir)
         registry_fd = _open_existing_directory_no_follow(registry_dir)
+    assert registry_fd is not None
+    lock_path = registry_dir / f".{auth_sha256}.history.lock"
+    if held_lock is not None:
+        held_lock.assert_held(lock_path, directory_fd=registry_fd)
+    lock_context = (
+        nullcontext(held_lock) if held_lock is not None else exclusive_flock_at(registry_fd, lock_path.name, lock_path)
+    )
     try:
-        assert registry_fd is not None
-        atomic_write_json_at(registry_fd, completion_filename(auth_sha256), payload)
+        with lock_context:
+            atomic_write_json_at(registry_fd, completion_filename(auth_sha256), payload)
     finally:
         if owns_directory_fd:
             os.close(registry_fd)

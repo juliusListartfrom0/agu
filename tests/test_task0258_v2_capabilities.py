@@ -755,6 +755,30 @@ def test_review_contexts_are_opaque_and_distinct():
         bind_synthetic_module_a_transaction_context(review_sandbox=discovery, isolated_temp_ancestor=None)
 
 
+def test_review_capability_objects_are_immutable_and_deep_frozen():
+    artifact = capabilities_module.VerifiedJsonArtifact(
+        capabilities_module._JSON_ARTIFACT_TOKEN,
+        path=Path("/tmp/review-artifact.json"),
+        payload={"nested": {"value": 1}},
+        artifact_sha256="0" * 64,
+        file_sha256="1" * 64,
+    )
+    with pytest.raises(AttributeError, match="immutable"):
+        artifact.payload = {}
+    with pytest.raises(TypeError):
+        artifact.payload["nested"]["value"] = 2
+
+    approval = capabilities_module.VerifiedReviewImplementationApproval(
+        capabilities_module._IMPLEMENTATION_APPROVAL_TOKEN,
+        artifact=artifact,
+        repository_root_identity={"device": 1, "inode": 2},
+    )
+    with pytest.raises(AttributeError, match="immutable"):
+        approval.repository_root_identity = {"device": 3, "inode": 4}
+    with pytest.raises(TypeError):
+        approval.repository_root_identity["inode"] = 4
+
+
 def test_synthetic_context_rejects_symlinked_temp_ancestor(tmp_path):
     real_parent = tmp_path / "real-parent"
     real_parent.mkdir()
@@ -1385,7 +1409,7 @@ def test_static_input_loader_replays_complete_parent_graph_as_review_only(tmp_pa
         {"paths": paths, "expected_receipts": receipts},
         {"paths": paths, "expected_receipts": receipts},
     ]
-    capability._task0257_receipts_snapshot = b"drift"
+    object.__setattr__(capability, "_task0257_receipts_snapshot", b"drift")
     with pytest.raises(ValueError, match="mutated"):
         replay_verified_module_a_static_inputs(capability)
     with pytest.raises(TypeError):
@@ -1689,7 +1713,7 @@ def test_verification_attempt_rejects_history_from_another_registry(tmp_path):
         expected_artifact_sha256=attempt["artifact_sha256"],
         expected_file_sha256=hashlib.sha256(raw).hexdigest(),
     )
-    history.directory = tmp_path / "different-registry"
+    object.__setattr__(history, "directory", tmp_path / "different-registry")
     with pytest.raises(ValueError, match="same registry"):
         bind_verified_review_attempt_to_run_spine(
             attempt=loaded_attempt,
@@ -1784,7 +1808,7 @@ def test_review_no_write_preflight_rejects_mutated_admission_spine(tmp_path):
     other_parent = tmp_path / "other-fixture"
     other_parent.mkdir()
     other_fixture = _admission_fixture(other_parent)
-    spine.run_admission = other_fixture["admission"]
+    object.__setattr__(spine, "run_admission", other_fixture["admission"])
     candidate_bundle_path = tmp_path / "bundle-parent" / "candidate-receipt-bundle.json"
     candidate_bundle_path.parent.mkdir()
 
@@ -2045,7 +2069,7 @@ def test_run_admission_loader_can_bind_to_replayed_static_input_contract(tmp_pat
         static_inputs=static_inputs,
     )
     assert loaded.admission.payload["static_input_contract"] == contract
-    static_inputs._task0257_receipts_projection_sha256 = "0" * 64
+    object.__setattr__(static_inputs, "_task0257_receipts_projection_sha256", "0" * 64)
     with pytest.raises(ValueError, match="mutated"):
         load_verified_run_admission_bound_to_static_inputs(
             execution_context=fixture["review"],
@@ -2210,7 +2234,7 @@ def test_terminal_loader_can_bind_to_replayed_static_input_contract(tmp_path, mo
     )
     assert loaded.payload["decision"] == "mechanical_pass"
 
-    static_inputs._task0257_receipts_projection_sha256 = "0" * 64
+    object.__setattr__(static_inputs, "_task0257_receipts_projection_sha256", "0" * 64)
     with pytest.raises(ValueError, match="mutated"):
         load_verified_terminal_artifact_bound_to_static_inputs(
             execution_context=fixture["review"],

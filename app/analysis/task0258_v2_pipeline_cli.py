@@ -222,14 +222,13 @@ def run_v2_pipeline(
             candidate_dir=candidate,
             output_flock_path=flock_path,
         )
+        bundle_bytes = read_published_candidate_receipt_bundle(
+            bundle_path,
+            candidate_dir=candidate,
+            output_flock_path=flock_path,
+            expected_payload=bound_bundle,
+        )
         with exclusive_flock(flock_path) as output_lock:
-            bundle_bytes = read_published_candidate_receipt_bundle(
-                bundle_path,
-                candidate_dir=candidate,
-                output_flock_path=flock_path,
-                expected_payload=bound_bundle,
-                output_lock=output_lock,
-            )
             bound_result = _bind_result_payload(
                 result_payload,
                 actual_member_receipts=actual_member_receipts,

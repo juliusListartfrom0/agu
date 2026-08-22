@@ -313,7 +313,84 @@ _TASK0257_RECEIPT_PROJECTION_FIELDS = frozenset(Task0257ExpectedReceipts.__datac
 _REGISTERED_STATIC_INPUTS_CAPABILITIES: dict[int, tuple[object, str]] = {}
 
 
-class VerifiedReviewDiscoveryContext:
+def _freeze_review_value(value: object) -> object:
+    """Recursively freeze container values carried by review-only capabilities."""
+    if isinstance(value, Mapping):
+        return _FrozenDict({key: _freeze_review_value(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return _FrozenList(_freeze_review_value(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_review_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_review_value(item) for item in value)
+    return value
+
+
+class _FrozenDict(dict):
+    """A dict-shaped value that preserves JSON verifier type contracts."""
+
+    def _reject(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("review capability mappings are immutable")
+
+    __setitem__ = _reject
+    __delitem__ = _reject
+    clear = _reject
+    pop = _reject
+    popitem = _reject
+    setdefault = _reject
+    update = _reject
+    __ior__ = _reject
+
+
+class _FrozenList(list):
+    """A list-shaped value that preserves JSON verifier type contracts."""
+
+    def _reject(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("review capability sequences are immutable")
+
+    __setitem__ = _reject
+    __delitem__ = _reject
+    __iadd__ = _reject
+    __imul__ = _reject
+    append = _reject
+    clear = _reject
+    extend = _reject
+    insert = _reject
+    pop = _reject
+    remove = _reject
+    reverse = _reject
+    sort = _reject
+
+
+class _ImmutableReviewCapability:
+    """Base for opaque review objects with recursively frozen assigned values."""
+
+    __slots__ = ("_sealed",)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        original_init = cls.__init__
+
+        @wraps(original_init)
+        def wrapped_init(self, *args: object, **kwargs: object) -> None:
+            object.__setattr__(self, "_sealed", False)
+            original_init(self, *args, **kwargs)
+            object.__setattr__(self, "_sealed", True)
+
+        cls.__init__ = wrapped_init
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError("review capability objects are immutable")
+        object.__setattr__(self, name, _freeze_review_value(value))
+
+    def __delattr__(self, name: str) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError("review capability objects are immutable")
+        object.__delattr__(self, name)
+
+
+class VerifiedReviewDiscoveryContext(_ImmutableReviewCapability):
     __slots__ = ("_token", "expected_check_name", "expected_command_sha256")
 
     def __new__(cls, token: object = None, **kwargs: object):
@@ -327,7 +404,7 @@ class VerifiedReviewDiscoveryContext:
         self.expected_command_sha256 = kwargs["expected_command_sha256"]
 
 
-class VerifiedImplementationReviewSandboxContext:
+class VerifiedImplementationReviewSandboxContext(_ImmutableReviewCapability):
     __slots__ = ("_token", "expected_check_name", "expected_command_sha256")
 
     def __new__(cls, token: object = None, **kwargs: object):
@@ -341,7 +418,7 @@ class VerifiedImplementationReviewSandboxContext:
         self.expected_command_sha256 = kwargs["expected_command_sha256"]
 
 
-class VerifiedSyntheticDiscoveryTransactionContext:
+class VerifiedSyntheticDiscoveryTransactionContext(_ImmutableReviewCapability):
     __slots__ = ("_token", "ancestor", "identity")
 
     def __new__(cls, token: object = None, **kwargs: object):
@@ -355,7 +432,7 @@ class VerifiedSyntheticDiscoveryTransactionContext:
         self.identity = kwargs["identity"]
 
 
-class VerifiedSyntheticModuleATransactionContext:
+class VerifiedSyntheticModuleATransactionContext(_ImmutableReviewCapability):
     __slots__ = ("_token", "ancestor", "identity")
 
     def __new__(cls, token: object = None, **kwargs: object):
@@ -369,7 +446,7 @@ class VerifiedSyntheticModuleATransactionContext:
         self.identity = kwargs["identity"]
 
 
-class VerifiedJsonArtifact:
+class VerifiedJsonArtifact(_ImmutableReviewCapability):
     __slots__ = ("_token", "path", "payload", "artifact_sha256", "file_sha256")
 
     def __new__(cls, token: object = None, **kwargs: object):
@@ -385,7 +462,7 @@ class VerifiedJsonArtifact:
         self.file_sha256 = kwargs["file_sha256"]
 
 
-class VerifiedReviewReadIsolationBinding:
+class VerifiedReviewReadIsolationBinding(_ImmutableReviewCapability):
     """Review-only pair of canonical read-isolation provider artifacts.
 
     The object proves only that the two supplied artifacts are internally
@@ -407,7 +484,7 @@ class VerifiedReviewReadIsolationBinding:
         self.attestation = kwargs["attestation"]
 
 
-class VerifiedReviewVerificationAttempt:
+class VerifiedReviewVerificationAttempt(_ImmutableReviewCapability):
     """Review-only canonical verification-attempt artifact.
 
     Loading this object proves only the local schema and nested read-isolation
@@ -427,7 +504,7 @@ class VerifiedReviewVerificationAttempt:
         self.artifact = kwargs["artifact"]
 
 
-class VerifiedReviewVerificationAttemptRunSpine:
+class VerifiedReviewVerificationAttemptRunSpine(_ImmutableReviewCapability):
     """Review-only binding of one attempt to its loaded run trust spine."""
 
     __slots__ = ("_token", "attempt", "run_admission", "run_history")
@@ -444,7 +521,7 @@ class VerifiedReviewVerificationAttemptRunSpine:
         self.run_history = kwargs["run_history"]
 
 
-class VerifiedReviewNoWritePreflight:
+class VerifiedReviewNoWritePreflight(_ImmutableReviewCapability):
     """Review-only replay of the complete no-write publication preflight.
 
     This object records the identities and planned paths that a future
@@ -482,7 +559,7 @@ class VerifiedReviewNoWritePreflight:
         self.production_capability = False
 
 
-class VerifiedReviewParentModuleASpecApproval:
+class VerifiedReviewParentModuleASpecApproval(_ImmutableReviewCapability):
     """Review-only replay of the exact parent Module-A specification approval."""
 
     __slots__ = ("_token", "artifact", "approved_files", "production_capability")
@@ -499,7 +576,7 @@ class VerifiedReviewParentModuleASpecApproval:
         self.production_capability = False
 
 
-class VerifiedReviewImplementationApproval:
+class VerifiedReviewImplementationApproval(_ImmutableReviewCapability):
     """Review-only replay of the sealed amendment implementation approval."""
 
     __slots__ = (
@@ -529,7 +606,7 @@ class VerifiedReviewImplementationApproval:
         self.production_capability = False
 
 
-class VerifiedReviewAmendedImplementationReview:
+class VerifiedReviewAmendedImplementationReview(_ImmutableReviewCapability):
     """Review-only replay of the amended implementation and fresh review.
 
     This object binds the externally receipted implementation-review artifact
@@ -561,7 +638,7 @@ class VerifiedReviewAmendedImplementationReview:
         self.production_capability = False
 
 
-class VerifiedReviewRerunAuthorization:
+class VerifiedReviewRerunAuthorization(_ImmutableReviewCapability):
     """Review-only replay of the exact v2 rerun-authorization receipt."""
 
     __slots__ = (
@@ -591,7 +668,7 @@ class VerifiedReviewRerunAuthorization:
         self.production_capability = False
 
 
-class VerifiedModuleAStaticInputs:
+class VerifiedModuleAStaticInputs(_ImmutableReviewCapability):
     """Review-only replay of the complete Module-A static input graph.
 
     The parent plan and TASK-0257 verifier objects are deliberately not
@@ -649,7 +726,7 @@ class VerifiedModuleAStaticInputs:
         return bytes(self._task0257_receipts_snapshot)
 
 
-class VerifiedRunHistoryLedger:
+class VerifiedRunHistoryLedger(_ImmutableReviewCapability):
     __slots__ = ("_token", "directory", "authorization_sha256", "payloads", "_directory_identity")
 
     def __new__(cls, token: object = None, **kwargs: object):
@@ -670,7 +747,7 @@ class VerifiedRunHistoryLedger:
         return self._directory_identity
 
 
-class VerifiedReviewRunAdmission:
+class VerifiedReviewRunAdmission(_ImmutableReviewCapability):
     """Review-only replay of claim, admission, and completion bytes.
 
     This deliberately is not a production admission capability.  It exists

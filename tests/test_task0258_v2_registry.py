@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 import pytest
 
@@ -19,7 +20,7 @@ from app.analysis.task0258_run_history import (
     completion_filename,
     replay_run_history_registry,
 )
-from app.analysis.task0258_v2_fs import _open_existing_directory_no_follow, exclusive_flock_at
+from app.analysis.task0258_v2_fs import _open_existing_directory_no_follow, exclusive_flock, exclusive_flock_at
 from app.analysis.task0258_v2_pipeline import output_parent_flock_path
 from app.analysis.task0258_v2_registry import (
     append_run_history_marker,
@@ -179,6 +180,21 @@ def test_registry_sealers_reject_lock_parent_fd_drift(tmp_path, sealer, payload_
                 os.close(write_registry_fd)
     finally:
         os.close(locked_registry_fd)
+
+
+def test_registry_sealer_acquires_history_lock_when_not_supplied(tmp_path):
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    lock_path = registry / f".{AUTH}.history.lock"
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        with exclusive_flock(lock_path):
+            future = executor.submit(seal_run_consumption_claim, registry, AUTH, _claim())
+            with pytest.raises(TimeoutError):
+                future.result(timeout=0.1)
+        assert future.result(timeout=2) == registry / claim_filename(AUTH)
+    finally:
+        executor.shutdown(wait=True)
 
 
 def test_append_marker_valid(tmp_path):
@@ -347,6 +363,7 @@ def test_append_marker_rejects_symlinked_lock_without_touching_target(tmp_path):
     fixed_ns = 123456789000000000
     os.utime(target, ns=(fixed_ns, fixed_ns))
     lock_path = reg / f".{AUTH}.history.lock"
+    lock_path.unlink()
     lock_path.symlink_to(target)
 
     with pytest.raises(OSError):

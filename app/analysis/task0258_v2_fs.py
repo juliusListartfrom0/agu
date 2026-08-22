@@ -417,6 +417,15 @@ def _validate_leaf_name(name: str) -> None:
         raise ValueError("filesystem leaf name is invalid")
 
 
+def _open_directory_at(directory_fd: int, name: str) -> int:
+    """Open one real child directory relative to a stable directory FD."""
+    _validate_leaf_name(name)
+    try:
+        return os.open(name, _directory_open_flags(), dir_fd=directory_fd)
+    except OSError as exc:
+        raise ValueError(f"directory cannot be opened without following links: {name}") from exc
+
+
 def _publish_no_clobber_at(directory_fd: int, staged_name: str, final_name: str) -> None:
     """Publish two sibling names through one already-open directory FD."""
     _validate_leaf_name(staged_name)
@@ -435,12 +444,16 @@ def atomic_write_bytes_at(
     data: bytes,
     *,
     mode: int = 0o600,
+    stage_name: str | None = None,
 ) -> None:
     """Atomically publish one new file relative to a stable directory FD."""
     _validate_leaf_name(final_name)
     if not isinstance(data, bytes):
         raise TypeError("atomic_write_bytes data must be bytes")
-    stage_name = f".{final_name}.{secrets.token_hex(16)}.stage"
+    if stage_name is None:
+        stage_name = f".{final_name}.{secrets.token_hex(16)}.stage"
+    else:
+        _validate_fixed_stage_name(stage_name)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     flags |= getattr(os, "O_CLOEXEC", 0)
     try:
@@ -472,6 +485,54 @@ def atomic_write_json_at(directory_fd: int, final_name: str, payload: object, *,
     """Atomically publish compact-canonical JSON relative to a directory FD."""
     data = (compact_canonical_json(payload) + "\n").encode("utf-8")
     atomic_write_bytes_at(directory_fd, final_name, data, mode=mode)
+
+
+def _open_relative_parent_fd(directory_fd: int, relative_path: str) -> tuple[int, str]:
+    """Open the parent of a relative path through no-follow directory FDs."""
+    _validate_member_path(relative_path)
+    components = PurePosixPath(relative_path).parts
+    parent_fd = os.dup(directory_fd)
+    try:
+        for component in components[:-1]:
+            next_fd = os.open(component, _directory_open_flags(), dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        return parent_fd, components[-1]
+    except BaseException:
+        os.close(parent_fd)
+        raise
+
+
+def read_regular_file_at(directory_fd: int, relative_path: str, *, maximum_bytes: int = 16_777_216) -> bytes:
+    """Read one bounded regular file relative to a stable directory FD."""
+    if not isinstance(maximum_bytes, int) or isinstance(maximum_bytes, bool) or maximum_bytes < 0:
+        raise ValueError("maximum_bytes is invalid")
+    parent_fd, file_name = _open_relative_parent_fd(directory_fd, relative_path)
+    file_fd: int | None = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW
+        file_fd = os.open(file_name, flags, dir_fd=parent_fd)
+        file_stat = os.fstat(file_fd)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size > maximum_bytes:
+            raise ValueError(f"file is not a bounded regular file: {relative_path}")
+        remaining = file_stat.st_size
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(file_fd, min(1 << 20, remaining))
+            if not chunk:
+                raise ValueError(f"file ended before its recorded size: {relative_path}")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        post_read_stat = os.fstat(file_fd)
+        if _stat_snapshot(post_read_stat) != _stat_snapshot(file_stat):
+            raise ValueError(f"file changed during bounded read: {relative_path}")
+        return b"".join(chunks)
+    except OSError as exc:
+        raise ValueError(f"file cannot be opened without following links: {relative_path}") from exc
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(parent_fd)
 
 
 def _unlink_no_follow(path: Path) -> None:
@@ -597,19 +658,14 @@ def publish_generation_directory(
         os.close(parent_fd)
 
 
-def verify_generation_directory(final: Path, expected_paths: tuple[str, ...]) -> None:
-    """Re-open a published generation and verify exact no-symlink coverage."""
-    final = Path(final)
+def _verify_generation_directory_fd(root_fd: int, expected_paths: tuple[str, ...]) -> None:
+    """Verify exact no-symlink coverage from an already-open generation FD."""
     expected_files = {PurePosixPath(path) for path in expected_paths}
     expected_dirs = {PurePosixPath(".")}
     for path in expected_files:
         expected_dirs.update(PurePosixPath(*path.parts[:index]) for index in range(1, len(path.parts)))
     actual_files: set[PurePosixPath] = set()
     actual_dirs: set[PurePosixPath] = {PurePosixPath(".")}
-    try:
-        root_fd = _open_existing_directory_no_follow(final)
-    except OSError as exc:
-        raise ValueError("published generation is not a real directory") from exc
 
     def walk(directory_fd: int, relative_parent: PurePosixPath) -> None:
         try:
@@ -636,16 +692,38 @@ def verify_generation_directory(final: Path, expected_paths: tuple[str, ...]) ->
             else:
                 raise ValueError(f"published generation contains a non-regular member: {relative}")
 
-    try:
-        walk(root_fd, PurePosixPath("."))
-    finally:
-        os.close(root_fd)
+    walk(root_fd, PurePosixPath("."))
     if actual_files != expected_files or actual_dirs != expected_dirs:
         raise ValueError(
             f"published generation coverage drifted: expected_files={sorted(expected_files)!r} "
             f"actual_files={sorted(actual_files)!r} expected_dirs={sorted(expected_dirs)!r} "
             f"actual_dirs={sorted(actual_dirs)!r}"
         )
+
+
+def verify_generation_directory_at(parent_fd: int, final_name: str, expected_paths: tuple[str, ...]) -> None:
+    """Re-open a published generation relative to a stable parent FD."""
+    try:
+        root_fd = _open_directory_at(parent_fd, final_name)
+    except ValueError as exc:
+        raise ValueError("published generation is not a real directory") from exc
+    try:
+        _verify_generation_directory_fd(root_fd, expected_paths)
+    finally:
+        os.close(root_fd)
+
+
+def verify_generation_directory(final: Path, expected_paths: tuple[str, ...]) -> None:
+    """Re-open a published generation and verify exact no-symlink coverage."""
+    final = Path(final)
+    try:
+        parent_fd = _open_existing_directory_no_follow(final.parent)
+    except OSError as exc:
+        raise ValueError("published generation parent is not a real directory") from exc
+    try:
+        verify_generation_directory_at(parent_fd, final.name, expected_paths)
+    finally:
+        os.close(parent_fd)
 
 
 def seal_generation_directory(
