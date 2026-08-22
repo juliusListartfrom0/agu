@@ -192,6 +192,10 @@ model execution or readiness transition.
       receipt.
 - [ ] Close the OS-enforced review-sandbox/Endpoint Security/admission gaps and
       repeat the independent review to obtain `Critical=0 / Required=0`.
+- [ ] Repeat the fresh review in an environment that can reproduce the full
+      target-scope suite and Harness; the latest attempt returned
+      `scope_complete=false`, `sealed_receipt=false` because its isolated
+      snapshot lacked `.venv` and repository-local datasets/checkpoints.
 
 ### P2 — Platform isolation gate
 
