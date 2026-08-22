@@ -142,6 +142,16 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > with `blocked_external_authorization`; this is local progress, not P2
 > completion. P3–P5 remain prohibited.
 
+> Phase branch lifecycle (2026-08-22): P0 used
+> `codex/agu-p0@171f1b0`, was pushed to `origin/codex/agu-p0`, and is present
+> in `main@c5157f2` after post-merge verification. P1 used
+> `codex/agu-p1-remediation-2@babf255`, was pushed to its remote branch, and
+> was merged into `main@aa3858f`; the post-merge focused/full pytest,
+> diff-scoped Ruff/format, and Harness gates passed. P2 local handoff used
+> `codex/agu-p2-platform-gate@9a1294e`, was pushed, and was merged into
+> `main@ac8a2aa`; post-merge focused TASK-0258 tests (320), Harness, probe,
+> and simulation passed. P2's authoritative platform gate remains incomplete.
+
 > Latest P1 remediation (2026-08-22): commit `b18c784` closes the output-root
 > replacement finding from the `afbfef0` review by binding both
 > `candidate_dir.parent` and `candidate_dir` to stable output-root/candidate

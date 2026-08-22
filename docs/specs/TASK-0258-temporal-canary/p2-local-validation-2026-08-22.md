@@ -63,5 +63,6 @@ authorization. See
 
 P2 local diagnostics are complete, but the authoritative P2 platform gate is
 `blocked_external_authorization`. P3 exact rerun authorization, P4 execution,
-and P5 readiness remain prohibited. This handoff is not a P2 completion receipt
-and must not be merged as if the platform gate passed.
+and P5 readiness remain prohibited. This handoff is not a P2 completion receipt.
+Its documentation was merged into `main@ac8a2aa` only as a truthful local
+handoff; that merge must not be interpreted as the platform gate passing.
