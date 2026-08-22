@@ -11,6 +11,7 @@ from __future__ import annotations
 import ctypes
 import errno
 import fcntl
+import hashlib
 import os
 import secrets
 import stat
@@ -25,13 +26,49 @@ from app.analysis.task0258_module_a_v2 import compact_canonical_json, is_safe_sl
 
 _LOCK_CAPABILITY = object()
 _LOCK_IDENTITY_SUFFIX = ".identity"
+_LOCK_IDENTITY_XATTR_PREFIX = "user.agu.task0258.lock."
 _ACTIVE_FLOCKS: ContextVar[dict[str, "FlockHandle"]] = ContextVar("task0258_active_flocks", default={})
+
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_FSETXATTR = getattr(_LIBC, "fsetxattr", None)
+_FGETXATTR = getattr(_LIBC, "fgetxattr", None)
+if _FSETXATTR is not None and _FGETXATTR is not None:
+    if sys.platform == "darwin":
+        _FSETXATTR.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            ctypes.c_int,
+        ]
+        _FGETXATTR.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            ctypes.c_int,
+        ]
+    else:
+        _FSETXATTR.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        _FGETXATTR.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t]
+    _FSETXATTR.restype = ctypes.c_int
+    _FGETXATTR.restype = ctypes.c_ssize_t
 
 
 class FlockHandle:
     """Process-local capability for a currently-held fixed-path flock."""
 
-    __slots__ = ("_capability", "_fd", "_path", "_parent_identity", "_leaf_identity", "_sealed")
+    __slots__ = (
+        "_capability",
+        "_fd",
+        "_path",
+        "_parent_identity",
+        "_leaf_identity",
+        "_anchor_identity",
+        "_sealed",
+    )
 
     def __setattr__(self, name: str, value: object) -> None:
         if name == "_sealed" and hasattr(self, "_sealed"):
@@ -42,14 +79,21 @@ class FlockHandle:
             "_path",
             "_parent_identity",
             "_leaf_identity",
+            "_anchor_identity",
         }:
             raise AttributeError("FlockHandle fields are immutable")
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
-        if name in {"_capability", "_fd", "_path", "_parent_identity", "_leaf_identity", "_sealed"} and hasattr(
-            self, name
-        ):
+        if name in {
+            "_capability",
+            "_fd",
+            "_path",
+            "_parent_identity",
+            "_leaf_identity",
+            "_anchor_identity",
+            "_sealed",
+        } and hasattr(self, name):
             raise AttributeError("FlockHandle fields are immutable")
         object.__delattr__(self, name)
 
@@ -61,6 +105,7 @@ class FlockHandle:
         *,
         parent_identity: tuple[int, int],
         leaf_identity: tuple[int, int],
+        anchor_identity: tuple[int, int],
     ) -> None:
         if capability is not _LOCK_CAPABILITY:
             raise TypeError("FlockHandle must be created by exclusive_flock")
@@ -69,6 +114,7 @@ class FlockHandle:
         object.__setattr__(self, "_path", Path(path))
         object.__setattr__(self, "_parent_identity", parent_identity)
         object.__setattr__(self, "_leaf_identity", leaf_identity)
+        object.__setattr__(self, "_anchor_identity", anchor_identity)
         object.__setattr__(self, "_sealed", True)
 
     def assert_held(self, path: Path, *, directory_fd: int | None = None) -> None:
@@ -76,7 +122,11 @@ class FlockHandle:
             raise ValueError("the supplied lock handle does not hold the required path")
         try:
             leaf_stat = os.fstat(self._fd)
-            if (leaf_stat.st_dev, leaf_stat.st_ino) != self._leaf_identity or not stat.S_ISREG(leaf_stat.st_mode):
+            if (
+                (leaf_stat.st_dev, leaf_stat.st_ino) != self._leaf_identity
+                or self._anchor_identity != self._leaf_identity
+                or not stat.S_ISREG(leaf_stat.st_mode)
+            ):
                 raise ValueError("the supplied lock handle leaf identity drifted")
             if directory_fd is not None:
                 _assert_directory_path_matches_fd(Path(path).parent, directory_fd, label="lock parent")
@@ -220,7 +270,13 @@ def fsync_dir(path: Path) -> None:
 
 
 @contextmanager
-def _hold_exclusive_flock(path: Path, fd: int, *, parent_identity: tuple[int, int]) -> Iterator[FlockHandle]:
+def _hold_exclusive_flock(
+    path: Path,
+    fd: int,
+    *,
+    parent_identity: tuple[int, int],
+    directory_fd: int,
+) -> Iterator[FlockHandle]:
     handle: FlockHandle | None = None
     try:
         leaf_stat = os.fstat(fd)
@@ -230,10 +286,19 @@ def _hold_exclusive_flock(path: Path, fd: int, *, parent_identity: tuple[int, in
             _LOCK_CAPABILITY,
             parent_identity=parent_identity,
             leaf_identity=(leaf_stat.st_dev, leaf_stat.st_ino),
+            anchor_identity=(leaf_stat.st_dev, leaf_stat.st_ino),
         )
         if not stat.S_ISREG(leaf_stat.st_mode):
             raise ValueError(f"lock path is not a regular file: {path}")
         fcntl.flock(fd, fcntl.LOCK_EX)
+        held_leaf_stat = os.fstat(fd)
+        held_leaf_identity = (held_leaf_stat.st_dev, held_leaf_stat.st_ino)
+        if held_leaf_identity != (leaf_stat.st_dev, leaf_stat.st_ino):
+            raise ValueError("lock leaf identity changed before flock acquisition")
+        _assert_lock_identity_at(directory_fd, Path(path).name, held_leaf_identity)
+        current_stat = os.stat(Path(path).name, dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISREG(current_stat.st_mode) or (current_stat.st_dev, current_stat.st_ino) != held_leaf_identity:
+            raise ValueError("lock leaf identity changed during flock acquisition")
         active = dict(_ACTIVE_FLOCKS.get())
         active[_lock_key(path)] = handle
         context_token = _ACTIVE_FLOCKS.set(active)
@@ -284,6 +349,57 @@ def _parse_lock_identity(raw: bytes) -> tuple[int, int]:
     return device, inode
 
 
+def _lock_identity_xattr_name(lock_name: str) -> bytes:
+    digest = hashlib.sha256(lock_name.encode("utf-8")).hexdigest()
+    return f"{_LOCK_IDENTITY_XATTR_PREFIX}{digest}".encode("ascii")
+
+
+def _read_lock_identity_xattr_at(directory_fd: int, lock_name: str) -> tuple[int, int]:
+    if _FGETXATTR is None:
+        raise ValueError("persistent lock identity xattrs are unavailable")
+    name = _lock_identity_xattr_name(lock_name)
+    if sys.platform == "darwin":
+        size = _FGETXATTR(directory_fd, name, None, 0, 0, 0)
+    else:
+        size = _FGETXATTR(directory_fd, name, None, 0)
+    if size < 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+    if size > 128:
+        raise ValueError("persistent lock identity xattr is too large")
+    buffer = ctypes.create_string_buffer(size)
+    if sys.platform == "darwin":
+        actual_size = _FGETXATTR(directory_fd, name, buffer, size, 0, 0)
+    else:
+        actual_size = _FGETXATTR(directory_fd, name, buffer, size)
+    if actual_size < 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+    if actual_size != size:
+        raise ValueError("persistent lock identity xattr changed during read")
+    return _parse_lock_identity(buffer.raw[:actual_size])
+
+
+def _provision_lock_identity_xattr_at(directory_fd: int, lock_name: str, leaf_identity: tuple[int, int]) -> None:
+    if _FSETXATTR is None:
+        raise ValueError("persistent lock identity xattrs are unavailable")
+    name = _lock_identity_xattr_name(lock_name)
+    raw = _lock_identity_bytes(leaf_identity)
+    buffer = ctypes.create_string_buffer(raw, len(raw))
+    if sys.platform == "darwin":
+        result = _FSETXATTR(directory_fd, name, buffer, len(raw), 0, 2)
+    else:
+        result = _FSETXATTR(directory_fd, name, buffer, len(raw), 2)
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        if _read_lock_identity_xattr_at(directory_fd, lock_name) != leaf_identity:
+            raise ValueError("persistent lock leaf does not match its directory identity")
+        return
+    raise OSError(error_number, os.strerror(error_number))
+
+
 def _read_lock_identity_at(directory_fd: int, lock_name: str) -> tuple[int, int]:
     identity_fd = os.open(
         _lock_identity_name(lock_name),
@@ -304,14 +420,24 @@ def _read_lock_identity_at(directory_fd: int, lock_name: str) -> tuple[int, int]
 
 def _assert_lock_identity_at(directory_fd: int, lock_name: str, leaf_identity: tuple[int, int]) -> None:
     try:
-        expected = _read_lock_identity_at(directory_fd, lock_name)
-    except FileNotFoundError as exc:
-        raise ValueError("persistent lock identity is missing; refusing unanchored acquisition") from exc
+        expected = _read_lock_identity_xattr_at(directory_fd, lock_name)
+    except OSError as exc:
+        missing_xattr_errors = {getattr(errno, "ENODATA", -1), getattr(errno, "ENOATTR", -1)}
+        if exc.errno not in missing_xattr_errors:
+            raise
+        raise ValueError("persistent lock directory identity is missing; refusing unanchored acquisition") from exc
     if expected != leaf_identity:
-        raise ValueError("persistent lock leaf does not match its persistent identity")
+        raise ValueError("persistent lock leaf does not match its directory identity")
+    try:
+        sidecar_identity = _read_lock_identity_at(directory_fd, lock_name)
+    except FileNotFoundError as exc:
+        raise ValueError("persistent lock identity sidecar is missing; refusing unanchored acquisition") from exc
+    if sidecar_identity != leaf_identity:
+        raise ValueError("persistent lock leaf does not match its persistent identity sidecar")
 
 
 def _provision_lock_identity_at(directory_fd: int, lock_name: str, leaf_identity: tuple[int, int]) -> None:
+    _provision_lock_identity_xattr_at(directory_fd, lock_name, leaf_identity)
     identity_name = _lock_identity_name(lock_name)
     raw = _lock_identity_bytes(leaf_identity)
     try:
@@ -368,6 +494,13 @@ def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
     try:
         parent_stat = os.fstat(parent_fd)
         try:
+            current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError as exc:
+            raise ValueError("persistent lock leaf is missing; refusing to recreate it") from exc
+        if not stat.S_ISREG(current_stat.st_mode):
+            raise ValueError("persistent lock path is not a regular file")
+        _assert_lock_identity_at(parent_fd, path.name, (current_stat.st_dev, current_stat.st_ino))
+        try:
             fd = os.open(path.name, _flock_open_flags(), 0o600, dir_fd=parent_fd)
         except FileNotFoundError as exc:
             raise ValueError("persistent lock leaf is missing; refusing to recreate it") from exc
@@ -377,14 +510,15 @@ def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
         except BaseException:
             os.close(fd)
             raise
+        with _hold_exclusive_flock(
+            path,
+            fd,
+            parent_identity=(parent_stat.st_dev, parent_stat.st_ino),
+            directory_fd=parent_fd,
+        ) as handle:
+            yield handle
     finally:
         os.close(parent_fd)
-    with _hold_exclusive_flock(
-        path,
-        fd,
-        parent_identity=(parent_stat.st_dev, parent_stat.st_ino),
-    ) as handle:
-        yield handle
 
 
 @contextmanager
@@ -396,6 +530,13 @@ def exclusive_flock_at(directory_fd: int, lock_name: str, path: Path) -> Iterato
         raise ValueError("lock path leaf does not match the relative lock name")
     _assert_directory_path_matches_fd(path.parent, directory_fd, label="lock parent")
     directory_stat = os.fstat(directory_fd)
+    try:
+        current_stat = os.stat(lock_name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise ValueError("persistent lock leaf is missing; refusing to recreate it") from exc
+    if not stat.S_ISREG(current_stat.st_mode):
+        raise ValueError("persistent lock path is not a regular file")
+    _assert_lock_identity_at(directory_fd, lock_name, (current_stat.st_dev, current_stat.st_ino))
     try:
         fd = os.open(lock_name, _flock_open_flags(), 0o600, dir_fd=directory_fd)
     except FileNotFoundError as exc:
@@ -410,6 +551,7 @@ def exclusive_flock_at(directory_fd: int, lock_name: str, path: Path) -> Iterato
         Path(path),
         fd,
         parent_identity=(directory_stat.st_dev, directory_stat.st_ino),
+        directory_fd=directory_fd,
     ) as handle:
         yield handle
 

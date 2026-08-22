@@ -284,9 +284,12 @@ def test_lock_leaf_replacement_invalidates_old_handle_and_refuses_recreation(tmp
             replacement.rename(lock)
             replacement_identity = (lock.stat().st_dev, lock.stat().st_ino)
             assert replacement_identity != original_identity
+            replacement_sidecar = tmp_path / ".replacement.identity"
+            replacement_sidecar.write_text(f"{replacement_identity[0]}:{replacement_identity[1]}\n")
+            replacement_sidecar.rename(tmp_path / ".lock.identity")
             with pytest.raises(ValueError, match="identity"):
                 old_handle.assert_held(lock, directory_fd=directory_fd)
-            with pytest.raises(ValueError, match="persistent identity"):
+            with pytest.raises(ValueError, match="identity"):
                 with exclusive_flock_at(directory_fd, lock.name, lock):
                     pass
     finally:
