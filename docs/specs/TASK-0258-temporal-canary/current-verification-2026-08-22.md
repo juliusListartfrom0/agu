@@ -1,14 +1,14 @@
 # TASK-0258 current verification receipt
 
 Date: 2026-08-22  
-Base: `main@c193b29`  
+Base: `main@b36dfbd`
 Purpose: record the current repository-local verification after the P2 free-route and P5 readiness audits.
 
 ## Verification results
 
 | Check | Result |
 | --- | --- |
-| Full canonical test suite | `2188 passed, 5 skipped, 15 warnings` in `55.80s` |
+| Full canonical test suite | `2192 passed, 5 skipped, 15 warnings` in `65.89s` |
 | Harness | `Harness verification passed` |
 | Source gate audit | `source_count=19`, `eligible_source_count=0`, audit SHA `24a5006505ed4d211659eb8e367b430ff369ee27172b53e32d446f084bf12b93` |
 | Endpoint Security capability probe | `compile_ok=true`, `signature_kind=adhoc`, entitlement/approval/kernel attestation all `false`, status `blocked_external_authorization` |
