@@ -63,6 +63,14 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > `review_only_synthetic/production_capability=false/p5_ready=false`. See
 > `docs/specs/TASK-0258-temporal-canary/current-verification-2026-08-22.md`.
 
+> Codex memory guard (2026-08-22): added the read-only
+> `scripts/monitor_codex_memory.py` check and `docs/harness/CODEX-MEMORY-GUARD.md`.
+> It stops the workflow with exit code `2` at 8 GiB aggregate/largest-process
+> RSS or one 8 GiB session log, warns at 100 MiB, and emits bounded metadata
+> without full command lines or session contents. The current observation is
+> `ok`, about 2.2 GiB aggregate Codex RSS, about 447 MiB largest process, and
+> about 70 MiB largest session log. No restart or deletion was needed.
+
 > Local Endpoint Security transcript handoff (2026-08-22):
 > `scripts/inspect_endpoint_security_transcript.py` safely validates an
 > absolute regular non-symlink C JSONL transcript and its clean finalization,
@@ -317,6 +325,7 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 | Task ID | Task Name | Completed | Docs | Verification | Delivery Notes |
 | --- | --- | --- | --- | --- | --- |
+| TASK-0273 | Add read-only Codex memory guard | 2026-08-22 | `scripts/monitor_codex_memory.py`, `tests/test_monitor_codex_memory.py`, `docs/harness/CODEX-MEMORY-GUARD.md`, Wiki `agu-codex-memory-crash-root-cause-2026-08-20` | RED import failure; `4 passed`; live JSON probe `status=ok`; no full command lines/session contents emitted | Adds an 8 GiB stop gate and 100 MiB session warning based on the prior Codex memory incident. It never kills, archives, or restarts processes; current memory is below both gates. |
 | TASK-0272 | Diagnose and resolve host memory crash (Codex sessions) | 2026-08-20 | system logs (JetsamEvent/log show/last/pmset), `~/Codex-Session-Archive/manifest.json`, Wiki `agu-codex-memory-crash-root-cause-2026-08-20` | Jetsam root-cause analysis; lsof pre-archive check; archive byte-integrity spot-check; pre/post-restart RSS sampling | The 2026-08-20 host freeze was memory-pressure (57.7 GB RSS on 16 GB, no kernel panic): 4 Codex renderers at ~4.5 GB each held a 3.79 GB session (single 101.5 MB tool-result change) plus 27 parallel ~210 MB duplicates of the same disk-cleanup task. Archived 28 oversized sessions (9.2 GB) to `~/Codex-Session-Archive/` (kept the original + manifest, deleted 27 confirmed duplicates, reclaimed 5.6 GB); restarted ChatGPT.app; memory fell ~24 GB → ~3 GB. No AGU readiness or blind-state change. |
 | TASK-0265 | Reclaim canonical `.venv` bytecode cache | 2026-08-17 | cleanup audit, `docs/current-solution.md`, Wiki `agu-task0258-module-a-disk-gated-2026-08-16` | exact cache census; no active-app/root-cache deletion; `.venv` import and `pip check`; Harness; VLM Ruff; post-cleanup `df` | Removed only rebuildable `.pyc/.pyo` from 656 `.venv` cache directories and final project test/lint caches. Packages, Python 3.11, models and datasets remain; observed free space rose by 104,288 KiB after verification. This clears the current disk precondition but does not authorize a TASK-0258 rerun or change readiness. |
 | TASK-0264 | Audit DVIDS adult full-game metadata lead | 2026-08-17 | DVIDS official pages/rights terms, sealed metadata audit, `docs/current-solution.md`, `docs/datasets.md`, Wiki `agu-dvids-armed-forces-basketball-source-audit-2026-08-17` | Official-page duration/producer/rights/download-option audit; existing-family overlap check; canonical artifact SHA; no media download | DVIDS 2024 Armed Forces Basketball is a strong adult, production-distinct future lead, but remains unselected: Module A has no mechanical pass, Module B is unauthorized, exact payload receipt/continuity/account access and publicity/privacy governance remain open. Zero media bytes downloaded; readiness and blind inference are unchanged. |
