@@ -33,9 +33,16 @@ class FlockHandle:
     __slots__ = ("_capability", "_fd", "_path", "_sealed")
 
     def __setattr__(self, name: str, value: object) -> None:
+        if name == "_sealed" and hasattr(self, "_sealed"):
+            raise AttributeError("FlockHandle seal state is immutable")
         if getattr(self, "_sealed", False) and name in {"_capability", "_fd", "_path"}:
             raise AttributeError("FlockHandle fields are immutable")
         object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name in {"_capability", "_fd", "_path", "_sealed"} and hasattr(self, name):
+            raise AttributeError("FlockHandle fields are immutable")
+        object.__delattr__(self, name)
 
     def __init__(self, path: Path, fd: int, capability: object) -> None:
         if capability is not _LOCK_CAPABILITY:
@@ -156,17 +163,7 @@ def fsync_dir(path: Path) -> None:
 
 
 @contextmanager
-def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
-    """Create/open and hold a no-follow exclusive flock on a regular file."""
-    path = Path(path)
-    flags = (
-        os.O_RDONLY
-        | os.O_CREAT
-        | os.O_NOFOLLOW
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    fd = _open_leaf_no_follow(path, flags, 0o600)
+def _hold_exclusive_flock(path: Path, fd: int) -> Iterator[FlockHandle]:
     handle = FlockHandle(path, fd, _LOCK_CAPABILITY)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -185,6 +182,34 @@ def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
         finally:
             handle._invalidate()
             os.close(fd)
+
+
+def _flock_open_flags() -> int:
+    return (
+        os.O_RDONLY
+        | os.O_CREAT
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+
+
+@contextmanager
+def exclusive_flock(path: Path) -> Iterator[FlockHandle]:
+    """Create/open and hold a no-follow exclusive flock on a regular file."""
+    path = Path(path)
+    fd = _open_leaf_no_follow(path, _flock_open_flags(), 0o600)
+    with _hold_exclusive_flock(path, fd) as handle:
+        yield handle
+
+
+@contextmanager
+def exclusive_flock_at(directory_fd: int, lock_name: str, path: Path) -> Iterator[FlockHandle]:
+    """Hold a no-follow exclusive flock opened relative to a stable directory FD."""
+    _validate_leaf_name(lock_name)
+    fd = os.open(lock_name, _flock_open_flags(), 0o600, dir_fd=directory_fd)
+    with _hold_exclusive_flock(Path(path), fd) as handle:
+        yield handle
 
 
 def verify_absent(path: Path) -> None:
@@ -365,6 +390,74 @@ def atomic_write_bytes(
             pass
         raise
     fsync_dir(parent)
+
+
+def _validate_leaf_name(name: str) -> None:
+    if (
+        not isinstance(name, str)
+        or not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+    ):
+        raise ValueError("filesystem leaf name is invalid")
+
+
+def _publish_no_clobber_at(directory_fd: int, staged_name: str, final_name: str) -> None:
+    """Publish two sibling names through one already-open directory FD."""
+    _validate_leaf_name(staged_name)
+    _validate_leaf_name(final_name)
+    if sys.platform == "darwin":
+        _rename_no_clobber_darwin(Path(staged_name), Path(final_name), directory_fd=directory_fd)
+    else:
+        os.link(staged_name, final_name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd, follow_symlinks=False)
+        os.unlink(staged_name, dir_fd=directory_fd)
+    os.fsync(directory_fd)
+
+
+def atomic_write_bytes_at(
+    directory_fd: int,
+    final_name: str,
+    data: bytes,
+    *,
+    mode: int = 0o600,
+) -> None:
+    """Atomically publish one new file relative to a stable directory FD."""
+    _validate_leaf_name(final_name)
+    if not isinstance(data, bytes):
+        raise TypeError("atomic_write_bytes data must be bytes")
+    stage_name = f".{final_name}.{secrets.token_hex(16)}.stage"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(stage_name, flags, mode, dir_fd=directory_fd)
+    except OSError:
+        raise
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except BaseException:
+        try:
+            os.unlink(stage_name, dir_fd=directory_fd)
+        except OSError:
+            pass
+        raise
+    try:
+        _publish_no_clobber_at(directory_fd, stage_name, final_name)
+    except BaseException:
+        try:
+            os.unlink(stage_name, dir_fd=directory_fd)
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_json_at(directory_fd: int, final_name: str, payload: object, *, mode: int = 0o600) -> None:
+    """Atomically publish compact-canonical JSON relative to a directory FD."""
+    data = (compact_canonical_json(payload) + "\n").encode("utf-8")
+    atomic_write_bytes_at(directory_fd, final_name, data, mode=mode)
 
 
 def _unlink_no_follow(path: Path) -> None:
@@ -568,11 +661,14 @@ __all__ = [
     "active_flock",
     "fsync_dir",
     "exclusive_flock",
+    "exclusive_flock_at",
     "verify_absent",
     "read_regular_file_no_follow",
     "publish_no_clobber",
     "atomic_write_bytes",
     "atomic_write_json",
+    "atomic_write_bytes_at",
+    "atomic_write_json_at",
     "build_generation_directory",
     "publish_generation_directory",
     "verify_generation_directory",

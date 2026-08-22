@@ -38,7 +38,7 @@ from app.analysis.task0258_v2_fs import (
     FlockHandle,
     _open_existing_directory_no_follow,
     active_flock,
-    exclusive_flock,
+    exclusive_flock_at,
 )
 
 MARKER_SCHEMA = "agu.task0258-module-a-v2-run-history-marker.v1"
@@ -375,7 +375,11 @@ def _read_registry_member_from_fd(directory_fd: int, filename: str) -> bytes:
 
 
 def replay_run_history_registry(
-    registry_dir: Path, auth_sha256: str, *, held_lock: FlockHandle | None = None
+    registry_dir: Path,
+    auth_sha256: str,
+    *,
+    held_lock: FlockHandle | None = None,
+    registry_fd: int | None = None,
 ) -> list[Mapping[str, object]]:
     """Load and replay every durable ledger/marker binding in order.
 
@@ -386,22 +390,39 @@ def replay_run_history_registry(
     lock_path = Path(registry_dir) / f".{auth_sha256}.history.lock"
     if held_lock is None:
         held_lock = active_flock(lock_path)
-    if held_lock is None:
-        with exclusive_flock(lock_path) as acquired_lock:
-            return replay_run_history_registry(registry_dir, auth_sha256, held_lock=acquired_lock)
+        if held_lock is None:
+            try:
+                owned_directory_fd = _open_existing_directory_no_follow(Path(registry_dir))
+            except OSError as exc:
+                raise ValueError("registry directory cannot be opened without following links") from exc
+            try:
+                with exclusive_flock_at(owned_directory_fd, lock_path.name, lock_path) as acquired_lock:
+                    return replay_run_history_registry(
+                        registry_dir,
+                        auth_sha256,
+                        held_lock=acquired_lock,
+                        registry_fd=owned_directory_fd,
+                    )
+            finally:
+                os.close(owned_directory_fd)
     held_lock.assert_held(lock_path)
+    if registry_fd is not None and not isinstance(registry_fd, int):
+        raise ValueError("registry directory descriptor is invalid")
+    owns_directory_fd = registry_fd is None
+    if owns_directory_fd:
+        try:
+            registry_fd = _open_existing_directory_no_follow(Path(registry_dir))
+        except OSError as exc:
+            raise ValueError("registry directory cannot be opened without following links") from exc
     try:
-        directory_fd = _open_existing_directory_no_follow(Path(registry_dir))
-    except OSError as exc:
-        raise ValueError("registry directory cannot be opened without following links") from exc
-    try:
-        directory_stat = os.fstat(directory_fd)
+        assert registry_fd is not None
+        directory_stat = os.fstat(registry_fd)
         if not stat.S_ISDIR(directory_stat.st_mode):
             raise ValueError("registry path is not a directory")
-        filenames = _registry_history_filenames_from_fd(directory_fd, auth_sha256)
+        filenames = _registry_history_filenames_from_fd(registry_fd, auth_sha256)
         payloads: list[Mapping[str, object]] = []
         for filename in filenames:
-            raw = _read_registry_member_from_fd(directory_fd, filename)
+            raw = _read_registry_member_from_fd(registry_fd, filename)
             if not raw.endswith(b"\n"):
                 raise ValueError(f"registry member is missing its final LF: {filename}")
             try:
@@ -422,7 +443,8 @@ def replay_run_history_registry(
                     raise ValueError(f"registry marker payload does not match its basename: {filename}")
             payloads.append(payload)
     finally:
-        os.close(directory_fd)
+        if owns_directory_fd:
+            os.close(registry_fd)
     claim = payloads[0]
     completion = payloads[1]
     auth_receipt = claim["authorization_receipt"]
