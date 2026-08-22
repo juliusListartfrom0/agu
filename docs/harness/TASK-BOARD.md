@@ -50,9 +50,11 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 
 > P5 readiness audit (2026-08-22): P5 remains `not_ready`, independently of
 > the Apple gate. The source ledger is still `19 candidates / 0 eligible`, the
-> v8–v23 causal chain is pilot-only with held P/R `not_computable`, existing
-> nested diagnostics retain per-source failures, and the independent-VLM path
-> is not promotion-ready. P2/P3/P4 authority is also still open. See
+> official v8–v23 causal chain is pilot-only with held P/R `not_computable`,
+> and later v24_rv/v25_rv supplements remain separately sealed pilot-only
+> diagnostics (v25_rv added no confirmed shot). Existing nested diagnostics
+> retain per-source failures, and the independent-VLM path is not
+> promotion-ready. P2/P3/P4 authority is also still open. See
 > `docs/specs/TASK-0258-temporal-canary/p5-readiness-audit-2026-08-22.md`.
 
 > Current verification receipt (2026-08-22): the canonical full suite is
