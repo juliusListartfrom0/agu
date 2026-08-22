@@ -4,7 +4,7 @@
 
 ### Current P1 fresh-context review check and local remediation (2026-08-22)
 
-- TASK-0258 focused suite: `264 passed` (including the local simulation command,
+- TASK-0258 focused suite: `270 passed` (including the local simulation command,
   its fail-closed P5 boundary tests, symlinked-parent rejection tests, and
   pre-lock authorization, symlinked-lock, candidate-drift, and fixed-stage
   residue validation for candidate/bundle/result/failure publication). Candidate
@@ -13,13 +13,17 @@
   output-root lock.
 - The independent fresh-context implementation review: **failed** with
   `Critical=7 / Required=5 / Optional=3`.
-- The current independent-review handoff is fixed at `9fc27a9` against
-  `c5157f2` with a 44-file diff SHA; it remains a request for a separate review,
-  not a review receipt or authority.
+- The latest independent fresh-context review of the previous target found
+  `Critical=1 / Required=1 / Optional=1`: the pipeline did not append/replay
+  durable history markers and the review spine allowed admission and history
+  from different registries. Those findings were remediated in the next target;
+  the new handoff is fixed at `a07b100` against `c5157f2` with a 44-file diff
+  SHA and remains a request for a separate review, not a sealed receipt or
+  authority.
 - No model/video extraction or v2 rerun was performed.
 - The passing focused suite does not prove receipt binding, kernel read
   isolation, authenticated bootstrap, or OS-enforced process-tree cleanup.
-- Latest full repository pytest: `2,132 passed, 5
+- Latest full repository pytest: `2,138 passed, 5
   skipped, 15 warnings`.
 - The bounded fs_usage capture regression defers malformed stream input to
   `finish()` and records background iterator failures for the main caller;
