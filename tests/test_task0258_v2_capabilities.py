@@ -725,6 +725,58 @@ def _candidate_bundle_fixture(fixture):
     }
 
 
+def _postverification_failure_fixture(fixture):
+    history_contract = {
+        "run_identity_receipt": _payload_receipt(fixture["history"].payloads[1]),
+        "head_receipt": _payload_receipt(fixture["history"].payloads[-1]),
+        "marker_count": len(fixture["history"].payloads) - 2,
+    }
+    admission = fixture["admission"].admission
+    bundle_receipt = {
+        "artifact_sha256": fixture["bundle"]["artifact_sha256"],
+        "file_sha256": fixture["bundle_file_sha"],
+    }
+    slots = [
+        {"provider": "parent_spec_approval", "verification_state": "verified", "receipt": _receipt()},
+        {
+            "provider": "amendment_implementation_approval",
+            "verification_state": "verified",
+            "receipt": _receipt(),
+        },
+        {"provider": "amended_implementation_review", "verification_state": "verified", "receipt": _receipt()},
+        {
+            "provider": "exact_v2_rerun_authorization",
+            "verification_state": "verified",
+            "receipt": admission.payload["authorization_receipt"],
+        },
+        {"provider": "run_history_ledger", "verification_state": "verified", "receipt": history_contract},
+        {
+            "provider": "run_admission",
+            "verification_state": "verified",
+            "receipt": _payload_receipt(admission.payload),
+        },
+        {
+            "provider": "static_inputs",
+            "verification_state": "verified",
+            "receipt": admission.payload["static_input_contract"],
+        },
+        {"provider": "candidate_receipt_bundle", "verification_state": "verified", "receipt": bundle_receipt},
+    ]
+    failure = build_postpublication_failure_payload(
+        failed_check_name="retrospective",
+        dependency_provider_slots=slots,
+    )
+    failure_dir = seal_postverification_failure(fixture["root"], failure, flock_path=fixture["lock"])
+    return fixture, failure, failure_dir
+
+
+def _replace_output_root_with_identical_copy(fixture):
+    moved_root = fixture["root"].with_name("output-root-moved")
+    fixture["root"].rename(moved_root)
+    shutil.copytree(moved_root, fixture["root"])
+    assert os.stat(moved_root, follow_symlinks=False).st_ino != os.stat(fixture["root"], follow_symlinks=False).st_ino
+
+
 def test_review_contexts_are_opaque_and_distinct():
     with pytest.raises(TypeError):
         VerifiedReviewDiscoveryContext()
@@ -2196,6 +2248,114 @@ def test_terminal_loader_replays_result_and_rejects_candidate_drift(tmp_path):
         )
 
 
+def test_terminal_loader_rejects_replaced_output_root_for_verified_result(tmp_path):
+    fixture = _candidate_bundle_fixture(_admission_fixture(tmp_path))
+    result_dir = seal_verified_result(fixture["root"], fixture["result"], flock_path=fixture["lock"])
+    terminal_path = result_dir / "verification_registry.json"
+    terminal_file_sha = hashlib.sha256(terminal_path.read_bytes()).hexdigest()
+    _replace_output_root_with_identical_copy(fixture)
+
+    with pytest.raises(ValueError, match="output root.*physical identity|root identity"):
+        load_verified_terminal_artifact(
+            execution_context=fixture["review"],
+            terminal_kind="verified_result",
+            output_root=fixture["root"],
+            candidate_dir=fixture["root"] / "candidate_v2",
+            candidate_bundle_path=fixture["bundle_path"],
+            expected_candidate_bundle_artifact_sha256=fixture["bundle"]["artifact_sha256"],
+            expected_candidate_bundle_file_sha256=fixture["bundle_file_sha"],
+            run_admission=fixture["admission"],
+            run_history=fixture["history"],
+            terminal_path=fixture["root"] / "verified_result_v2" / "verification_registry.json",
+            expected_terminal_artifact_sha256=fixture["result"]["artifact_sha256"],
+            expected_terminal_file_sha256=terminal_file_sha,
+        )
+
+
+def test_terminal_loader_rejects_replaced_output_root_for_postverification_failure(tmp_path):
+    fixture, failure, failure_dir = _postverification_failure_fixture(
+        _candidate_bundle_fixture(_admission_fixture(tmp_path))
+    )
+    terminal_path = failure_dir / "failure.json"
+    terminal_file_sha = hashlib.sha256(terminal_path.read_bytes()).hexdigest()
+    _replace_output_root_with_identical_copy(fixture)
+
+    with pytest.raises(ValueError, match="output root.*physical identity|root identity"):
+        load_verified_terminal_artifact(
+            execution_context=fixture["review"],
+            terminal_kind="postverification_failure",
+            output_root=fixture["root"],
+            candidate_dir=fixture["root"] / "candidate_v2",
+            candidate_bundle_path=fixture["bundle_path"],
+            expected_candidate_bundle_artifact_sha256=fixture["bundle"]["artifact_sha256"],
+            expected_candidate_bundle_file_sha256=fixture["bundle_file_sha"],
+            run_admission=fixture["admission"],
+            run_history=fixture["history"],
+            terminal_path=fixture["root"] / "postverification_failure_v2" / "failure.json",
+            expected_terminal_artifact_sha256=failure["artifact_sha256"],
+            expected_terminal_file_sha256=terminal_file_sha,
+        )
+
+
+def test_terminal_loader_closes_output_fds_when_root_identity_is_rejected(tmp_path):
+    if not os.path.isdir("/dev/fd"):
+        pytest.skip("/dev/fd is unavailable")
+    fixture = _candidate_bundle_fixture(_admission_fixture(tmp_path))
+    result_dir = seal_verified_result(fixture["root"], fixture["result"], flock_path=fixture["lock"])
+    terminal_path = result_dir / "verification_registry.json"
+    terminal_file_sha = hashlib.sha256(terminal_path.read_bytes()).hexdigest()
+    _replace_output_root_with_identical_copy(fixture)
+    before = len(os.listdir("/dev/fd"))
+    for _ in range(25):
+        with pytest.raises(ValueError):
+            load_verified_terminal_artifact(
+                execution_context=fixture["review"],
+                terminal_kind="verified_result",
+                output_root=fixture["root"],
+                candidate_dir=fixture["root"] / "candidate_v2",
+                candidate_bundle_path=fixture["bundle_path"],
+                expected_candidate_bundle_artifact_sha256=fixture["bundle"]["artifact_sha256"],
+                expected_candidate_bundle_file_sha256=fixture["bundle_file_sha"],
+                run_admission=fixture["admission"],
+                run_history=fixture["history"],
+                terminal_path=fixture["root"] / "verified_result_v2" / "verification_registry.json",
+                expected_terminal_artifact_sha256=fixture["result"]["artifact_sha256"],
+                expected_terminal_file_sha256=terminal_file_sha,
+            )
+    after = len(os.listdir("/dev/fd"))
+    assert after <= before + 2
+
+
+def test_terminal_loader_closes_output_fds_for_failure_when_root_identity_is_rejected(tmp_path):
+    if not os.path.isdir("/dev/fd"):
+        pytest.skip("/dev/fd is unavailable")
+    fixture, failure, failure_dir = _postverification_failure_fixture(
+        _candidate_bundle_fixture(_admission_fixture(tmp_path))
+    )
+    terminal_path = failure_dir / "failure.json"
+    terminal_file_sha = hashlib.sha256(terminal_path.read_bytes()).hexdigest()
+    _replace_output_root_with_identical_copy(fixture)
+    before = len(os.listdir("/dev/fd"))
+    for _ in range(25):
+        with pytest.raises(ValueError):
+            load_verified_terminal_artifact(
+                execution_context=fixture["review"],
+                terminal_kind="postverification_failure",
+                output_root=fixture["root"],
+                candidate_dir=fixture["root"] / "candidate_v2",
+                candidate_bundle_path=fixture["bundle_path"],
+                expected_candidate_bundle_artifact_sha256=fixture["bundle"]["artifact_sha256"],
+                expected_candidate_bundle_file_sha256=fixture["bundle_file_sha"],
+                run_admission=fixture["admission"],
+                run_history=fixture["history"],
+                terminal_path=fixture["root"] / "postverification_failure_v2" / "failure.json",
+                expected_terminal_artifact_sha256=failure["artifact_sha256"],
+                expected_terminal_file_sha256=terminal_file_sha,
+            )
+    after = len(os.listdir("/dev/fd"))
+    assert after <= before + 2
+
+
 def test_terminal_loader_can_bind_to_replayed_static_input_contract(tmp_path, monkeypatch):
     fixture = _candidate_bundle_fixture(_admission_fixture(tmp_path))
     contract = fixture["admission"].admission.payload["static_input_contract"]
@@ -2264,44 +2424,9 @@ def test_terminal_loader_can_bind_to_replayed_static_input_contract(tmp_path, mo
 def test_terminal_loader_replays_postverification_failure(tmp_path):
     case = tmp_path / "failure-case"
     case.mkdir()
-    fixture = _candidate_bundle_fixture(_admission_fixture(case))
-    history_contract = {
-        "run_identity_receipt": _payload_receipt(fixture["history"].payloads[1]),
-        "head_receipt": _payload_receipt(fixture["history"].payloads[-1]),
-        "marker_count": len(fixture["history"].payloads) - 2,
-    }
-    admission = fixture["admission"].admission
-    bundle_receipt = {
-        "artifact_sha256": fixture["bundle"]["artifact_sha256"],
-        "file_sha256": fixture["bundle_file_sha"],
-    }
-    slots = [
-        {"provider": "parent_spec_approval", "verification_state": "verified", "receipt": _receipt()},
-        {"provider": "amendment_implementation_approval", "verification_state": "verified", "receipt": _receipt()},
-        {"provider": "amended_implementation_review", "verification_state": "verified", "receipt": _receipt()},
-        {
-            "provider": "exact_v2_rerun_authorization",
-            "verification_state": "verified",
-            "receipt": admission.payload["authorization_receipt"],
-        },
-        {"provider": "run_history_ledger", "verification_state": "verified", "receipt": history_contract},
-        {
-            "provider": "run_admission",
-            "verification_state": "verified",
-            "receipt": _payload_receipt(admission.payload),
-        },
-        {
-            "provider": "static_inputs",
-            "verification_state": "verified",
-            "receipt": admission.payload["static_input_contract"],
-        },
-        {"provider": "candidate_receipt_bundle", "verification_state": "verified", "receipt": bundle_receipt},
-    ]
-    failure = build_postpublication_failure_payload(
-        failed_check_name="retrospective",
-        dependency_provider_slots=slots,
+    fixture, failure, failure_dir = _postverification_failure_fixture(
+        _candidate_bundle_fixture(_admission_fixture(case))
     )
-    failure_dir = seal_postverification_failure(fixture["root"], failure, flock_path=fixture["lock"])
     loaded = load_verified_terminal_artifact(
         execution_context=fixture["review"],
         terminal_kind="postverification_failure",

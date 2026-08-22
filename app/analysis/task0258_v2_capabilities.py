@@ -16,7 +16,7 @@ import re
 import stat
 import tempfile
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict
 from functools import wraps
@@ -51,12 +51,20 @@ from app.analysis.task0258_v2_artifacts import (
 )
 from app.analysis.task0258_v2_fs import (
     FlockHandle,
+    _assert_directory_path_matches_fd,
+    _open_directory_at,
     _open_existing_directory_no_follow,
     active_flock,
     exclusive_flock_at,
+    read_regular_file_at,
     verify_generation_directory,
+    verify_generation_directory_at,
 )
-from app.analysis.task0258_v2_pipeline import build_member_receipts, output_parent_flock_path
+from app.analysis.task0258_v2_pipeline import (
+    _assert_candidate_directory_bindings,
+    build_member_receipts,
+    output_parent_flock_path,
+)
 from app.analysis.task0258_v2_read_isolation import verify_read_isolation_binding
 from app.analysis.task0258_v2_verification import verify_verification_attempt
 from app.analysis.vru_causal_temporal_retrospective import (
@@ -1147,13 +1155,10 @@ def exercise_module_a_v2_state_machine_for_review(
     return _exercise_synthetic(synthetic_context, scenario)
 
 
-def _load_verified_json_artifact(
-    *, path: Path, expected_artifact_sha256: str, expected_file_sha256: str
+def _decode_verified_json_artifact(
+    *, path: Path, raw: bytes, expected_artifact_sha256: str, expected_file_sha256: str
 ) -> VerifiedJsonArtifact:
     path = Path(path)
-    if not path.is_absolute() or path.is_symlink() or not path.is_file():
-        raise ValueError("verified artifact must be an absolute regular file")
-    raw = _read_no_follow_temp_file(path, description="verified artifact")
     if hashlib.sha256(raw).hexdigest() != _verify_sha(expected_file_sha256, "artifact file hash"):
         raise ValueError("verified artifact file hash does not match")
     if not raw.endswith(b"\n"):
@@ -1181,6 +1186,38 @@ def _load_verified_json_artifact(
         payload=dict(payload),
         artifact_sha256=expected_artifact_sha256,
         file_sha256=expected_file_sha256,
+    )
+
+
+def _load_verified_json_artifact(
+    *, path: Path, expected_artifact_sha256: str, expected_file_sha256: str
+) -> VerifiedJsonArtifact:
+    path = Path(path)
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise ValueError("verified artifact must be an absolute regular file")
+    raw = _read_no_follow_temp_file(path, description="verified artifact")
+    return _decode_verified_json_artifact(
+        path=path,
+        raw=raw,
+        expected_artifact_sha256=expected_artifact_sha256,
+        expected_file_sha256=expected_file_sha256,
+    )
+
+
+def _load_verified_json_artifact_at(
+    *,
+    directory_fd: int,
+    relative_path: str,
+    path: Path,
+    expected_artifact_sha256: str,
+    expected_file_sha256: str,
+) -> VerifiedJsonArtifact:
+    raw = read_regular_file_at(directory_fd, relative_path, maximum_bytes=_MAX_VERIFIED_FILE_BYTES)
+    return _decode_verified_json_artifact(
+        path=Path(path),
+        raw=raw,
+        expected_artifact_sha256=expected_artifact_sha256,
+        expected_file_sha256=expected_file_sha256,
     )
 
 
@@ -3224,6 +3261,23 @@ def _load_candidate_gate_artifact(
     return gate
 
 
+def _load_candidate_gate_artifact_at(
+    *, candidate_dir: Path, candidate_dir_fd: int, member_receipts: list[dict[str, object]]
+) -> VerifiedJsonArtifact:
+    gate_row = next((row for row in member_receipts if row["relative_path"] == "candidate_gate.json"), None)
+    if not isinstance(gate_row, Mapping) or gate_row["receipt_kind"] != "json":
+        raise ValueError("candidate gate member receipt is missing")
+    gate = _load_verified_json_artifact_at(
+        directory_fd=candidate_dir_fd,
+        relative_path="candidate_gate.json",
+        path=Path(candidate_dir) / "candidate_gate.json",
+        expected_artifact_sha256=gate_row["artifact_sha256"],
+        expected_file_sha256=gate_row["file_sha256"],
+    )
+    verify_candidate_gate(gate.payload)
+    return gate
+
+
 def load_verified_run_admission(
     *,
     execution_context: object,
@@ -3396,6 +3450,8 @@ def _load_verified_candidate_receipt_bundle_locked(
     candidate_dir: Path,
     expected_artifact_sha256: str,
     expected_file_sha256: str,
+    candidate_dir_fd: int | None = None,
+    output_root_fd: int | None = None,
 ) -> VerifiedJsonArtifact:
     """Replay a candidate bundle while the output-parent lock is held."""
     bundle_lock = Path(bundle_path).parent / ".candidate-receipt-bundle.lock"
@@ -3406,6 +3462,8 @@ def _load_verified_candidate_receipt_bundle_locked(
             candidate_dir=candidate_dir,
             expected_artifact_sha256=expected_artifact_sha256,
             expected_file_sha256=expected_file_sha256,
+            candidate_dir_fd=candidate_dir_fd,
+            output_root_fd=output_root_fd,
         )
 
 
@@ -3416,6 +3474,8 @@ def _load_verified_candidate_receipt_bundle_unlocked(
     candidate_dir: Path,
     expected_artifact_sha256: str,
     expected_file_sha256: str,
+    candidate_dir_fd: int | None = None,
+    output_root_fd: int | None = None,
 ) -> VerifiedJsonArtifact:
     """Load a bundle and replay its exact member receipts against ``candidate_v2``."""
     if type(execution_context) not in {
@@ -3431,28 +3491,95 @@ def _load_verified_candidate_receipt_bundle_unlocked(
     candidate_dir = Path(candidate_dir)
     if candidate_dir.name != "candidate_v2":
         raise ValueError("candidate bundle replay requires candidate_v2")
-    _verify_review_temp_directory(candidate_dir)
-    verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
-    actual_member_receipts = build_member_receipts(candidate_dir)
-    if list(artifact.payload["ordered_member_receipts"]) != actual_member_receipts:
-        raise ValueError("candidate bundle member receipts do not match candidate_v2 bytes")
-    _load_candidate_gate_artifact(candidate_dir=candidate_dir, member_receipts=actual_member_receipts)
-    verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
+    if (candidate_dir_fd is None) != (output_root_fd is None):
+        raise ValueError("candidate replay descriptors must be supplied as a pair")
+    if candidate_dir_fd is None:
+        _verify_review_temp_directory(candidate_dir)
+        verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
+        actual_member_receipts = build_member_receipts(candidate_dir)
+        if list(artifact.payload["ordered_member_receipts"]) != actual_member_receipts:
+            raise ValueError("candidate bundle member receipts do not match candidate_v2 bytes")
+        _load_candidate_gate_artifact(candidate_dir=candidate_dir, member_receipts=actual_member_receipts)
+        verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
+    else:
+        _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
+        verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
+        actual_member_receipts = build_member_receipts(candidate_dir, candidate_dir_fd=candidate_dir_fd)
+        if list(artifact.payload["ordered_member_receipts"]) != actual_member_receipts:
+            raise ValueError("candidate bundle member receipts do not match candidate_v2 bytes")
+        _load_candidate_gate_artifact_at(
+            candidate_dir=candidate_dir,
+            candidate_dir_fd=candidate_dir_fd,
+            member_receipts=actual_member_receipts,
+        )
+        verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
+        _assert_candidate_directory_bindings(candidate_dir, output_root_fd, candidate_dir_fd)
     return artifact
+
+
+def _assert_terminal_output_root_binding(
+    *, output_root: Path, output_root_fd: int, run_admission: VerifiedReviewRunAdmission
+) -> None:
+    """Bind a terminal replay to the admission/completion output-root CAS."""
+    expected_root_identity = {
+        "device": run_admission.root_identity["device"],
+        "inode": run_admission.root_identity["inode"],
+    }
+    completion_identity = run_admission.completion.payload.get("root_identity")
+    if completion_identity != expected_root_identity:
+        raise ValueError("terminal replay admission/completion root identity drifted")
+    opened = os.fstat(output_root_fd)
+    actual_root_identity = {"device": opened.st_dev, "inode": opened.st_ino}
+    if actual_root_identity != expected_root_identity:
+        raise ValueError("terminal replay output root physical identity is not bound to admission")
+    _assert_directory_path_matches_fd(output_root, output_root_fd, label="output root")
 
 
 @_history_locked_review_operation
 def load_verified_terminal_artifact(
     *,
+    execution_context: object,
+    terminal_kind: str,
     output_root: Path,
-    **kwargs: object,
+    candidate_dir: Path,
+    candidate_bundle_path: Path,
+    expected_candidate_bundle_artifact_sha256: str,
+    expected_candidate_bundle_file_sha256: str,
+    run_admission: VerifiedReviewRunAdmission,
+    run_history: VerifiedRunHistoryLedger,
+    terminal_path: Path,
+    expected_terminal_artifact_sha256: str,
+    expected_terminal_file_sha256: str,
 ) -> VerifiedJsonArtifact:
-    """Replay one terminal generation while retaining its output lock."""
+    """Replay one terminal generation while retaining stable output descriptors."""
     output_root = Path(output_root)
+    candidate_dir = Path(candidate_dir)
     _verify_review_temp_directory(output_root)
     output_lock = output_parent_flock_path(output_root)
-    with _exclusive_review_lock(output_lock):
-        return _load_verified_terminal_artifact_unlocked(output_root=output_root, **kwargs)
+    with ExitStack() as resources:
+        output_parent_fd = _open_existing_directory_no_follow(output_root.parent)
+        resources.callback(os.close, output_parent_fd)
+        with _exclusive_review_lock(output_lock):
+            output_root_fd = _open_directory_at(output_parent_fd, output_root.name)
+            resources.callback(os.close, output_root_fd)
+            candidate_dir_fd = _open_directory_at(output_root_fd, candidate_dir.name)
+            resources.callback(os.close, candidate_dir_fd)
+            return _load_verified_terminal_artifact_unlocked(
+                execution_context=execution_context,
+                terminal_kind=terminal_kind,
+                output_root=output_root,
+                candidate_dir=candidate_dir,
+                candidate_bundle_path=candidate_bundle_path,
+                expected_candidate_bundle_artifact_sha256=expected_candidate_bundle_artifact_sha256,
+                expected_candidate_bundle_file_sha256=expected_candidate_bundle_file_sha256,
+                run_admission=run_admission,
+                run_history=run_history,
+                terminal_path=terminal_path,
+                expected_terminal_artifact_sha256=expected_terminal_artifact_sha256,
+                expected_terminal_file_sha256=expected_terminal_file_sha256,
+                _output_root_fd=output_root_fd,
+                _candidate_dir_fd=candidate_dir_fd,
+            )
 
 
 def _load_verified_terminal_artifact_unlocked(
@@ -3469,6 +3596,8 @@ def _load_verified_terminal_artifact_unlocked(
     terminal_path: Path,
     expected_terminal_artifact_sha256: str,
     expected_terminal_file_sha256: str,
+    _output_root_fd: int | None = None,
+    _candidate_dir_fd: int | None = None,
 ) -> VerifiedJsonArtifact:
     """Replay one existing terminal generation and its trust-spine inputs.
 
@@ -3483,6 +3612,8 @@ def _load_verified_terminal_artifact_unlocked(
         raise TypeError("terminal loader requires a verified review-only admission")
     if type(run_history) is not VerifiedRunHistoryLedger:
         raise TypeError("terminal loader requires a verified run-history ledger")
+    if _output_root_fd is None or _candidate_dir_fd is None:
+        raise ValueError("terminal loader requires stable output-root and candidate descriptors")
     targets = {
         "verified_result": ("verified_result_v2", "verification_registry.json"),
         "postverification_failure": ("postverification_failure_v2", "failure.json"),
@@ -3495,10 +3626,16 @@ def _load_verified_terminal_artifact_unlocked(
     candidate_dir = Path(candidate_dir)
     terminal_path = Path(terminal_path)
     _verify_review_temp_directory(output_root)
+    _assert_terminal_output_root_binding(
+        output_root=output_root,
+        output_root_fd=_output_root_fd,
+        run_admission=run_admission,
+    )
     if candidate_dir != output_root / "candidate_v2":
         raise ValueError("terminal candidate path is not bound to the output root")
+    _assert_candidate_directory_bindings(candidate_dir, _output_root_fd, _candidate_dir_fd)
     _verify_review_temp_directory(candidate_dir)
-    verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
+    verify_generation_directory_at(_output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
     expected_terminal_dir = output_root / terminal_name
     if terminal_path != expected_terminal_dir / member_name:
         raise ValueError("terminal artifact path is not bound to its fixed generation")
@@ -3517,6 +3654,8 @@ def _load_verified_terminal_artifact_unlocked(
         candidate_dir=candidate_dir,
         expected_artifact_sha256=expected_candidate_bundle_artifact_sha256,
         expected_file_sha256=expected_candidate_bundle_file_sha256,
+        candidate_dir_fd=_candidate_dir_fd,
+        output_root_fd=_output_root_fd,
     )
     if bundle.path.is_relative_to(output_root):
         raise ValueError("candidate receipt bundle must remain outside the output root")
@@ -3577,11 +3716,19 @@ def _load_verified_terminal_artifact_unlocked(
     if gate_receipts["run_history_ledger"] != gate_history_contract:
         raise ValueError("candidate gate history is not bound to history")
 
-    terminal = _load_verified_json_artifact(
-        path=terminal_path,
-        expected_artifact_sha256=expected_terminal_artifact_sha256,
-        expected_file_sha256=expected_terminal_file_sha256,
-    )
+    terminal_dir_fd = _open_directory_at(_output_root_fd, terminal_name)
+    try:
+        _assert_directory_path_matches_fd(terminal_path.parent, terminal_dir_fd, label="terminal directory")
+        verify_generation_directory_at(_output_root_fd, terminal_name, (member_name,))
+        terminal = _load_verified_json_artifact_at(
+            directory_fd=terminal_dir_fd,
+            relative_path=member_name,
+            path=terminal_path,
+            expected_artifact_sha256=expected_terminal_artifact_sha256,
+            expected_file_sha256=expected_terminal_file_sha256,
+        )
+    finally:
+        os.close(terminal_dir_fd)
     bundle_receipt = _artifact_file_receipt(bundle)
     if terminal_kind == "verified_result":
         verify_postpublication_verification(terminal.payload)
@@ -3611,6 +3758,12 @@ def _load_verified_terminal_artifact_unlocked(
             raise ValueError("postverification failure static inputs are not bound to admission")
         if slots["candidate_receipt_bundle"]["receipt"] != bundle_receipt:
             raise ValueError("postverification failure bundle receipt does not match bundle bytes")
+    _assert_terminal_output_root_binding(
+        output_root=output_root,
+        output_root_fd=_output_root_fd,
+        run_admission=run_admission,
+    )
+    _assert_candidate_directory_bindings(candidate_dir, _output_root_fd, _candidate_dir_fd)
     return terminal
 
 
