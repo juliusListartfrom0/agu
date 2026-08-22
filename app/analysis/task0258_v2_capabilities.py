@@ -17,6 +17,7 @@ import stat
 import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict
+from functools import wraps
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 
@@ -2803,11 +2804,12 @@ def _replay_history_with_identity(
         return replay_locked()
 
 
-def _revalidate_run_history_ledger(ledger: VerifiedRunHistoryLedger) -> None:
+def _revalidate_run_history_ledger(ledger: VerifiedRunHistoryLedger, *, lock_held: bool = False) -> None:
     """Reject a stale, relocated, or mutated loaded history snapshot."""
     payloads, identity = _replay_history_with_identity(
         directory=Path(ledger.directory),
         authorization_sha256=ledger.authorization_sha256,
+        lock_held=lock_held,
     )
     if identity != ledger.directory_identity:
         raise ValueError("run history registry physical identity drifted")
@@ -2815,6 +2817,60 @@ def _revalidate_run_history_ledger(ledger: VerifiedRunHistoryLedger) -> None:
         raise ValueError("run history durable head drifted after load")
 
 
+def _history_locked_review_operation(function):
+    """Hold one history lock across a review-only trust-spine operation."""
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        ledger = kwargs.get("run_history")
+        if ledger is None:
+            spine = kwargs.get("attempt_spine")
+            if type(spine) is VerifiedReviewVerificationAttemptRunSpine:
+                ledger = spine.run_history
+        if type(ledger) is not VerifiedRunHistoryLedger or ledger._token is not _RUN_HISTORY_TOKEN:
+            return function(*args, **kwargs)
+        directory = Path(ledger.directory)
+        if directory.is_symlink() or not directory.is_dir():
+            return function(*args, **kwargs)
+        lock_path = directory / f".{ledger.authorization_sha256}.history.lock"
+        with exclusive_flock(lock_path):
+            return function(*args, **kwargs)
+
+    return wrapper
+
+
+def _verify_run_admission_history_binding(
+    *,
+    run_admission: VerifiedReviewRunAdmission,
+    run_history: VerifiedRunHistoryLedger,
+    lock_held: bool,
+) -> dict[str, object]:
+    """Cross-bind admission claim/completion bytes to one live history ledger."""
+    history_registry = Path(run_history.directory)
+    admission_registry = Path(run_admission.claim.path).parent
+    if history_registry != admission_registry:
+        raise ValueError("run admission and history must use the same registry")
+    _verify_absolute_no_symlink_path(history_registry)
+    _revalidate_run_history_ledger(run_history, lock_held=lock_held)
+    admission_identity = _verify_real_directory(admission_registry)
+    if admission_identity != run_history.directory_identity:
+        raise ValueError("run admission and history registry identities are not the same")
+    history_claim = run_history.payloads[0]
+    history_completion = run_history.payloads[1]
+    admission_payload = run_admission.admission.payload
+    if history_claim != run_admission.claim.payload or history_completion != run_admission.completion.payload:
+        raise ValueError("run admission and history claim/completion bytes are not the same registry spine")
+    if (
+        history_claim["run_id"] != admission_payload["run_id"]
+        or history_claim["nonce"] != admission_payload["nonce"]
+        or history_claim["output_root_absolute_path"] != admission_payload["output_root_absolute_path"]
+    ):
+        raise ValueError("run admission and history identity/root are not bound")
+    if run_history.authorization_sha256 != admission_payload["authorization_receipt"]["artifact_sha256"]:
+        raise ValueError("run history authorization is not bound to admission")
+    return _history_contract(run_history)
+
+
+@_history_locked_review_operation
 def bind_verified_review_attempt_to_run_spine(
     *,
     attempt: VerifiedReviewVerificationAttempt,
@@ -2837,16 +2893,11 @@ def bind_verified_review_attempt_to_run_spine(
 
     payload = attempt.artifact.payload
     admission_payload = run_admission.admission.payload
-    history_registry = Path(run_history.directory)
-    admission_registry = Path(run_admission.claim.path).parent
-    if history_registry != admission_registry:
-        raise ValueError("run admission and history must use the same registry")
-    _verify_absolute_no_symlink_path(history_registry)
-    _revalidate_run_history_ledger(run_history)
-    admission_identity = _verify_real_directory(admission_registry)
-    if admission_identity != run_history.directory_identity:
-        raise ValueError("run admission and history registry identities are not the same")
-    history_contract = _history_contract(run_history)
+    history_contract = _verify_run_admission_history_binding(
+        run_admission=run_admission,
+        run_history=run_history,
+        lock_held=True,
+    )
     authorization_receipts = payload["authorization_receipts"]
     if not isinstance(authorization_receipts, Mapping):
         raise ValueError("attempt authorization receipts are invalid")
@@ -2856,20 +2907,8 @@ def bind_verified_review_attempt_to_run_spine(
         raise ValueError("attempt run identity receipt is not bound to history")
     if payload["history_head_receipt"] != history_contract["head_receipt"]:
         raise ValueError("attempt history head receipt is not bound to history")
-    history_claim = run_history.payloads[0]
-    history_completion = run_history.payloads[1]
-    if history_claim != run_admission.claim.payload or history_completion != run_admission.completion.payload:
-        raise ValueError("run admission and history claim/completion bytes are not the same registry spine")
-    if (
-        history_claim["run_id"] != admission_payload["run_id"]
-        or history_claim["nonce"] != admission_payload["nonce"]
-        or history_claim["output_root_absolute_path"] != admission_payload["output_root_absolute_path"]
-    ):
-        raise ValueError("run admission and history identity/root are not bound")
     if authorization_receipts["rerun_authorization"] != admission_payload["authorization_receipt"]:
         raise ValueError("attempt rerun authorization is not bound to admission")
-    if run_history.authorization_sha256 != admission_payload["authorization_receipt"]["artifact_sha256"]:
-        raise ValueError("run history authorization is not bound to admission")
 
     policy = payload["read_isolation_policy"]
     attestation = payload["read_isolation_attestation"]
@@ -2893,6 +2932,7 @@ def bind_verified_review_attempt_to_run_spine(
     )
 
 
+@_history_locked_review_operation
 def bind_verified_review_no_write_preflight(
     *,
     execution_context: object,
@@ -2920,7 +2960,7 @@ def bind_verified_review_no_write_preflight(
         raise TypeError("no-write preflight admission is invalid")
     if type(history) is not VerifiedRunHistoryLedger or history._token is not _RUN_HISTORY_TOKEN:
         raise TypeError("no-write preflight history is invalid")
-    _revalidate_run_history_ledger(history)
+    _revalidate_run_history_ledger(history, lock_held=True)
 
     output_root = Path(admission.admission.payload["output_root_absolute_path"])
     output_identity = _verify_review_temp_directory(output_root)
@@ -3231,6 +3271,7 @@ def load_verified_terminal_artifact(
         return _load_verified_terminal_artifact_unlocked(output_root=output_root, **kwargs)
 
 
+@_history_locked_review_operation
 def _load_verified_terminal_artifact_unlocked(
     *,
     execution_context: object,
@@ -3259,7 +3300,6 @@ def _load_verified_terminal_artifact_unlocked(
         raise TypeError("terminal loader requires a verified review-only admission")
     if type(run_history) is not VerifiedRunHistoryLedger:
         raise TypeError("terminal loader requires a verified run-history ledger")
-    _revalidate_run_history_ledger(run_history)
     targets = {
         "verified_result": ("verified_result_v2", "verification_registry.json"),
         "postverification_failure": ("postverification_failure_v2", "failure.json"),
@@ -3300,7 +3340,11 @@ def _load_verified_terminal_artifact_unlocked(
 
     admission_payload = run_admission.admission.payload
     admission_receipt = _artifact_file_receipt(run_admission.admission)
-    history_contract = _history_contract(run_history)
+    history_contract = _verify_run_admission_history_binding(
+        run_admission=run_admission,
+        run_history=run_history,
+        lock_held=True,
+    )
     candidate_gate = _load_candidate_gate_artifact(
         candidate_dir=candidate_dir,
         member_receipts=bundle.payload["ordered_member_receipts"],
