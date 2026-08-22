@@ -179,20 +179,16 @@ def _preimport_validate_executed_source(source_fd: int) -> None:
     the request to those same bytes.
     """
     source_stat = os.fstat(source_fd)
-    executed_path = os.path.abspath(__file__)
+    executed_path = os.fspath(__file__)
+    if executed_path != f"/dev/fd/{source_fd}":
+        raise ValueError("bootstrap execution is not bound to the inherited source descriptor")
     try:
         executed_stat = os.stat(executed_path, follow_symlinks=True)
     except OSError as exc:
         raise ValueError("executed bootstrap source cannot be identified") from exc
-    if executed_path == f"/dev/fd/{source_fd}":
-        # macOS presents /dev/fd through devfs, so its st_dev differs from the
-        # underlying file descriptor even though the inode is shared.
-        same_source = executed_stat.st_ino == source_stat.st_ino
-    else:
-        same_source = (source_stat.st_dev, source_stat.st_ino) == (
-            executed_stat.st_dev,
-            executed_stat.st_ino,
-        )
+    # macOS presents /dev/fd through devfs, so its st_dev differs from the
+    # underlying file descriptor even though the inode is shared.
+    same_source = executed_stat.st_ino == source_stat.st_ino
     if not same_source:
         raise ValueError("executed bootstrap source is not bound to the inherited source descriptor")
 
@@ -293,6 +289,7 @@ def _preimport_runtime_sys_path(request: Mapping[str, object]) -> tuple[list[str
         path_text = f"{runtime_root}/{root_id}" if not relative_path else f"{runtime_root}/{root_id}/{relative_path}"
         path_fd = _preimport_open_absolute_directory(path_text)
         path_fds.append(path_fd)
+        _preimport_physical_path(path_fd)
         paths.append(_preimport_physical_path(path_fd))
     return paths, path_fds
 
@@ -348,10 +345,18 @@ def main() -> int:
         runtime_contract = load_runtime_snapshot_contract(request["runtime_snapshot_receipt"])
         entries = runtime_contract["ordered_python_sys_path_entries"]
         runtime_root = runtime_contract["runtime_root_absolute_path"]
-        build_sys_path_from_entries(runtime_root, entries)
-        _close_bootstrap_fds(request_fd, source_fd)
+        expected_runtime_paths = build_sys_path_from_entries(runtime_root, entries)
+        if len(expected_runtime_paths) != len(runtime_path_fds):
+            return 2
+        for expected_path, path_fd, actual_path in zip(expected_runtime_paths, runtime_path_fds, sys.path):
+            if _preimport_physical_path(path_fd) != expected_path or actual_path != expected_path:
+                return 2
         dispatch_module(request["target_module"], request["target_argv"])
-    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+        for expected_path, path_fd, actual_path in zip(expected_runtime_paths, runtime_path_fds, sys.path):
+            if _preimport_physical_path(path_fd) != expected_path or actual_path != expected_path:
+                return 2
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        print(f"bootstrap debug failure: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
     finally:
         _close_bootstrap_fds(request_fd, source_fd)

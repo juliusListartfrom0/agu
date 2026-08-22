@@ -37,12 +37,14 @@ from app.analysis.task0258_v2_artifacts import (
     verify_postpublication_verification,
 )
 from app.analysis.task0258_v2_fs import (
+    _assert_directory_path_matches_fd,
+    _open_directory_at,
     _open_existing_directory_no_follow,
-    exclusive_flock,
     exclusive_flock_at,
-    read_regular_file_no_follow,
+    read_regular_file_at,
 )
 from app.analysis.task0258_v2_pipeline import (
+    _assert_candidate_directory_bindings,
     build_member_receipts,
     read_published_candidate_receipt_bundle,
     seal_candidate_receipt_bundle,
@@ -66,6 +68,28 @@ def _exclusive_history_lock(registry_dir: Path, auth_sha256: str):
             yield registry_fd, history_lock
     finally:
         os.close(registry_fd)
+
+
+@contextmanager
+def _exclusive_output_root_transaction(output_root: Path, flock_path: Path):
+    """Hold the output lock while retaining the bound parent/root descriptors."""
+    output_root = Path(output_root)
+    flock_path = Path(flock_path)
+    if output_root.parent != flock_path.parent:
+        raise ValueError("output root and output lock must share one parent")
+    output_parent_fd = _open_existing_directory_no_follow(output_root.parent)
+    output_root_fd: int | None = None
+    try:
+        _assert_directory_path_matches_fd(output_root.parent, output_parent_fd, label="output parent")
+        with exclusive_flock_at(output_parent_fd, flock_path.name, flock_path) as output_lock:
+            output_root_fd = _open_directory_at(output_parent_fd, output_root.name)
+            _assert_directory_path_matches_fd(output_root, output_root_fd, label="output root")
+            yield output_parent_fd, output_root_fd, output_lock
+            _assert_directory_path_matches_fd(output_root, output_root_fd, label="output root")
+    finally:
+        if output_root_fd is not None:
+            os.close(output_root_fd)
+        os.close(output_parent_fd)
 
 
 class _SyntheticV2PipelineTestContext:
@@ -197,8 +221,18 @@ def run_v2_pipeline(
             ),
         )
         candidate = seal_candidate_v2(output_root, encoded, flock_path=flock_path)
-        with exclusive_flock(flock_path) as output_lock:
-            actual_member_receipts = build_member_receipts(candidate)
+        with _exclusive_output_root_transaction(output_root, flock_path) as (
+            _output_parent_fd,
+            output_root_fd,
+            _output_lock,
+        ):
+            candidate_fd = _open_directory_at(output_root_fd, candidate.name)
+            try:
+                _assert_candidate_directory_bindings(candidate, output_root_fd, candidate_fd)
+                actual_member_receipts = build_member_receipts(candidate, candidate_dir_fd=candidate_fd)
+                _assert_candidate_directory_bindings(candidate, output_root_fd, candidate_fd)
+            finally:
+                os.close(candidate_fd)
         _append_synthetic_pipeline_marker(
             registry_dir=registry_dir,
             auth_sha256=auth_sha256,
@@ -228,7 +262,11 @@ def run_v2_pipeline(
             output_flock_path=flock_path,
             expected_payload=bound_bundle,
         )
-        with exclusive_flock(flock_path) as output_lock:
+        with _exclusive_output_root_transaction(output_root, flock_path) as (
+            output_parent_fd,
+            output_root_fd,
+            output_lock,
+        ):
             bound_result = _bind_result_payload(
                 result_payload,
                 actual_member_receipts=actual_member_receipts,
@@ -242,9 +280,15 @@ def run_v2_pipeline(
                 bound_result,
                 flock_path=flock_path,
                 output_lock=output_lock,
+                output_parent_fd=output_parent_fd,
+                output_root_fd=output_root_fd,
             )
-            result_path = result / "verification_registry.json"
-            result_bytes = read_regular_file_no_follow(result_path)
+            result_fd = _open_directory_at(output_root_fd, result.name)
+            try:
+                _assert_directory_path_matches_fd(result, result_fd, label="verified result")
+                result_bytes = read_regular_file_at(result_fd, "verification_registry.json")
+            finally:
+                os.close(result_fd)
         result_payload_on_disk = json.loads(result_bytes.decode("utf-8"))
         _append_synthetic_pipeline_marker(
             registry_dir=registry_dir,

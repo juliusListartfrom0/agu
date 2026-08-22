@@ -34,9 +34,9 @@ from app.analysis.task0258_module_a_v2 import (
     verify_internal_artifact_hash,
 )
 from app.analysis.task0258_run_history import (
+    _registry_history_filenames_from_fd,
     claim_filename,
     completion_filename,
-    registry_history_filenames,
     replay_run_history_registry,
     verify_run_admission,
     verify_run_consumption_claim,
@@ -3238,16 +3238,27 @@ def bind_verified_review_no_write_preflight(
             raise ValueError("no-write preflight found reserved output residue")
 
     registry = Path(history.directory)
+    registry_key = os.path.normpath(os.fspath(registry))
+    registry_fd = _ACTIVE_REVIEW_REGISTRY_FDS.get().get(registry_key)
+    if registry_fd is None:
+        raise ValueError("no-write preflight requires the stable history registry descriptor")
     registry_identity = _verify_review_temp_directory(registry)
+    _assert_directory_path_matches_fd(registry, registry_fd, label="history registry")
     if registry == output_root or registry in output_root.parents or output_root in registry.parents:
         raise ValueError("no-write preflight registry and output root must be distinct")
-    expected_registry_names = registry_history_filenames(registry, history.authorization_sha256)
-    actual_registry_entries = list(registry.iterdir())
-    expected_registry_names_with_lock = set(expected_registry_names) | {f".{history.authorization_sha256}.history.lock"}
-    if {entry.name for entry in actual_registry_entries} != expected_registry_names_with_lock:
+    expected_registry_names = set(_registry_history_filenames_from_fd(registry_fd, history.authorization_sha256))
+    expected_registry_names_with_lock = expected_registry_names | {f".{history.authorization_sha256}.history.lock"}
+    actual_registry_names = os.listdir(registry_fd)
+    if set(actual_registry_names) != expected_registry_names_with_lock:
         raise ValueError("no-write preflight registry contains unstable residue")
-    if any(entry.is_symlink() or not entry.is_file() for entry in actual_registry_entries):
-        raise ValueError("no-write preflight registry contains a non-regular member")
+    for name in actual_registry_names:
+        entry_stat = os.stat(name, dir_fd=registry_fd, follow_symlinks=False)
+        if name.endswith(".history.lock"):
+            if not stat.S_ISREG(entry_stat.st_mode):
+                raise ValueError("no-write preflight history lock is not regular")
+        elif not stat.S_ISREG(entry_stat.st_mode):
+            raise ValueError("no-write preflight registry contains a non-regular member")
+    _assert_directory_path_matches_fd(registry, registry_fd, label="history registry")
 
     bundle_path = Path(candidate_bundle_path)
     _verify_absolute_no_symlink_path(bundle_path)
@@ -3644,7 +3655,8 @@ def load_verified_terminal_artifact(
     with ExitStack() as resources:
         output_parent_fd = _open_existing_directory_no_follow(output_root.parent)
         resources.callback(os.close, output_parent_fd)
-        with _exclusive_review_lock(output_lock):
+        _assert_directory_path_matches_fd(output_root.parent, output_parent_fd, label="output parent")
+        with _exclusive_review_lock_at(output_parent_fd, output_lock):
             output_root_fd = _open_directory_at(output_parent_fd, output_root.name)
             resources.callback(os.close, output_root_fd)
             candidate_dir_fd = _open_directory_at(output_root_fd, candidate_dir.name)

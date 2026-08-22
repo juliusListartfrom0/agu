@@ -31,7 +31,7 @@ _BOOTSTRAP_TARGET_SOURCE_SHA256 = {
     "app/analysis/__init__.py": "5c2fc5f80f83f4e146ddb460ba922cb0eab5a9d14fdc4dbdc19bd544688ae65b",
     "app/analysis/task0258_module_a_v2.py": "24ce88717acc24f5a28bde690274db1172cbe1663a8bf0900c4cdbf280d3a06b",
     "app/analysis/task0258_v2_bootstrap.py": "c50ab5a67c259fe0f464e09a006ed42728face86ebac3beb043c08c9467279e5",
-    "scripts/task0258_module_a_verified_bootstrap.py": "12e539c2bb3d1c27f986376643268e880faf9fa6f64fd1459bbf18aac9b3b905",
+    "scripts/task0258_module_a_verified_bootstrap.py": "bce1bf5bf1e4b971be573120244473de2ff9b5826e338e08d3e9834e261bcbed",
 }
 
 

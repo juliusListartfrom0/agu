@@ -452,6 +452,8 @@ def seal_verified_result(
     *,
     flock_path: Path,
     output_lock: FlockHandle | None = None,
+    output_parent_fd: int | None = None,
+    output_root_fd: int | None = None,
 ) -> Path:
     """No-clobber publish ``verified_result_v2/verification_registry.json``."""
     if not isinstance(registry_payload, Mapping):
@@ -480,6 +482,8 @@ def seal_verified_result(
         stage_name=f".{authorization_sha256}.verified-result-v2-stage",
         pre_publish_validator_at=validate_topology_at,
         held_lock=output_lock,
+        parent_fd=output_root_fd,
+        lock_parent_fd=output_parent_fd,
     )
 
 

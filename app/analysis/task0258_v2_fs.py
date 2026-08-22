@@ -628,9 +628,14 @@ def build_generation_directory(
         _validate_fixed_stage_name(stage_name)
     stage = parent / (stage_name or f".task0258-{secrets.token_hex(8)}")
     stage_fd: int | None = None
+    stage_identity: tuple[int, int] | None = None
     try:
         assert parent_fd is not None
         os.mkdir(stage.name, 0o700, dir_fd=parent_fd)
+        created_stat = os.stat(stage.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(created_stat.st_mode):
+            raise ValueError("generation stage is not a directory")
+        stage_identity = (created_stat.st_dev, created_stat.st_ino)
         stage_fd = _open_directory_at(parent_fd, stage.name)
         _assert_directory_path_matches_fd(stage, stage_fd, label="generation stage")
         for relpath, data in members.items():
@@ -646,8 +651,13 @@ def build_generation_directory(
         if stage_fd is not None:
             try:
                 _remove_directory_tree_at(parent_fd, stage.name, expected_fd=stage_fd)
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as cleanup_exc:
+                raise ValueError("generation stage cleanup could not prove its identity") from cleanup_exc
+        elif stage_identity is not None:
+            try:
+                _remove_directory_tree_at(parent_fd, stage.name, expected_identity=stage_identity)
+            except (OSError, ValueError) as cleanup_exc:
+                raise ValueError("generation stage cleanup could not prove its identity") from cleanup_exc
         raise
     finally:
         if stage_fd is not None:
@@ -666,7 +676,13 @@ def _verify_absent_at(directory_fd: int, name: str) -> None:
     raise FileExistsError(f"target already exists: {name}")
 
 
-def _remove_directory_tree_at(directory_fd: int, name: str, *, expected_fd: int | None = None) -> None:
+def _remove_directory_tree_at(
+    directory_fd: int,
+    name: str,
+    *,
+    expected_fd: int | None = None,
+    expected_identity: tuple[int, int] | None = None,
+) -> None:
     """Remove an owned directory tree relative to a stable parent FD."""
     _validate_leaf_name(name)
     try:
@@ -677,6 +693,8 @@ def _remove_directory_tree_at(directory_fd: int, name: str, *, expected_fd: int 
         expected_stat = os.fstat(expected_fd)
         if (entry_stat.st_dev, entry_stat.st_ino) != (expected_stat.st_dev, expected_stat.st_ino):
             raise ValueError("directory cleanup target no longer matches its stable FD")
+    if expected_identity is not None and (entry_stat.st_dev, entry_stat.st_ino) != expected_identity:
+        raise ValueError("directory cleanup target no longer matches its creation identity")
     if not stat.S_ISDIR(entry_stat.st_mode):
         os.unlink(name, dir_fd=directory_fd)
         return
@@ -828,6 +846,7 @@ def seal_generation_directory(
     pre_publish_validator_at: Callable[[int], None] | None = None,
     held_lock: FlockHandle | None = None,
     parent_fd: int | None = None,
+    lock_parent_fd: int | None = None,
 ) -> Path:
     """Validate exact member coverage and atomically publish a generation.
 
@@ -858,10 +877,17 @@ def seal_generation_directory(
         parent_stat = os.fstat(parent_fd)
         if not stat.S_ISDIR(parent_stat.st_mode):
             raise ValueError("generation parent descriptor is not a directory")
-    lock_parent_fd = _open_existing_directory_no_follow(Path(flock_path).parent)
+    owns_lock_parent_fd = lock_parent_fd is None
+    if owns_lock_parent_fd:
+        lock_parent_fd = _open_existing_directory_no_follow(Path(flock_path).parent)
+    else:
+        lock_parent_stat = os.fstat(lock_parent_fd)
+        if not stat.S_ISDIR(lock_parent_stat.st_mode):
+            raise ValueError("generation lock parent descriptor is not a directory")
     final = parent / final_name
     staged: Path | None = None
     staged_fd: int | None = None
+    staged_identity: tuple[int, int] | None = None
     try:
         if held_lock is None:
             held_lock = active_flock(flock_path)
@@ -879,10 +905,14 @@ def seal_generation_directory(
             if pre_publish_validator is not None:
                 pre_publish_validator()
             staged = build_generation_directory(parent, members, stage_name=stage_name, parent_fd=parent_fd)
-            staged_fd = _open_directory_at(parent_fd, staged.name)
-            _assert_directory_path_matches_fd(staged, staged_fd, label="generation stage")
-            _verify_generation_directory_fd(staged_fd, expected_paths)
             try:
+                staged_stat = os.stat(staged.name, dir_fd=parent_fd, follow_symlinks=False)
+                if not stat.S_ISDIR(staged_stat.st_mode):
+                    raise ValueError("generation stage is not a directory")
+                staged_identity = (staged_stat.st_dev, staged_stat.st_ino)
+                staged_fd = _open_directory_at(parent_fd, staged.name)
+                _assert_directory_path_matches_fd(staged, staged_fd, label="generation stage")
+                _verify_generation_directory_fd(staged_fd, expected_paths)
                 _publish_generation_directory_locked_at(parent_fd, staged.name, final_name)
                 _assert_directory_path_matches_fd(parent, parent_fd, label="generation parent")
                 verify_generation_directory_at(parent_fd, final_name, expected_paths)
@@ -896,8 +926,13 @@ def seal_generation_directory(
                 if staged is not None and staged_fd is not None:
                     try:
                         _remove_directory_tree_at(parent_fd, staged.name, expected_fd=staged_fd)
-                    except (OSError, ValueError):
-                        pass
+                    except (OSError, ValueError) as cleanup_exc:
+                        raise ValueError("generation stage cleanup could not prove its identity") from cleanup_exc
+                elif staged is not None and staged_identity is not None:
+                    try:
+                        _remove_directory_tree_at(parent_fd, staged.name, expected_identity=staged_identity)
+                    except (OSError, ValueError) as cleanup_exc:
+                        raise ValueError("generation stage cleanup could not prove its identity") from cleanup_exc
                 raise
             finally:
                 if staged_fd is not None:
@@ -905,7 +940,8 @@ def seal_generation_directory(
                     staged_fd = None
         return final
     finally:
-        os.close(lock_parent_fd)
+        if owns_lock_parent_fd:
+            os.close(lock_parent_fd)
         if owns_parent_fd:
             os.close(parent_fd)
 

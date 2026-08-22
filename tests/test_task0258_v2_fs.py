@@ -168,6 +168,35 @@ def test_generation_stage_path_replacement_is_rejected_before_publish(tmp_path, 
     assert moved_stage.is_dir()
 
 
+def test_seal_generation_cleans_stage_when_reopen_fails(tmp_path, monkeypatch):
+    from app.analysis.task0258_v2_fs import seal_generation_directory
+
+    root = tmp_path / "out"
+    lock = root.parent / ".lock"
+    stage_name = ".fixed-stage"
+    real_open_directory_at = fs._open_directory_at
+    open_count = 0
+
+    def fail_seal_reopen(parent_fd, name):
+        nonlocal open_count
+        open_count += 1
+        if open_count == 2:
+            raise ValueError("forced stage reopen failure")
+        return real_open_directory_at(parent_fd, name)
+
+    monkeypatch.setattr(fs, "_open_directory_at", fail_seal_reopen)
+    with pytest.raises(ValueError, match="forced stage reopen failure"):
+        seal_generation_directory(
+            root,
+            "candidate_v2",
+            {"member.json": b"x\n"},
+            ("member.json",),
+            flock_path=lock,
+            stage_name=stage_name,
+        )
+    assert not (root / stage_name).exists()
+
+
 def test_fixed_generation_stage_residue_is_rejected(tmp_path):
     from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
     from app.analysis.task0258_v2_fs import seal_generation_directory
