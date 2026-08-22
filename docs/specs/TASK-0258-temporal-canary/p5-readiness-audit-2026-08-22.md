@@ -9,7 +9,7 @@ Decision: P5 remains open. This is an audit receipt, not a completion receipt.
 | P5 gate | Current evidence | Decision |
 | --- | --- | --- |
 | Rights-cleared, continuous, production-distinct source | The current source ledger remains `19 candidates / 0 eligible`; the second VTV lead has only an exact remote metadata receipt and remains metadata-only. DVIDS download access is `download_receipt_gate_failed`. No new media was selected or downloaded in the latest audits. | **Open** |
-| Independent label-hidden causal evidence | The v8–v23 chain contains 525 windows / 11,025 frames, but is explicitly pilot-only, non-exhaustive, and still reports per-production-source held P/R as `not_computable`. | **Open** |
+| Independent label-hidden causal evidence | The official v8–v23 chain contains 525 windows / 11,025 frames, but is explicitly pilot-only, non-exhaustive, and still reports per-production-source held P/R as `not_computable`. Subsequent v24_rv (8 windows / 168 frames) and v25_rv (12 windows / 252 frames) remain separately sealed pilot-only supplements; v25_rv added no confirmed shot and neither batch changes the official readiness pointer. | **Open** |
 | Held-production precision and recall >= 0.85 per source | Existing nested diagnostics do not meet the gate. The four-game nested screen reports pooled P/R/F1 `0.777778/0.823529/0.8`, with per-game P/R of Hazen `1/1`, Randolph `1/0.75`, VTV `0.75/0.75`, and Harwood `0.4/0.666667`; other frozen fusion diagnostics also retain per-source failures. | **Open** |
 | Independent-VLM evidence path | The independent VLM screens are offline diagnostics only: the SmolVLM resource screen produced no usable positive evidence, and the lightweight processor screen failed the frozen native-video contract. The closed plan-to-prediction path has not been completed for promotion. | **Open** |
 | TASK-0258 execution authority | P2 is `blocked_external_authorization`; P3 exact-SHA authorization is not issued; P4 has only an unauthorized fail-closed guard audit and no authorized producer/result run. | **Open** |
@@ -24,6 +24,10 @@ Decision: P5 remains open. This is an audit receipt, not a completion receipt.
   entitlement, user approval, or kernel read-isolation attestation.
 - Existing development results are preserved as diagnostic evidence and are
   not promoted to runtime, default answers, or blind inference.
+- The later v24_rv and v25_rv supplements are also preserved as offline,
+  label-hidden diagnostics. They do not provide exhaustive causal coverage,
+  held-production OOF, or a per-source P/R calculation, so they do not change
+  the `not_ready` decision.
 
 These facts demonstrate implementation and evidence-integrity progress, not
 P5 product readiness. P5 is not blocked only by Apple: the rights, causal
