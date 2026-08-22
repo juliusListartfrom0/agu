@@ -263,6 +263,11 @@ model execution or readiness transition.
 
 ### P4 — One guarded Module-A v2 run
 
+- [x] Verify the P4 admission guard on
+      `codex/agu-p4-admission-guard-audit`:
+      `docs/specs/TASK-0258-temporal-canary/p4-admission-guard-validation-2026-08-22.md`.
+      Unauthorized production invocation fails before filesystem writes; this
+      is a guard audit, not a P4 run or result.
 - [ ] Execute exactly one authorized producer/verification pipeline.
 - [ ] Publish either `verified_result_v2` or a canonical `terminal_failure_v2`.
 - [ ] Verify post-publication receipts and preserve the v1 boundary.

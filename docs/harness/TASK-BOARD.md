@@ -174,6 +174,13 @@ documented in `docs/harness/TASK-0258-EXTERNAL-UNBLOCK-CHECKLIST.md`.
 > deselected`) and Harness passed. This closes only the local replay handoff;
 > exact-SHA authorization remains unissued because P2 is incomplete.
 
+> P4 admission-guard audit (2026-08-22): branch
+> `codex/agu-p4-admission-guard-audit` starts from `main@5727ba4` and records
+> the production fail-closed test in
+> `docs/specs/TASK-0258-temporal-canary/p4-admission-guard-validation-2026-08-22.md`.
+> `test_run_v2_pipeline_end_to_end` passed and confirms no unauthorized
+> registry/output/bundle write. No P4 model run or result was created.
+
 > Latest P1 remediation (2026-08-22): commit `b18c784` closes the output-root
 > replacement finding from the `afbfef0` review by binding both
 > `candidate_dir.parent` and `candidate_dir` to stable output-root/candidate
