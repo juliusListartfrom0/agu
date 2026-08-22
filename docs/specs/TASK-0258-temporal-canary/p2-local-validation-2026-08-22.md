@@ -32,6 +32,18 @@ kernel_read_isolation_attestation_observed=false
 status=blocked_external_authorization
 ```
 
+The read-only host audit also reports:
+
+```text
+security find-identity -v -p codesigning: 0 valid identities found
+systemextensionsctl list: 0 extension(s)
+xcodebuild -version: unavailable; active developer directory is CommandLineTools
+```
+
+These results confirm that this Mac currently has neither a usable Apple
+signing identity nor an installed System Extension. They are environment
+observations, not substitutes for Apple authorization.
+
 The local simulation reports:
 
 ```text
