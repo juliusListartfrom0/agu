@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from task0258_candidate_fixtures import candidate_members
@@ -259,6 +260,130 @@ def test_candidate_receipt_bundle(tmp_path, monkeypatch):
         tmp_path / f".{bundle['authorization_receipt']['artifact_sha256']}.{bundle_path.name}.task0258-bundle-stage"
     )
     assert not stage_path.exists()
+
+
+def test_candidate_receipt_bundle_rejects_bundle_parent_replacement(tmp_path, monkeypatch):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = tmp_path / ".task0258-output.lock"
+    lock.write_text("")
+    final = seal_candidate_v2(out, members, flock_path=lock)
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    bundle_path = bundle_dir / "candidate-receipt-bundle.json"
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=final,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    original_write = pipeline_module.atomic_write_bytes_at
+    moved_bundle_dir = tmp_path / "bundle-moved"
+
+    def write_then_replace_parent(*args, **kwargs):
+        result = original_write(*args, **kwargs)
+        bundle_dir.rename(moved_bundle_dir)
+        bundle_dir.mkdir()
+        return result
+
+    monkeypatch.setattr(pipeline_module, "atomic_write_bytes_at", write_then_replace_parent)
+    with pytest.raises(ValueError, match="bundle parent"):
+        seal_candidate_receipt_bundle(bundle_path, bundle, candidate_dir=final, output_flock_path=lock)
+    assert not bundle_path.exists()
+    assert (moved_bundle_dir / bundle_path.name).is_file()
+
+
+def test_candidate_receipt_bundle_replay_rejects_bundle_parent_replacement(tmp_path, monkeypatch):
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = tmp_path / ".task0258-output.lock"
+    lock.write_text("")
+    final = seal_candidate_v2(out, members, flock_path=lock)
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    bundle_path = bundle_dir / "candidate-receipt-bundle.json"
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=final,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    seal_candidate_receipt_bundle(bundle_path, bundle, candidate_dir=final, output_flock_path=lock)
+    original_open = pipeline_module._open_existing_directory_no_follow
+    moved_bundle_dir = tmp_path / "bundle-moved"
+
+    def open_then_replace_parent(path):
+        fd = original_open(path)
+        if path == bundle_dir and not moved_bundle_dir.exists():
+            bundle_dir.rename(moved_bundle_dir)
+            bundle_dir.mkdir()
+        return fd
+
+    monkeypatch.setattr(pipeline_module, "_open_existing_directory_no_follow", open_then_replace_parent)
+    with pytest.raises(ValueError, match="bundle parent"):
+        read_published_candidate_receipt_bundle(
+            bundle_path,
+            candidate_dir=final,
+            output_flock_path=lock,
+            expected_payload=bundle,
+        )
+    assert not bundle_path.exists()
+    assert (moved_bundle_dir / bundle_path.name).is_file()
+
+
+def test_candidate_receipt_bundle_closes_fds_when_candidate_open_fails(tmp_path):
+    if not os.path.isdir("/dev/fd"):
+        pytest.skip("/dev/fd is unavailable")
+    members = _make_members()
+    out = tmp_path / "out"
+    out.mkdir()
+    lock = tmp_path / ".task0258-output.lock"
+    lock.write_text("")
+    final = seal_candidate_v2(out, members, flock_path=lock)
+    bundle_path = tmp_path / "candidate-receipt-bundle.json"
+    bundle = build_candidate_receipt_bundle_payload(
+        authorization_receipt=_receipt(),
+        run_identity_receipt=_receipt(),
+        run_admission_receipt=_receipt(),
+        static_input_contract={
+            "temporal_plan_artifact_sha256": "0" * 64,
+            "temporal_plan_file_sha256": "0" * 64,
+            "task0257_receipts_projection_sha256": "0" * 64,
+        },
+        candidate_published_history_head_receipt=_receipt(),
+        candidate_dir=final,
+        observed_at_utc="2026-08-17T00:00:00Z",
+    )
+    seal_candidate_receipt_bundle(bundle_path, bundle, candidate_dir=final, output_flock_path=lock)
+    moved_candidate = tmp_path / "candidate-moved"
+    final.rename(moved_candidate)
+    before = len(os.listdir("/dev/fd"))
+    for _ in range(25):
+        with pytest.raises(ValueError):
+            read_published_candidate_receipt_bundle(
+                bundle_path,
+                candidate_dir=final,
+                output_flock_path=lock,
+                expected_payload=bundle,
+            )
+    after = len(os.listdir("/dev/fd"))
+    assert after <= before + 2
 
 
 def test_published_candidate_receipt_bundle_rejects_path_and_payload_drift(tmp_path):

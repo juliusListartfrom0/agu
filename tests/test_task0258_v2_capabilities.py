@@ -759,14 +759,20 @@ def test_review_capability_objects_are_immutable_and_deep_frozen():
     artifact = capabilities_module.VerifiedJsonArtifact(
         capabilities_module._JSON_ARTIFACT_TOKEN,
         path=Path("/tmp/review-artifact.json"),
-        payload={"nested": {"value": 1}},
+        payload={"nested": {"value": 1}, "rows": [1]},
         artifact_sha256="0" * 64,
         file_sha256="1" * 64,
     )
     with pytest.raises(AttributeError, match="immutable"):
         artifact.payload = {}
-    with pytest.raises(TypeError):
-        artifact.payload["nested"]["value"] = 2
+    artifact.payload["nested"]["value"] = 2
+    dict.__setitem__(artifact.payload["nested"], "value", 3)
+    artifact.payload["rows"].append(2)
+    assert artifact.payload["nested"]["value"] == 1
+    assert artifact.payload["rows"] == [1]
+    with pytest.raises(AttributeError, match="mutated"):
+        object.__setattr__(artifact, "payload", {})
+        _ = artifact.payload
 
     approval = capabilities_module.VerifiedReviewImplementationApproval(
         capabilities_module._IMPLEMENTATION_APPROVAL_TOKEN,
@@ -775,8 +781,8 @@ def test_review_capability_objects_are_immutable_and_deep_frozen():
     )
     with pytest.raises(AttributeError, match="immutable"):
         approval.repository_root_identity = {"device": 3, "inode": 4}
-    with pytest.raises(TypeError):
-        approval.repository_root_identity["inode"] = 4
+    approval.repository_root_identity["inode"] = 4
+    assert approval.repository_root_identity == {"device": 1, "inode": 2}
 
 
 def test_synthetic_context_rejects_symlinked_temp_ancestor(tmp_path):
@@ -1714,7 +1720,7 @@ def test_verification_attempt_rejects_history_from_another_registry(tmp_path):
         expected_file_sha256=hashlib.sha256(raw).hexdigest(),
     )
     object.__setattr__(history, "directory", tmp_path / "different-registry")
-    with pytest.raises(ValueError, match="same registry"):
+    with pytest.raises((ValueError, AttributeError), match="same registry|mutated"):
         bind_verified_review_attempt_to_run_spine(
             attempt=loaded_attempt,
             run_admission=admission_fixture["admission"],
@@ -1775,7 +1781,7 @@ def test_verification_attempt_rejects_registry_identity_replacement(tmp_path):
     shutil.rmtree(registry)
     replacement.rename(registry)
 
-    with pytest.raises(ValueError, match="registry|history"):
+    with pytest.raises((ValueError, AttributeError), match="registry|history|mutated"):
         bind_verified_review_attempt_to_run_spine(
             attempt=loaded_attempt,
             run_admission=admission_fixture["admission"],
@@ -1812,7 +1818,7 @@ def test_review_no_write_preflight_rejects_mutated_admission_spine(tmp_path):
     candidate_bundle_path = tmp_path / "bundle-parent" / "candidate-receipt-bundle.json"
     candidate_bundle_path.parent.mkdir()
 
-    with pytest.raises(ValueError, match="registry|history"):
+    with pytest.raises((ValueError, AttributeError), match="registry|history|mutated"):
         bind_verified_review_no_write_preflight(
             execution_context=admission_fixture["review"],
             attempt_spine=spine,

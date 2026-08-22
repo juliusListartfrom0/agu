@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping
+from contextlib import ExitStack
 from pathlib import Path
 
 from app.analysis.task0258_module_a_v2 import (
@@ -37,6 +38,7 @@ from app.analysis.task0258_v2_artifacts import (
 )
 from app.analysis.task0258_v2_fs import (
     FlockHandle,
+    _assert_directory_path_matches_fd,
     _open_directory_at,
     _open_existing_directory_no_follow,
     _verify_absent_at,
@@ -285,37 +287,35 @@ def seal_candidate_receipt_bundle(
     )
     lock_path = bundle_path.parent / ".candidate-receipt-bundle.lock"
     bundle_bytes = (compact_canonical_json(bundle_payload) + "\n").encode("utf-8")
-    output_parent_fd = _open_existing_directory_no_follow(output_flock_path.parent)
-    bundle_parent_fd = _open_existing_directory_no_follow(bundle_path.parent)
-    try:
+    with ExitStack() as resources:
+        output_parent_fd = _open_existing_directory_no_follow(output_flock_path.parent)
+        resources.callback(os.close, output_parent_fd)
+        bundle_parent_fd = _open_existing_directory_no_follow(bundle_path.parent)
+        resources.callback(os.close, bundle_parent_fd)
         with exclusive_flock_at(output_parent_fd, output_flock_path.name, output_flock_path):
             output_root_fd = _open_directory_at(output_parent_fd, candidate_dir.parent.name)
+            resources.callback(os.close, output_root_fd)
             candidate_dir_fd = _open_directory_at(output_root_fd, candidate_dir.name)
-            try:
-                with exclusive_flock_at(bundle_parent_fd, lock_path.name, lock_path):
-                    verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
-                    actual_member_receipts = build_member_receipts(candidate_dir, candidate_dir_fd=candidate_dir_fd)
-                    if list(bundle_payload["ordered_member_receipts"]) != actual_member_receipts:
-                        raise ValueError("candidate receipt bundle is not bound to the locked candidate bytes")
-                    _verify_absent_at(bundle_parent_fd, bundle_path.name)
-                    _verify_absent_at(bundle_parent_fd, stage_path.name)
-                    atomic_write_bytes_at(
-                        bundle_parent_fd,
-                        bundle_path.name,
-                        bundle_bytes,
-                        mode=0o600,
-                        stage_name=stage_path.name,
-                    )
-                    reopened = read_regular_file_at(bundle_parent_fd, bundle_path.name)
-                    if reopened != bundle_bytes:
-                        raise ValueError("candidate receipt bundle changed during publication")
-                    _verify_absent_at(bundle_parent_fd, stage_path.name)
-            finally:
-                os.close(candidate_dir_fd)
-                os.close(output_root_fd)
-    finally:
-        os.close(bundle_parent_fd)
-        os.close(output_parent_fd)
+            resources.callback(os.close, candidate_dir_fd)
+            with exclusive_flock_at(bundle_parent_fd, lock_path.name, lock_path):
+                verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
+                actual_member_receipts = build_member_receipts(candidate_dir, candidate_dir_fd=candidate_dir_fd)
+                if list(bundle_payload["ordered_member_receipts"]) != actual_member_receipts:
+                    raise ValueError("candidate receipt bundle is not bound to the locked candidate bytes")
+                _verify_absent_at(bundle_parent_fd, bundle_path.name)
+                _verify_absent_at(bundle_parent_fd, stage_path.name)
+                atomic_write_bytes_at(
+                    bundle_parent_fd,
+                    bundle_path.name,
+                    bundle_bytes,
+                    mode=0o600,
+                    stage_name=stage_path.name,
+                )
+                reopened = read_regular_file_at(bundle_parent_fd, bundle_path.name)
+                if reopened != bundle_bytes:
+                    raise ValueError("candidate receipt bundle changed during publication")
+                _verify_absent_at(bundle_parent_fd, stage_path.name)
+                _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
     return bundle_path
 
 
@@ -325,7 +325,6 @@ def read_published_candidate_receipt_bundle(
     candidate_dir: Path,
     output_flock_path: Path,
     expected_payload: Mapping[str, object] | None = None,
-    output_lock: FlockHandle | None = None,
 ) -> bytes:
     """Reopen a published bundle and candidate under the same output locks."""
     bundle_path = Path(bundle_path)
@@ -339,40 +338,36 @@ def read_published_candidate_receipt_bundle(
         raise ValueError("candidate receipt bundle path is not authorized")
     _require_output_parent_flock(candidate_dir.parent, output_flock_path)
     lock_path = bundle_path.parent / ".candidate-receipt-bundle.lock"
-    if output_lock is not None:
-        raise ValueError("caller-held output locks are not supported by stable bundle replay")
-    output_parent_fd = _open_existing_directory_no_follow(output_flock_path.parent)
-    bundle_parent_fd = _open_existing_directory_no_follow(bundle_path.parent)
-    try:
+    with ExitStack() as resources:
+        output_parent_fd = _open_existing_directory_no_follow(output_flock_path.parent)
+        resources.callback(os.close, output_parent_fd)
+        bundle_parent_fd = _open_existing_directory_no_follow(bundle_path.parent)
+        resources.callback(os.close, bundle_parent_fd)
         with exclusive_flock_at(output_parent_fd, output_flock_path.name, output_flock_path):
             output_root_fd = _open_directory_at(output_parent_fd, candidate_dir.parent.name)
+            resources.callback(os.close, output_root_fd)
             candidate_dir_fd = _open_directory_at(output_root_fd, candidate_dir.name)
-            try:
-                with exclusive_flock_at(bundle_parent_fd, lock_path.name, lock_path):
-                    verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
-                    bundle_bytes = read_regular_file_at(bundle_parent_fd, bundle_path.name)
-                    try:
-                        payload = json.loads(bundle_bytes.decode("utf-8"))
-                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                        raise ValueError("published candidate receipt bundle is not canonical JSON") from exc
-                    if not isinstance(payload, Mapping) or bundle_bytes != (
-                        compact_canonical_json(payload) + "\n"
-                    ).encode("utf-8"):
-                        raise ValueError("published candidate receipt bundle bytes are not canonical")
-                    verify_candidate_receipt_bundle(payload)
-                    if list(payload["ordered_member_receipts"]) != build_member_receipts(
-                        candidate_dir, candidate_dir_fd=candidate_dir_fd
-                    ):
-                        raise ValueError("published candidate receipt bundle is not bound to candidate bytes")
-                    if expected_payload is not None and payload != expected_payload:
-                        raise ValueError("published candidate receipt bundle does not match the expected payload")
-                    return bundle_bytes
-            finally:
-                os.close(candidate_dir_fd)
-                os.close(output_root_fd)
-    finally:
-        os.close(bundle_parent_fd)
-        os.close(output_parent_fd)
+            resources.callback(os.close, candidate_dir_fd)
+            with exclusive_flock_at(bundle_parent_fd, lock_path.name, lock_path):
+                verify_generation_directory_at(output_root_fd, candidate_dir.name, CANDIDATE_MEMBER_PATHS)
+                bundle_bytes = read_regular_file_at(bundle_parent_fd, bundle_path.name)
+                try:
+                    payload = json.loads(bundle_bytes.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("published candidate receipt bundle is not canonical JSON") from exc
+                if not isinstance(payload, Mapping) or bundle_bytes != (compact_canonical_json(payload) + "\n").encode(
+                    "utf-8"
+                ):
+                    raise ValueError("published candidate receipt bundle bytes are not canonical")
+                verify_candidate_receipt_bundle(payload)
+                if list(payload["ordered_member_receipts"]) != build_member_receipts(
+                    candidate_dir, candidate_dir_fd=candidate_dir_fd
+                ):
+                    raise ValueError("published candidate receipt bundle is not bound to candidate bytes")
+                if expected_payload is not None and payload != expected_payload:
+                    raise ValueError("published candidate receipt bundle does not match the expected payload")
+                _assert_directory_path_matches_fd(bundle_path.parent, bundle_parent_fd, label="bundle parent")
+                return bundle_bytes
 
 
 def build_postpublication_verification_payload(

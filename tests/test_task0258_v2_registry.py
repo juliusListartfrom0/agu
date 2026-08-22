@@ -197,6 +197,30 @@ def test_registry_sealer_acquires_history_lock_when_not_supplied(tmp_path):
         executor.shutdown(wait=True)
 
 
+@pytest.mark.parametrize(
+    ("sealer", "payload_factory", "filename_factory"),
+    [
+        (seal_run_consumption_claim, _claim, claim_filename),
+        (seal_run_consumption_completed, _completed, completion_filename),
+    ],
+)
+def test_registry_sealer_rejects_foreign_registry_fd_without_held_lock(
+    tmp_path, sealer, payload_factory, filename_factory
+):
+    registry = tmp_path / "registry"
+    foreign = tmp_path / "foreign"
+    registry.mkdir()
+    foreign.mkdir()
+    foreign_fd = _open_existing_directory_no_follow(foreign)
+    try:
+        with pytest.raises(ValueError, match="held history lock"):
+            sealer(registry, AUTH, payload_factory(), registry_fd=foreign_fd)
+    finally:
+        os.close(foreign_fd)
+    assert not (registry / filename_factory(AUTH)).exists()
+    assert not (foreign / filename_factory(AUTH)).exists()
+
+
 def test_append_marker_valid(tmp_path):
     reg = tmp_path / "registry"
     reg.mkdir()

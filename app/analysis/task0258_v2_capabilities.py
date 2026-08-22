@@ -22,6 +22,7 @@ from dataclasses import asdict
 from functools import wraps
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
+from weakref import WeakKeyDictionary
 
 from app.analysis.task0258_module_a_v2 import (
     AUTHORIZATION_PROVIDER_ORDER,
@@ -311,61 +312,51 @@ _TASK0257_FILE_SEQUENCE_FIELDS = frozenset(
 _TASK0257_FILE_SCALAR_FIELDS = frozenset({"parent_source_manifest", "v2_label_child", "harwood_source_manifest"})
 _TASK0257_RECEIPT_PROJECTION_FIELDS = frozenset(Task0257ExpectedReceipts.__dataclass_fields__)
 _REGISTERED_STATIC_INPUTS_CAPABILITIES: dict[int, tuple[object, str]] = {}
+_REVIEW_CAPABILITY_SNAPSHOTS: WeakKeyDictionary[object, dict[str, object]] = WeakKeyDictionary()
+
+
+class _FrozenListSequence(tuple):
+    """Immutable storage marker for an original list value."""
+
+
+class _FrozenTupleSequence(tuple):
+    """Immutable storage marker for an original tuple value."""
 
 
 def _freeze_review_value(value: object) -> object:
     """Recursively freeze container values carried by review-only capabilities."""
+    if isinstance(value, _FrozenListSequence):
+        return _FrozenListSequence(_freeze_review_value(item) for item in value)
+    if isinstance(value, _FrozenTupleSequence):
+        return _FrozenTupleSequence(_freeze_review_value(item) for item in value)
     if isinstance(value, Mapping):
-        return _FrozenDict({key: _freeze_review_value(item) for key, item in value.items()})
+        return MappingProxyType({key: _freeze_review_value(item) for key, item in value.items()})
     if isinstance(value, list):
-        return _FrozenList(_freeze_review_value(item) for item in value)
+        return _FrozenListSequence(_freeze_review_value(item) for item in value)
     if isinstance(value, tuple):
-        return tuple(_freeze_review_value(item) for item in value)
+        return _FrozenTupleSequence(_freeze_review_value(item) for item in value)
     if isinstance(value, (set, frozenset)):
         return frozenset(_freeze_review_value(item) for item in value)
     return value
 
 
-class _FrozenDict(dict):
-    """A dict-shaped value that preserves JSON verifier type contracts."""
-
-    def _reject(self, *args: object, **kwargs: object) -> None:
-        raise TypeError("review capability mappings are immutable")
-
-    __setitem__ = _reject
-    __delitem__ = _reject
-    clear = _reject
-    pop = _reject
-    popitem = _reject
-    setdefault = _reject
-    update = _reject
-    __ior__ = _reject
-
-
-class _FrozenList(list):
-    """A list-shaped value that preserves JSON verifier type contracts."""
-
-    def _reject(self, *args: object, **kwargs: object) -> None:
-        raise TypeError("review capability sequences are immutable")
-
-    __setitem__ = _reject
-    __delitem__ = _reject
-    __iadd__ = _reject
-    __imul__ = _reject
-    append = _reject
-    clear = _reject
-    extend = _reject
-    insert = _reject
-    pop = _reject
-    remove = _reject
-    reverse = _reject
-    sort = _reject
+def _thaw_review_value(value: object) -> object:
+    """Return a defensive, verifier-compatible copy of frozen review data."""
+    if isinstance(value, Mapping):
+        return {key: _thaw_review_value(item) for key, item in value.items()}
+    if isinstance(value, _FrozenListSequence):
+        return [_thaw_review_value(item) for item in value]
+    if isinstance(value, _FrozenTupleSequence):
+        return tuple(_thaw_review_value(item) for item in value)
+    if isinstance(value, frozenset):
+        return {_thaw_review_value(item) for item in value}
+    return value
 
 
 class _ImmutableReviewCapability:
     """Base for opaque review objects with recursively frozen assigned values."""
 
-    __slots__ = ("_sealed",)
+    __slots__ = ("_sealed", "__weakref__")
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -376,8 +367,30 @@ class _ImmutableReviewCapability:
             object.__setattr__(self, "_sealed", False)
             original_init(self, *args, **kwargs)
             object.__setattr__(self, "_sealed", True)
+            snapshot: dict[str, object] = {}
+            for base in type(self).__mro__:
+                slots = getattr(base, "__slots__", ())
+                if isinstance(slots, str):
+                    slots = (slots,)
+                for name in slots:
+                    if name.startswith("_") or name in {"__weakref__", "__dict__"}:
+                        continue
+                    snapshot[name] = _freeze_review_value(object.__getattribute__(self, name))
+            _REVIEW_CAPABILITY_SNAPSHOTS[self] = snapshot
 
         cls.__init__ = wrapped_init
+
+    def __getattribute__(self, name: str) -> object:
+        value = object.__getattribute__(self, name)
+        if name.startswith("_"):
+            return value
+        snapshot = _REVIEW_CAPABILITY_SNAPSHOTS.get(self)
+        if snapshot is None or name not in snapshot:
+            return value
+        expected = snapshot[name]
+        if _freeze_review_value(value) != expected:
+            raise AttributeError("review capability object was mutated")
+        return _thaw_review_value(expected)
 
     def __setattr__(self, name: str, value: object) -> None:
         if getattr(self, "_sealed", False):

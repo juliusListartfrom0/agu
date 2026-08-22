@@ -118,6 +118,21 @@ def _open_existing_directory_no_follow(path: Path) -> int:
         raise
 
 
+def _assert_directory_path_matches_fd(path: Path, directory_fd: int, *, label: str) -> None:
+    """Reject a pathname that no longer resolves to an already-open directory."""
+    try:
+        current_fd = _open_existing_directory_no_follow(Path(path))
+    except OSError as exc:
+        raise ValueError(f"{label} path cannot be reopened without following links") from exc
+    try:
+        expected = os.fstat(directory_fd)
+        actual = os.fstat(current_fd)
+        if (expected.st_dev, expected.st_ino) != (actual.st_dev, actual.st_ino):
+            raise ValueError(f"{label} path no longer names the locked directory")
+    finally:
+        os.close(current_fd)
+
+
 def _ensure_directory_no_follow(path: Path, *, mode: int = 0o700) -> None:
     """Create missing directories through descriptor-relative no-follow opens."""
     fd = os.open(os.sep, _directory_open_flags())

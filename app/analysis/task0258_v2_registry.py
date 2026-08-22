@@ -156,6 +156,8 @@ def seal_run_consumption_claim(
         registry_fd = _open_existing_directory_no_follow(registry_dir)
     assert registry_fd is not None
     lock_path = registry_dir / f".{auth_sha256}.history.lock"
+    if registry_fd is not None and held_lock is None and not owns_directory_fd:
+        raise ValueError("registry directory descriptor requires its held history lock")
     if held_lock is not None:
         held_lock.assert_held(lock_path, directory_fd=registry_fd)
     lock_context = (
@@ -196,6 +198,8 @@ def seal_run_consumption_completed(
         registry_fd = _open_existing_directory_no_follow(registry_dir)
     assert registry_fd is not None
     lock_path = registry_dir / f".{auth_sha256}.history.lock"
+    if registry_fd is not None and held_lock is None and not owns_directory_fd:
+        raise ValueError("registry directory descriptor requires its held history lock")
     if held_lock is not None:
         held_lock.assert_held(lock_path, directory_fd=registry_fd)
     lock_context = (
