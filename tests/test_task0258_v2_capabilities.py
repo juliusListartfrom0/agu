@@ -88,6 +88,144 @@ def _receipt():
     return {"artifact_sha256": "0" * 64, "file_sha256": "0" * 64}
 
 
+def _write_parent_spec_approval_fixture(repository_root, tmp_path):
+    approved_specs = {
+        name: repository_root / "docs/specs/TASK-0258-temporal-canary" / name
+        for name in ("requirement.md", "solution.md", "gate-review.md")
+    }
+    payload = {
+        "schema_version": "agu.module-a-spec-approval.v1",
+        "module_id": "existing-45-temporal-retrospective",
+        "approved_files": [
+            {
+                "filename": name,
+                "file_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size_bytes": path.stat().st_size,
+            }
+            for name, path in approved_specs.items()
+        ],
+        "fresh_review_receipt": {"internal_sha256": "0" * 64, "file_sha256": "1" * 64},
+        "approval_scope": "module_a_implementation_only",
+        "approval_statement_sha256": "2" * 64,
+        "approved_at_utc": "2026-08-22T00:00:00Z",
+    }
+    payload["artifact_sha256"] = canonical_artifact_sha256(payload)
+    raw = (compact_canonical_json(payload) + "\n").encode()
+    path = tmp_path / "parent-spec-approval.json"
+    path.write_bytes(raw)
+    return path, payload, raw, approved_specs
+
+
+def _write_amendment_approval_fixture(
+    repository_root, tmp_path, *, parent_payload, parent_raw, baseline_payload, baseline_raw
+):
+    amendment_path = repository_root / "docs/specs/TASK-0258-temporal-canary/amendment-001-postpublication-proof.md"
+    amendment_raw = amendment_path.read_bytes()
+    review_path = repository_root / "tests/fixtures/task0258/amendment-fresh-review.md"
+    review_raw = review_path.read_bytes()
+    approval_payload = {
+        "schema_version": "agu.task0258-module-a-amendment-implementation-approval.v1",
+        "module_id": "existing-45-temporal-retrospective",
+        "repository_root_absolute_path": str(repository_root),
+        "repository_root_device": repository_root.stat().st_dev,
+        "repository_root_inode": repository_root.stat().st_ino,
+        "parent_spec_approval_receipt": {
+            "artifact_sha256": parent_payload["artifact_sha256"],
+            "file_sha256": hashlib.sha256(parent_raw).hexdigest(),
+        },
+        "approved_parent_file_receipts": parent_payload["approved_files"],
+        "approved_amendment_file_receipt": {
+            "path": "docs/specs/TASK-0258-temporal-canary/amendment-001-postpublication-proof.md",
+            "size_bytes": len(amendment_raw),
+            "file_sha256": hashlib.sha256(amendment_raw).hexdigest(),
+        },
+        "amendment_fresh_review_receipt": {
+            "artifact_sha256": hashlib.sha256(review_raw).hexdigest(),
+            "file_sha256": hashlib.sha256(review_raw).hexdigest(),
+        },
+        "implementation_scope_baseline_receipt": {
+            "artifact_sha256": baseline_payload["artifact_sha256"],
+            "file_sha256": hashlib.sha256(baseline_raw).hexdigest(),
+        },
+        "approval_scope": "amendment_implementation_only",
+        "model_execution_authorized": False,
+        "module_b_authorized": False,
+        "approval_statement_sha256": "3" * 64,
+        "approved_at_utc": "2026-08-22T00:00:01Z",
+    }
+    approval_payload["artifact_sha256"] = canonical_artifact_sha256(approval_payload)
+    approval_raw = (compact_canonical_json(approval_payload) + "\n").encode()
+    approval_path = tmp_path / "amendment-implementation-approval.json"
+    approval_path.write_bytes(approval_raw)
+    return amendment_path, review_path, approval_path, approval_payload, approval_raw
+
+
+def _synthetic_task0257_contract(tmp_path):
+    placeholder = tmp_path / "placeholder.json"
+    placeholder.write_bytes(b"{}\n")
+    sequence_lengths = {
+        "parent_review_jpegs": 1536,
+        "parent_candidate_children": 3,
+        "parent_label_children": 3,
+        "old_embedding_files": 2,
+        "harwood_review_jpegs": 1536,
+        "source_videos": 4,
+        "checkpoints": 2,
+    }
+    path_values = {
+        field: tuple(placeholder for _ in range(sequence_lengths[field])) if field in sequence_lengths else placeholder
+        for field in Task0257InputPaths.__dataclass_fields__
+    }
+    paths = Task0257InputPaths(**path_values)
+    stored_sequences = {"parent_candidate_children", "old_embedding_files"}
+    file_sequences = {
+        "parent_label_children",
+        "parent_review_jpegs",
+        "harwood_review_jpegs",
+        "source_videos",
+        "checkpoints",
+    }
+    file_scalars = {"parent_source_manifest", "v2_label_child", "harwood_source_manifest"}
+    stored = StoredArtifactReceipt(
+        schema_version="agu.test-artifact.v1",
+        internal_sha256_field="artifact_sha256",
+        internal_sha256="0" * 64,
+        file_sha256="0" * 64,
+        filename=placeholder.name,
+        size_bytes=0,
+    )
+    file = FileReceipt(file_sha256="0" * 64, filename=placeholder.name, size_bytes=0)
+    receipt_values = {}
+    for field in Task0257ExpectedReceipts.__dataclass_fields__:
+        if field in stored_sequences or field not in file_sequences and field not in file_scalars:
+            if field in sequence_lengths:
+                rows = [stored for _ in range(sequence_lengths[field])]
+                if field == "checkpoints":
+                    rows[-1] = StoredArtifactReceipt(
+                        schema_version=stored.schema_version,
+                        internal_sha256_field=stored.internal_sha256_field,
+                        internal_sha256=stored.internal_sha256,
+                        file_sha256="7615ae035996b65eb38dad437ae533d2dfcd36f9f89d28c0f0fa7bfb8e6b3130",
+                        filename=stored.filename,
+                        size_bytes=stored.size_bytes,
+                    )
+                receipt_values[field] = tuple(rows)
+            else:
+                receipt_values[field] = stored
+        elif field in file_sequences:
+            rows = [file for _ in range(sequence_lengths[field])]
+            if field == "checkpoints":
+                rows[-1] = FileReceipt(
+                    file_sha256="7615ae035996b65eb38dad437ae533d2dfcd36f9f89d28c0f0fa7bfb8e6b3130",
+                    filename=file.filename,
+                    size_bytes=file.size_bytes,
+                )
+            receipt_values[field] = tuple(rows)
+        else:
+            receipt_values[field] = file
+    return paths, Task0257ExpectedReceipts(**receipt_values)
+
+
 def test_root_loader_opens_from_allowed_root_descriptor(tmp_path, monkeypatch):
     repository_root = tmp_path / "repo"
     repository_root.mkdir()
@@ -674,19 +812,9 @@ def test_discovery_manifest_is_temp_bound_and_observation_only(tmp_path):
 
 def test_amendment_implementation_loader_replays_all_review_receipts(tmp_path):
     repository_root = Path(__file__).resolve().parents[1]
-    approval_dir = repository_root / "analysis_outputs/public_research/task0258_module_a_amendment_approval"
-    parent_source = (
-        repository_root
-        / "analysis_outputs/public_research/task0258_module_a_spec_registry_v2/module_a_spec_approval.json"
+    parent_path, parent_payload, parent_raw, approved_specs = _write_parent_spec_approval_fixture(
+        repository_root, tmp_path
     )
-    parent_payload = json.loads(parent_source.read_text(encoding="utf-8"))
-    parent_raw = (compact_canonical_json(parent_payload) + "\n").encode()
-    parent_path = tmp_path / "parent-spec-approval.json"
-    parent_path.write_bytes(parent_raw)
-    approved_specs = {
-        name: repository_root / "docs/specs/TASK-0258-temporal-canary" / name
-        for name in ("requirement.md", "solution.md", "gate-review.md")
-    }
     parent = load_verified_parent_module_a_spec_approval(
         execution_context=bind_implementation_review_sandbox_context(
             expected_check_name="focused_pytest", expected_command_sha256="0" * 64
@@ -732,29 +860,14 @@ def test_amendment_implementation_loader_replays_all_review_receipts(tmp_path):
     baseline_path = tmp_path / "implementation-scope-baseline.json"
     baseline_path.write_bytes(baseline_raw)
 
-    review_path = approval_dir / "amendment_fresh_review.md"
-    amendment_path = repository_root / "docs/specs/TASK-0258-temporal-canary/amendment-001-postpublication-proof.md"
-    approval_payload = json.loads((approval_dir / "amendment_implementation_approval.json").read_text(encoding="utf-8"))
-    approval_payload["repository_root_device"] = repository_root.stat().st_dev
-    approval_payload["repository_root_inode"] = repository_root.stat().st_ino
-    approval_payload["parent_spec_approval_receipt"] = {
-        "artifact_sha256": parent_payload["artifact_sha256"],
-        "file_sha256": hashlib.sha256(parent_raw).hexdigest(),
-    }
-    approval_payload["amendment_fresh_review_receipt"] = {
-        "artifact_sha256": hashlib.sha256(review_path.read_bytes()).hexdigest(),
-        "file_sha256": hashlib.sha256(review_path.read_bytes()).hexdigest(),
-    }
-    approval_payload["implementation_scope_baseline_receipt"] = {
-        "artifact_sha256": baseline_payload["artifact_sha256"],
-        "file_sha256": hashlib.sha256(baseline_raw).hexdigest(),
-    }
-    approval_payload["artifact_sha256"] = canonical_artifact_sha256(
-        {key: value for key, value in approval_payload.items() if key != "artifact_sha256"}
+    amendment_path, review_path, approval_path, approval_payload, approval_raw = _write_amendment_approval_fixture(
+        repository_root,
+        tmp_path,
+        parent_payload=parent_payload,
+        parent_raw=parent_raw,
+        baseline_payload=baseline_payload,
+        baseline_raw=baseline_raw,
     )
-    approval_raw = (compact_canonical_json(approval_payload) + "\n").encode()
-    approval_path = tmp_path / "amendment-implementation-approval.json"
-    approval_path.write_bytes(approval_raw)
 
     loaded = load_verified_amendment_implementation_approval(
         execution_context=bind_implementation_review_sandbox_context(
@@ -786,19 +899,9 @@ def test_amendment_implementation_loader_replays_all_review_receipts(tmp_path):
 
 def test_amended_implementation_review_loader_replays_fresh_review_and_checks(tmp_path):
     repository_root = Path(__file__).resolve().parents[1]
-    approval_dir = repository_root / "analysis_outputs/public_research/task0258_module_a_amendment_approval"
-    parent_source = (
-        repository_root
-        / "analysis_outputs/public_research/task0258_module_a_spec_registry_v2/module_a_spec_approval.json"
+    parent_path, parent_payload, parent_raw, approved_specs = _write_parent_spec_approval_fixture(
+        repository_root, tmp_path
     )
-    parent_payload = json.loads(parent_source.read_text(encoding="utf-8"))
-    parent_raw = (compact_canonical_json(parent_payload) + "\n").encode()
-    parent_path = tmp_path / "parent-spec-approval.json"
-    parent_path.write_bytes(parent_raw)
-    approved_specs = {
-        name: repository_root / "docs/specs/TASK-0258-temporal-canary" / name
-        for name in ("requirement.md", "solution.md", "gate-review.md")
-    }
     review_context = bind_implementation_review_sandbox_context(
         expected_check_name="focused_pytest", expected_command_sha256="0" * 64
     )
@@ -886,30 +989,16 @@ def test_amended_implementation_review_loader_replays_fresh_review_and_checks(tm
     baseline_path = tmp_path / "implementation-scope-baseline.json"
     baseline_path.write_bytes(baseline_raw)
 
-    amendment_path = repository_root / "docs/specs/TASK-0258-temporal-canary/amendment-001-postpublication-proof.md"
-    amendment_review_path = approval_dir / "amendment_fresh_review.md"
-    approval_payload = json.loads((approval_dir / "amendment_implementation_approval.json").read_text())
-    approval_payload["repository_root_device"] = repository_root.stat().st_dev
-    approval_payload["repository_root_inode"] = repository_root.stat().st_ino
-    approval_payload["parent_spec_approval_receipt"] = {
-        "artifact_sha256": parent_payload["artifact_sha256"],
-        "file_sha256": hashlib.sha256(parent_raw).hexdigest(),
-    }
-    review_bytes = amendment_review_path.read_bytes()
-    approval_payload["amendment_fresh_review_receipt"] = {
-        "artifact_sha256": hashlib.sha256(review_bytes).hexdigest(),
-        "file_sha256": hashlib.sha256(review_bytes).hexdigest(),
-    }
-    approval_payload["implementation_scope_baseline_receipt"] = {
-        "artifact_sha256": baseline_payload["artifact_sha256"],
-        "file_sha256": hashlib.sha256(baseline_raw).hexdigest(),
-    }
-    approval_payload["artifact_sha256"] = canonical_artifact_sha256(
-        {key: value for key, value in approval_payload.items() if key != "artifact_sha256"}
+    amendment_path, amendment_review_path, approval_path, approval_payload, approval_raw = (
+        _write_amendment_approval_fixture(
+            repository_root,
+            tmp_path,
+            parent_payload=parent_payload,
+            parent_raw=parent_raw,
+            baseline_payload=baseline_payload,
+            baseline_raw=baseline_raw,
+        )
     )
-    approval_raw = (compact_canonical_json(approval_payload) + "\n").encode()
-    approval_path = tmp_path / "amendment-implementation-approval.json"
-    approval_path.write_bytes(approval_raw)
     implementation_approval = load_verified_amendment_implementation_approval(
         execution_context=review_context,
         repository_root=repository_root,
@@ -1239,38 +1328,7 @@ def test_amended_implementation_review_loader_replays_fresh_review_and_checks(tm
 
 
 def test_static_input_loader_replays_complete_parent_graph_as_review_only(tmp_path, monkeypatch):
-    repository_root = Path(__file__).resolve().parents[1]
-    contract_path = (
-        repository_root
-        / "analysis_outputs/public_research/task0258_module_a_spec_registry_v1/task0257_input_contract.json"
-    )
-    contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    path_values = {
-        field: tuple(Path(item) for item in value) if isinstance(value, list) else Path(value)
-        for field, value in contract["paths"].items()
-    }
-    paths = Task0257InputPaths(**path_values)
-
-    stored_sequences = {"parent_candidate_children", "old_embedding_files"}
-    file_sequences = {
-        "parent_label_children",
-        "parent_review_jpegs",
-        "harwood_review_jpegs",
-        "source_videos",
-        "checkpoints",
-    }
-    file_scalars = {"parent_source_manifest", "v2_label_child", "harwood_source_manifest"}
-    receipt_values = {}
-    for field, value in contract["expected_receipts"].items():
-        if field in stored_sequences:
-            receipt_values[field] = tuple(StoredArtifactReceipt(**row) for row in value)
-        elif field in file_sequences:
-            receipt_values[field] = tuple(FileReceipt(**row) for row in value)
-        elif field in file_scalars:
-            receipt_values[field] = FileReceipt(**value)
-        else:
-            receipt_values[field] = StoredArtifactReceipt(**value)
-    receipts = Task0257ExpectedReceipts(**receipt_values)
+    paths, receipts = _synthetic_task0257_contract(tmp_path)
 
     plan_path = tmp_path / "temporal-plan.json"
     plan_path.write_bytes(b"review-only-plan\n")

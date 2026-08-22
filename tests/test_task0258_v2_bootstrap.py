@@ -292,7 +292,7 @@ def test_verified_bootstrap_launcher_replays_fixed_fd_contract(tmp_path):
     stdlib_parent = base_runtime / "lib"
     stdlib_parent.mkdir(parents=True)
     stdlib = stdlib_parent / "python3.11"
-    stdlib.symlink_to(Path(os.__file__).resolve().parent, target_is_directory=True)
+    shutil.copytree(Path(os.__file__).resolve().parent, stdlib, symlinks=False)
     site_packages = runtime_root / "venv_site_packages"
     for path in (site_packages,):
         path.mkdir(parents=True)

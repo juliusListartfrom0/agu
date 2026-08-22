@@ -11,9 +11,12 @@ from app.analysis.task0258_module_a_v2 import (
     compact_canonical_json,
 )
 from app.analysis.task0258_v2_fs import (
+    active_flock,
     atomic_write_bytes,
     atomic_write_json,
+    exclusive_flock,
     publish_no_clobber,
+    read_regular_file_no_follow,
     verify_absent,
 )
 
@@ -165,3 +168,47 @@ def test_fixed_generation_stage_residue_is_rejected(tmp_path):
 
     assert stage.is_dir()
     assert not (root / "verified_result_v2").exists()
+
+
+def test_lock_handle_is_required_for_lock_bypass(tmp_path):
+    from app.analysis.task0258_v2_artifacts import CANDIDATE_MEMBER_PATHS
+    from app.analysis.task0258_v2_fs import seal_generation_directory
+
+    root = tmp_path / "out"
+    members = {path: b"x\n" for path in CANDIDATE_MEMBER_PATHS}
+    lock = root.parent / ".lock"
+    with pytest.raises(TypeError):
+        seal_generation_directory(
+            root,
+            "candidate_v2",
+            members,
+            CANDIDATE_MEMBER_PATHS,
+            flock_path=lock,
+            held_lock=True,
+        )
+    assert not root.exists()
+
+
+def test_bounded_read_rejects_post_read_metadata_drift(tmp_path, monkeypatch):
+    import app.analysis.task0258_v2_fs as fs
+
+    path = tmp_path / "payload"
+    path.write_bytes(b"payload")
+    real_read = fs.os.read
+
+    def read_then_touch(fd, count):
+        data = real_read(fd, count)
+        path.write_bytes(b"changed-longer")
+        return data
+
+    monkeypatch.setattr(fs.os, "read", read_then_touch)
+    with pytest.raises(ValueError, match="changed during bounded read"):
+        read_regular_file_no_follow(path)
+
+
+def test_active_flock_is_scoped_and_verified(tmp_path):
+    lock = tmp_path / ".lock"
+    with exclusive_flock(lock) as handle:
+        assert active_flock(lock) is handle
+        handle.assert_held(lock)
+    assert active_flock(lock) is None

@@ -75,7 +75,17 @@ _ENDPOINT_SECURITY_BASE_FIELDS = frozenset(
     {"event", "pid", "pidversion", "ppid", "seq_num", "global_seq_num", "path", "result_type"}
 )
 _ENDPOINT_SECURITY_FINAL_FIELDS = frozenset(
-    {"record_type", "rows", "bytes", "overflow", "sequence_gap", "protocol_error", "timed_out"}
+    {
+        "record_type",
+        "rows",
+        "bytes",
+        "overflow",
+        "sequence_gap",
+        "protocol_error",
+        "timed_out",
+        "target_exit_observed",
+        "interrupted",
+    }
 )
 MAXIMUM_ENDPOINT_SECURITY_ROW_BYTES = 512
 
@@ -247,7 +257,7 @@ def parse_endpoint_security_transcript(
     last_global_seq_num: int | None = None
     last_seq_num: dict[str, int] = {}
     finalization_seen = False
-    for line_number, line in enumerate(stream, start=1):
+    for line_number, line in enumerate(_iter_bounded_transcript_lines(stream), start=1):
         try:
             line_bytes = len(line.encode("utf-8"))
         except UnicodeEncodeError as exc:
@@ -278,11 +288,19 @@ def parse_endpoint_security_transcript(
                 raise ValueError(f"line {line_number} finalization record type is invalid")
             final_rows = _verify_json_integer(payload["rows"], f"line {line_number} finalization rows")
             final_bytes = _verify_json_integer(payload["bytes"], f"line {line_number} finalization bytes")
-            for field in ("overflow", "sequence_gap", "protocol_error", "timed_out"):
+            for field in (
+                "overflow",
+                "sequence_gap",
+                "protocol_error",
+                "timed_out",
+                "interrupted",
+            ):
                 if not isinstance(payload[field], bool):
                     raise ValueError(f"line {line_number} finalization {field} is invalid")
                 if payload[field] is not False:
                     raise ValueError(f"line {line_number} finalization is not clean")
+            if payload["target_exit_observed"] is not True:
+                raise ValueError(f"line {line_number} finalization lacks target EXIT observation")
             if final_rows != len(events) or final_bytes != event_bytes:
                 raise ValueError(f"line {line_number} finalization counts are invalid")
             finalization_seen = True
@@ -304,6 +322,22 @@ def parse_endpoint_security_transcript(
     if not finalization_seen:
         raise ValueError("Endpoint Security transcript is missing finalization")
     return events
+
+
+def _iter_bounded_transcript_lines(stream: IO[str]):
+    """Read JSONL in capped chunks so one physical line cannot grow memory."""
+    read_limit = MAXIMUM_ENDPOINT_SECURITY_ROW_BYTES + 1
+    while True:
+        line = stream.readline(read_limit)
+        if not line:
+            return
+        try:
+            line_bytes = len(line.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("Endpoint Security transcript must contain UTF-8 text") from exc
+        if line_bytes > MAXIMUM_ENDPOINT_SECURITY_ROW_BYTES:
+            raise ValueError("Endpoint Security transcript exceeds row byte cap")
+        yield line
 
 
 def build_read_isolation_attestation(

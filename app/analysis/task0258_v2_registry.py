@@ -9,6 +9,7 @@ write validates first, then publishes no-clobber with exact basenames.
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
 from pathlib import Path
 
 from app.analysis.task0258_module_a_v2 import (
@@ -31,6 +32,8 @@ from app.analysis.task0258_run_history import (
     verify_run_history_marker,
 )
 from app.analysis.task0258_v2_fs import (
+    FlockHandle,
+    active_flock,
     atomic_write_json,
     exclusive_flock,
     seal_generation_directory,
@@ -138,6 +141,8 @@ def append_run_history_marker(
     auth_sha256: str,
     payload: object,
     prior_event: str | None,
+    *,
+    held_lock: FlockHandle | None = None,
 ) -> Path:
     """Validate and no-clobber append a history marker.
 
@@ -150,8 +155,13 @@ def append_run_history_marker(
         raise ValueError("history authorization SHA is invalid")
     verify_run_history_marker(payload)
     lock_path = registry_dir / f".{auth_sha256}.history.lock"
-    with exclusive_flock(lock_path):
-        replayed = replay_run_history_registry(registry_dir, auth_sha256, lock_held=True)
+    if held_lock is None:
+        held_lock = active_flock(lock_path)
+    if held_lock is not None:
+        held_lock.assert_held(lock_path)
+    lock_context = nullcontext(held_lock) if held_lock is not None else exclusive_flock(lock_path)
+    with lock_context as history_lock:
+        replayed = replay_run_history_registry(registry_dir, auth_sha256, held_lock=history_lock)
         claim = replayed[0]
         completion = replayed[1]
         authorization_receipt = claim["authorization_receipt"]

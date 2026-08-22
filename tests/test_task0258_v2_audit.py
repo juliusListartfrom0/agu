@@ -48,6 +48,8 @@ def _endpoint_finalization(event_rows: str, **flags: bool) -> str:
         "sequence_gap": flags.get("sequence_gap", False),
         "protocol_error": flags.get("protocol_error", False),
         "timed_out": flags.get("timed_out", False),
+        "target_exit_observed": flags.get("target_exit_observed", True),
+        "interrupted": flags.get("interrupted", False),
     }
     return json.dumps(payload, separators=(",", ":")) + "\n"
 
@@ -140,6 +142,14 @@ def test_parse_endpoint_security_transcript_requires_clean_finalization():
         parse_endpoint_security_transcript(io.StringIO(event_rows))
     with pytest.raises(ValueError, match="finalization"):
         parse_endpoint_security_transcript(io.StringIO(event_rows + _endpoint_finalization(event_rows, timed_out=True)))
+    with pytest.raises(ValueError, match="finalization"):
+        parse_endpoint_security_transcript(
+            io.StringIO(event_rows + _endpoint_finalization(event_rows, interrupted=True))
+        )
+    with pytest.raises(ValueError, match="finalization"):
+        parse_endpoint_security_transcript(
+            io.StringIO(event_rows + _endpoint_finalization(event_rows, target_exit_observed=False))
+        )
 
     mismatched = json.loads(_endpoint_finalization(event_rows))
     mismatched["rows"] = 0

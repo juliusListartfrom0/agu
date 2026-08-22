@@ -14,6 +14,35 @@ real macOS P2 platform gate. Without an authorized team, the platform result
 must remain `blocked_external_authorization`; local work may continue, but P2,
 P3, P4, and P5 must not be marked complete.
 
+## Free or no-new-fee options checked
+
+There is no free individual route that satisfies the real P2 gate. The
+available zero-cost options have narrower meanings:
+
+1. A free Apple Account / Personal Team can be used for ordinary app
+   development and limited device testing, but it does not grant the managed
+   Endpoint Security client entitlement. Apple documents that entitlement as
+   requiring an entitlement request, and `es_new_client` fails with
+   `ES_NEW_CLIENT_RESULT_ERR_NOT_ENTITLED` when it is absent.
+2. Apple documents development/testing of System Extensions with SIP
+   temporarily disabled. That can support local installation/debugging
+   experiments, but it does not create the managed entitlement, user approval,
+   or externally authenticated kernel read-isolation evidence required by P2.
+3. Eligible nonprofit organizations, accredited educational institutions, and
+   government entities can request Apple's Developer Program fee waiver. This
+   is an organization route subject to Apple's eligibility and approval; it is
+   not a free individual-team workaround.
+4. An existing enrolled organization may sponsor the work, but the host and
+   extension must actually be signed by that authorized team and the team must
+   obtain/hold the required capability. A local self-signed or ad-hoc artifact
+   cannot substitute for that evidence.
+
+References: [Apple membership comparison](https://developer.apple.com/support/compare-memberships/),
+[Endpoint Security entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.endpoint-security.client),
+[`es_new_client`](https://developer.apple.com/documentation/EndpointSecurity/es_new_client%28_%3A_%3A%29),
+[System Extension debugging/testing](https://developer.apple.com/documentation/driverkit/debugging-and-testing-system-extensions),
+[Apple fee waivers](https://developer.apple.com/help/account/membership/fee-waivers).
+
 ## Preconditions
 
 1. Enroll an Apple Account in the Apple Developer Program as an individual, or
@@ -67,7 +96,7 @@ codesign --display --verbose=4 <signed-artifact>
 codesign --display --entitlements :- <signed-artifact>
 
 .venv/bin/python scripts/task0258_endpoint_security_capability.py \
-  --signed-artifact <signed-artifact> --json --require-ready
+  --signed-artifact <signed-artifact> --json --require-capability
 ```
 
 The last command must report at least:

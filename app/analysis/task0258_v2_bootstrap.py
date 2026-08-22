@@ -247,6 +247,23 @@ def load_runtime_snapshot_contract(receipt: Mapping[str, object]) -> Mapping[str
                 raise ValueError("runtime contract ended before its recorded size")
             chunks.append(chunk)
             remaining -= len(chunk)
+        post_read_stat = os.fstat(fd)
+        snapshot = (
+            file_stat.st_dev,
+            file_stat.st_ino,
+            file_stat.st_size,
+            getattr(file_stat, "st_mtime_ns", 0),
+            getattr(file_stat, "st_ctime_ns", 0),
+        )
+        post_snapshot = (
+            post_read_stat.st_dev,
+            post_read_stat.st_ino,
+            post_read_stat.st_size,
+            getattr(post_read_stat, "st_mtime_ns", 0),
+            getattr(post_read_stat, "st_ctime_ns", 0),
+        )
+        if post_snapshot != snapshot:
+            raise ValueError("runtime contract changed during bounded read")
         contract_bytes = b"".join(chunks)
     finally:
         os.close(fd)

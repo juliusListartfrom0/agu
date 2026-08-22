@@ -23,6 +23,8 @@ def _transcript() -> str:
         "sequence_gap": False,
         "protocol_error": False,
         "timed_out": False,
+        "target_exit_observed": True,
+        "interrupted": False,
     }
     return event_rows + json.dumps(finalization, separators=(",", ":")) + "\n"
 

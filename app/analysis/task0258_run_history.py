@@ -34,7 +34,7 @@ from app.analysis.task0258_module_a_v2 import (
     verify_internal_artifact_hash,
     verify_static_input_contract,
 )
-from app.analysis.task0258_v2_fs import exclusive_flock
+from app.analysis.task0258_v2_fs import FlockHandle, active_flock, exclusive_flock
 
 MARKER_SCHEMA = "agu.task0258-module-a-v2-run-history-marker.v1"
 CLAIM_SCHEMA = "agu.task0258-module-a-v2-run-consumption-claim.v1"
@@ -345,6 +345,23 @@ def _read_registry_member_from_fd(directory_fd: int, filename: str) -> bytes:
                 raise ValueError(f"registry member ended before its recorded size: {filename}")
             chunks.append(chunk)
             remaining -= len(chunk)
+        post_stat = os.fstat(member_fd)
+        snapshot = (
+            member_stat.st_dev,
+            member_stat.st_ino,
+            member_stat.st_size,
+            getattr(member_stat, "st_mtime_ns", 0),
+            getattr(member_stat, "st_ctime_ns", 0),
+        )
+        post_snapshot = (
+            post_stat.st_dev,
+            post_stat.st_ino,
+            post_stat.st_size,
+            getattr(post_stat, "st_mtime_ns", 0),
+            getattr(post_stat, "st_ctime_ns", 0),
+        )
+        if post_snapshot != snapshot:
+            raise ValueError(f"registry member changed during bounded read: {filename}")
         return b"".join(chunks)
     except OSError as exc:
         raise ValueError(f"registry member cannot be read: {filename}") from exc
@@ -353,18 +370,21 @@ def _read_registry_member_from_fd(directory_fd: int, filename: str) -> bytes:
 
 
 def replay_run_history_registry(
-    registry_dir: Path, auth_sha256: str, *, lock_held: bool = False
+    registry_dir: Path, auth_sha256: str, *, held_lock: FlockHandle | None = None
 ) -> list[Mapping[str, object]]:
     """Load and replay every durable ledger/marker binding in order.
 
     The replay runs under the registry's fixed history lock by default. Writers
-    that already hold that lock pass ``lock_held=True`` to avoid reacquiring
-    the same advisory lock through a second file descriptor.
+    that already hold that lock pass its unforgeable ``FlockHandle`` to avoid
+    reacquiring the same advisory lock through a second file descriptor.
     """
-    if not lock_held:
-        lock_path = Path(registry_dir) / f".{auth_sha256}.history.lock"
-        with exclusive_flock(lock_path):
-            return replay_run_history_registry(registry_dir, auth_sha256, lock_held=True)
+    lock_path = Path(registry_dir) / f".{auth_sha256}.history.lock"
+    if held_lock is None:
+        held_lock = active_flock(lock_path)
+    if held_lock is None:
+        with exclusive_flock(lock_path) as acquired_lock:
+            return replay_run_history_registry(registry_dir, auth_sha256, held_lock=acquired_lock)
+    held_lock.assert_held(lock_path)
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         directory_fd = os.open(os.fspath(registry_dir), flags)

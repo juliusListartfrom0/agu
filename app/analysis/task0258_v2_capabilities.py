@@ -46,7 +46,7 @@ from app.analysis.task0258_v2_artifacts import (
     verify_postpublication_failure,
     verify_postpublication_verification,
 )
-from app.analysis.task0258_v2_fs import exclusive_flock, verify_generation_directory
+from app.analysis.task0258_v2_fs import FlockHandle, active_flock, exclusive_flock, verify_generation_directory
 from app.analysis.task0258_v2_pipeline import build_member_receipts, output_parent_flock_path
 from app.analysis.task0258_v2_read_isolation import verify_read_isolation_binding
 from app.analysis.task0258_v2_verification import verify_verification_attempt
@@ -2781,7 +2781,7 @@ def _history_contract(ledger: VerifiedRunHistoryLedger) -> dict[str, object]:
 
 
 def _replay_history_with_identity(
-    *, directory: Path, authorization_sha256: str, lock_held: bool = False
+    *, directory: Path, authorization_sha256: str, held_lock: FlockHandle | None = None
 ) -> tuple[list[Mapping[str, object]], tuple[int, int]]:
     """Replay a history ledger and bind the snapshot to one physical directory.
 
@@ -2789,27 +2789,32 @@ def _replay_history_with_identity(
     relative replay. This prevents a loaded review object from silently using
     a duplicated registry or a changed durable head.
     """
-    def replay_locked() -> tuple[list[Mapping[str, object]], tuple[int, int]]:
+    def replay_locked(history_lock: FlockHandle) -> tuple[list[Mapping[str, object]], tuple[int, int]]:
         before = _verify_real_directory(directory)
-        payloads = replay_run_history_registry(directory, authorization_sha256, lock_held=True)
+        payloads = replay_run_history_registry(directory, authorization_sha256, held_lock=history_lock)
         after = _verify_real_directory(directory)
         if before != after:
             raise ValueError("run history registry identity changed during replay")
         return payloads, after
 
-    if lock_held:
-        return replay_locked()
     lock_path = Path(directory) / f".{authorization_sha256}.history.lock"
-    with exclusive_flock(lock_path):
-        return replay_locked()
+    if held_lock is None:
+        held_lock = active_flock(lock_path)
+    if held_lock is not None:
+        held_lock.assert_held(lock_path)
+        return replay_locked(held_lock)
+    with exclusive_flock(lock_path) as acquired_lock:
+        return replay_locked(acquired_lock)
 
 
-def _revalidate_run_history_ledger(ledger: VerifiedRunHistoryLedger, *, lock_held: bool = False) -> None:
+def _revalidate_run_history_ledger(
+    ledger: VerifiedRunHistoryLedger, *, held_lock: FlockHandle | None = None
+) -> None:
     """Reject a stale, relocated, or mutated loaded history snapshot."""
     payloads, identity = _replay_history_with_identity(
         directory=Path(ledger.directory),
         authorization_sha256=ledger.authorization_sha256,
-        lock_held=lock_held,
+        held_lock=held_lock,
     )
     if identity != ledger.directory_identity:
         raise ValueError("run history registry physical identity drifted")
@@ -2846,7 +2851,7 @@ def _verify_run_admission_history_binding(
     *,
     run_admission: VerifiedReviewRunAdmission,
     run_history: VerifiedRunHistoryLedger,
-    lock_held: bool,
+    held_lock: FlockHandle | None = None,
 ) -> dict[str, object]:
     """Cross-bind admission claim/completion bytes to one live history ledger."""
     history_registry = Path(run_history.directory)
@@ -2854,7 +2859,7 @@ def _verify_run_admission_history_binding(
     if history_registry != admission_registry:
         raise ValueError("run admission and history must use the same registry")
     _verify_absolute_no_symlink_path(history_registry)
-    _revalidate_run_history_ledger(run_history, lock_held=lock_held)
+    _revalidate_run_history_ledger(run_history, held_lock=held_lock)
     admission_identity = _verify_real_directory(admission_registry)
     if admission_identity != run_history.directory_identity:
         raise ValueError("run admission and history registry identities are not the same")
@@ -2900,7 +2905,6 @@ def bind_verified_review_attempt_to_run_spine(
     history_contract = _verify_run_admission_history_binding(
         run_admission=run_admission,
         run_history=run_history,
-        lock_held=True,
     )
     authorization_receipts = payload["authorization_receipts"]
     if not isinstance(authorization_receipts, Mapping):
@@ -2967,7 +2971,6 @@ def bind_verified_review_no_write_preflight(
     _verify_run_admission_history_binding(
         run_admission=admission,
         run_history=history,
-        lock_held=True,
     )
 
     output_root = Path(admission.admission.payload["output_root_absolute_path"])
@@ -3351,7 +3354,6 @@ def _load_verified_terminal_artifact_unlocked(
     history_contract = _verify_run_admission_history_binding(
         run_admission=run_admission,
         run_history=run_history,
-        lock_held=True,
     )
     candidate_gate = _load_candidate_gate_artifact(
         candidate_dir=candidate_dir,

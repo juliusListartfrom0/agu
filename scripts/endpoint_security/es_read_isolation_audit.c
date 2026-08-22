@@ -5,12 +5,12 @@
 // Endpoint Security framework (es_* C API). This client subscribes to the
 // kernel's path-resolution notify events for the audited worker process tree and
 // streams a bounded, canonical transcript (JSONL) that ends with a clean
-// finalization record. The Python side can validate the diagnostic projection,
+// finalization record after observing the audited target's EXIT event. The Python side can validate the diagnostic projection,
 // but still cannot fold it into `agu.task0258-module-a-worker-read-isolation-attestation.v1`
 // without a future externally authenticated provider.
 //
 // BUILD (unsigned; signing + entitlement are a separate platform step):
-//   clang -O2 -framework EndpointSecurity -framework CoreFoundation -lbsm \
+//   clang -Wall -Wextra -Werror -O2 -framework EndpointSecurity -framework CoreFoundation -lbsm \
 //         -o es_read_isolation_audit es_read_isolation_audit.c
 //
 // LOADING requires a binary signed with the
@@ -20,8 +20,9 @@
 // Usage: es_read_isolation_audit --pid <worker-pid> --out <absolute-transcript.jsonl> [--timeout-seconds <n>]
 // The diagnostic transcript retains notify auth/flags results and the
 // available per-event/global sequence numbers. Exit 3 means a size/lineage
-// overflow, 4 means the bounded timeout fired, and 5 means a protocol or
-// sequence-gap failure. None of these exit states is an attestation.
+// overflow, 4 means the bounded timeout fired, 5 means a protocol or
+// sequence-gap failure, and 6 means the target EXIT was not observed or the
+// observation was interrupted. None of these exit states is an attestation.
 
 #include <EndpointSecurity/EndpointSecurity.h>
 #include <bsm/libbsm.h>
@@ -49,6 +50,8 @@ static uint64_t g_row_count = 0;
 static uint64_t g_row_bytes = 0;
 static int g_overflow = 0;
 static int g_timed_out = 0;
+static int g_interrupted = 0;
+static int g_target_exit_observed = 0;
 static unsigned g_timeout_seconds = 120;
 static int g_target_pidversion = -1;
 static int g_sequence_gap = 0;
@@ -58,7 +61,7 @@ static int g_have_global_seq_num = 0;
 static uint64_t g_last_seq_num[ES_EVENT_TYPE_LAST];
 static uint8_t g_have_seq_num[ES_EVENT_TYPE_LAST];
 
-static void on_signal(int sig) { (void)sig; g_stop = 1; }
+static void on_signal(int sig) { (void)sig; g_interrupted = 1; g_stop = 1; }
 static void on_timeout(int sig) { (void)sig; g_timed_out = 1; g_stop = 1; }
 
 typedef struct {
@@ -365,6 +368,7 @@ static void handler(es_client_t *client, const es_message_t *msg) {
             audit_token_to_pid(msg->process->audit_token) == g_target_pid &&
             audit_token_to_pidversion(msg->process->audit_token) == g_target_pidversion) {
             alarm(0);
+            g_target_exit_observed = 1;
             g_stop = 1;
         }
         return;
@@ -491,13 +495,16 @@ static int write_final_row(void) {
     int written = snprintf(
         row, sizeof(row),
         "{\"record_type\":\"final\",\"rows\":%llu,\"bytes\":%llu,"
-        "\"overflow\":%s,\"sequence_gap\":%s,\"protocol_error\":%s,\"timed_out\":%s}\n",
+        "\"overflow\":%s,\"sequence_gap\":%s,\"protocol_error\":%s,\"timed_out\":%s,"
+        "\"target_exit_observed\":%s,\"interrupted\":%s}\n",
         (unsigned long long)g_row_count,
         (unsigned long long)g_row_bytes,
         g_overflow ? "true" : "false",
         g_sequence_gap ? "true" : "false",
         g_protocol_error ? "true" : "false",
-        g_timed_out ? "true" : "false");
+        g_timed_out ? "true" : "false",
+        g_target_exit_observed ? "true" : "false",
+        g_interrupted ? "true" : "false");
     if (written <= 0 || (size_t)written >= sizeof(row)) {
         return 0;
     }
@@ -600,5 +607,11 @@ int main(int argc, char **argv) {
     if (g_sequence_gap || g_protocol_error) {
         return 5;
     }
-    return g_timed_out ? 4 : 0;
+    if (g_timed_out) {
+        return 4;
+    }
+    if (g_interrupted || !g_target_exit_observed) {
+        return 6;
+    }
+    return 0;
 }

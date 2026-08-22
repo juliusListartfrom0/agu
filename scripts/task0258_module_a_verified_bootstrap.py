@@ -13,6 +13,7 @@ The pure core lives in ``app.analysis.task0258_v2_bootstrap``.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -53,15 +54,23 @@ def _preimport_sha256(value: object) -> str:
     return hashlib.sha256(_preimport_canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def _preimport_directory_flags() -> int:
+    try:
+        no_follow = os.O_NOFOLLOW
+        directory = os.O_DIRECTORY
+    except AttributeError as exc:
+        raise OSError("pre-import platform lacks O_NOFOLLOW/O_DIRECTORY") from exc
+    return os.O_RDONLY | directory | no_follow | getattr(os, "O_CLOEXEC", 0)
+
+
 def _preimport_open_absolute_file(path: object) -> int:
     if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
         raise ValueError("pre-import path is not canonical absolute")
     components = path.split("/")[1:]
     if not components or any(not component for component in components):
         raise ValueError("pre-import path has an empty component")
-    common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    directory_flags = common_flags | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    file_flags = common_flags | getattr(os, "O_NOFOLLOW", 0)
+    directory_flags = _preimport_directory_flags()
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     parent_fd = os.open("/", directory_flags)
     try:
         for component in components[:-1]:
@@ -73,6 +82,37 @@ def _preimport_open_absolute_file(path: object) -> int:
         raise ValueError("pre-import file cannot be opened without following links") from exc
     finally:
         os.close(parent_fd)
+
+
+def _preimport_open_absolute_directory(path: str) -> int:
+    """Open a runtime sys.path directory and retain its physical identity."""
+    if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path:
+        raise ValueError("runtime sys.path directory is not canonical absolute")
+    components = path.split("/")[1:]
+    if not components or any(not component for component in components):
+        raise ValueError("runtime sys.path directory has an empty component")
+    parent_fd = os.open("/", _preimport_directory_flags())
+    try:
+        for component in components:
+            next_fd = os.open(component, _preimport_directory_flags(), dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        return parent_fd
+    except OSError as exc:
+        os.close(parent_fd)
+        raise ValueError("runtime sys.path directory cannot be opened without following links") from exc
+
+
+def _preimport_physical_path(directory_fd: int) -> str:
+    """Get the kernel-resolved path of a retained directory descriptor."""
+    try:
+        raw = fcntl.fcntl(directory_fd, fcntl.F_GETPATH, b"\0" * 1024)
+        physical = raw.split(b"\0", 1)[0].decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError("runtime sys.path directory has no physical path") from exc
+    if not physical.startswith("/") or os.path.normpath(physical) != physical:
+        raise ValueError("runtime sys.path physical path is not canonical")
+    return physical
 
 
 def _preimport_read_bounded_file(path: object) -> bytes:
@@ -166,7 +206,7 @@ def _preimport_read_request(request_fd: int) -> tuple[bytes, Mapping[str, object
     return request_bytes, request
 
 
-def _preimport_runtime_sys_path(request: Mapping[str, object]) -> list[str]:
+def _preimport_runtime_sys_path(request: Mapping[str, object]) -> tuple[list[str], list[int]]:
     receipt = request["runtime_snapshot_receipt"]
     if not isinstance(receipt, Mapping) or set(receipt) != _PREIMPORT_RUNTIME_RECEIPT_FIELDS:
         raise ValueError("runtime snapshot receipt is invalid before import")
@@ -204,6 +244,7 @@ def _preimport_runtime_sys_path(request: Mapping[str, object]) -> list[str]:
     if not isinstance(entries, list) or len(entries) != len(expected):
         raise ValueError("runtime sys.path rows are invalid before import")
     paths: list[str] = []
+    path_fds: list[int] = []
     for row, (ordinal, root_id, relative_path) in zip(entries, expected):
         if not isinstance(row, Mapping) or (row.get("ordinal"), row.get("root_id"), row.get("relative_path")) != (
             ordinal,
@@ -211,19 +252,25 @@ def _preimport_runtime_sys_path(request: Mapping[str, object]) -> list[str]:
             relative_path,
         ):
             raise ValueError("runtime sys.path row is invalid before import")
-        paths.append(f"{runtime_root}/{root_id}" if not relative_path else f"{runtime_root}/{root_id}/{relative_path}")
-    return paths
+        path_text = f"{runtime_root}/{root_id}" if not relative_path else f"{runtime_root}/{root_id}/{relative_path}"
+        path_fd = _preimport_open_absolute_directory(path_text)
+        path_fds.append(path_fd)
+        paths.append(_preimport_physical_path(path_fd))
+    return paths, path_fds
 
 
 def main() -> int:
     request_fd: int | None = None
     source_fd: int | None = None
+    runtime_path_fds: list[int] = []
     try:
         request_fd, source_fd = _preimport_parse_flags(sys.argv[1:])
         _preimport_validate_fds(request_fd, source_fd)
         request_bytes, request = _preimport_read_request(request_fd)
-        sys.path[:] = _preimport_runtime_sys_path(request)
+        sys.path[:], runtime_path_fds = _preimport_runtime_sys_path(request)
     except (OSError, TypeError, ValueError):
+        for path_fd in runtime_path_fds:
+            os.close(path_fd)
         _close_bootstrap_fds(request_fd, source_fd)
         return 2
 
@@ -262,13 +309,18 @@ def main() -> int:
         runtime_contract = load_runtime_snapshot_contract(request["runtime_snapshot_receipt"])
         entries = runtime_contract["ordered_python_sys_path_entries"]
         runtime_root = runtime_contract["runtime_root_absolute_path"]
-        sys.path[:] = build_sys_path_from_entries(runtime_root, entries)
+        build_sys_path_from_entries(runtime_root, entries)
         _close_bootstrap_fds(request_fd, source_fd)
         dispatch_module(request["target_module"], request["target_argv"])
     except (ImportError, OSError, RuntimeError, TypeError, ValueError):
         return 2
     finally:
         _close_bootstrap_fds(request_fd, source_fd)
+        for path_fd in runtime_path_fds:
+            try:
+                os.close(path_fd)
+            except OSError:
+                pass
     return 0
 
 

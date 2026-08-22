@@ -16,7 +16,7 @@ import stat
 from pathlib import Path
 from typing import TextIO
 
-from app.analysis.task0258_v2_audit import parse_endpoint_security_transcript
+from app.analysis.task0258_v2_audit import MAXIMUM_READ_EVENT_BYTES, parse_endpoint_security_transcript
 
 SCHEMA_VERSION = "agu.task0258-endpoint-security-diagnostic-inspection.v1"
 
@@ -50,6 +50,8 @@ def _open_regular_transcript(path: Path) -> TextIO:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise ValueError("transcript path is not a regular file")
+        if metadata.st_size > MAXIMUM_READ_EVENT_BYTES:
+            raise ValueError("transcript file exceeds byte cap")
         return os.fdopen(descriptor, "r", encoding="utf-8", newline="")
     except Exception:
         os.close(descriptor)

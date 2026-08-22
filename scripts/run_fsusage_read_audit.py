@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""TASK-0258 v2 read-isolation audit harness (root-level syscall auditing).
+"""TASK-0258 v2 read-isolation diagnostic harness (root-level syscall logging).
 
 Spawns the verification worker, concurrently captures its filesystem syscall
-stream with ``sudo fs_usage -f filesys``, then builds the
-``agu.task0258-module-a-worker-read-isolation-attestation.v1`` from the ordered
-read events.
+stream with ``sudo fs_usage -f filesys``, then returns a bounded diagnostic
+projection. ``fs_usage`` is not an authenticated kernel provider and this
+command never creates a production read-isolation attestation.
 
 Requires root: credentials must be cached (``sudo -v``) before invoking; the
 harness itself calls ``sudo -n``.
 
 Usage:
   run_fsusage_read_audit.py --worker-argv <cmd>... --policy <policy.json> \
-      --out <attestation.json> [attestation inputs...]
+      --out <diagnostic.json> [diagnostic inputs...]
 """
 
 from __future__ import annotations
@@ -23,11 +23,7 @@ import signal
 import subprocess
 from pathlib import Path
 
-from app.analysis.task0258_v2_audit import (
-    MAXIMUM_READ_EVENT_BYTES,
-    build_read_isolation_attestation,
-    parse_fsusage_transcript,
-)
+from app.analysis.task0258_v2_audit import MAXIMUM_READ_EVENT_BYTES, parse_fsusage_transcript
 from app.analysis.task0258_v2_fs import atomic_write_json, read_regular_file_no_follow
 from app.analysis.task0258_v2_worker_runner import (
     WorkerTimeoutError,
@@ -134,17 +130,17 @@ def run_read_audit(
     sudo_password: str | None = None,
     worker_timeout_seconds: int = 120,
 ) -> tuple[dict, list]:
-    """Run the audit and return ``(attestation_payload, events)``.
+    """Run the diagnostic and return ``(diagnostic_payload, events)``.
 
-    ``attestation_inputs`` carries the non-derived attestation fields
-    (role/nonce/hashes); the derived fields (ordered events, denied count,
-    projection) are computed from the audited transcript. Root is required:
+    ``attestation_inputs`` is retained for the planned provider adapter but is
+    never used to mint authority. Root is required:
     pass ``sudo_password`` (used via ``sudo -S`` on stdin) or pre-cache
     credentials so ``sudo -n`` succeeds.
     """
     import io
     import threading
 
+    del policy_payload, attestation_inputs
     validate_worker_launch_inputs(worker_argv, worker_timeout_seconds)
     proc = subprocess.Popen(
         worker_argv,
@@ -154,11 +150,6 @@ def run_read_audit(
         text=True,
         start_new_session=True,
     )
-    attestation_inputs = {
-        **attestation_inputs,
-        "child_pid": proc.pid,
-        "ordered_observed_process_ids": [proc.pid],
-    }
     sudo_mode = ["sudo", "-S"] if sudo_password is not None else ["sudo", "-n"]
     fs_argv = sudo_mode + ["fs_usage", "-w", "-f", "filesys", str(proc.pid)]
     if fs_usage_extra_args:
@@ -210,12 +201,15 @@ def run_read_audit(
     if fs.returncode not in (0, -15, None) and not fs_out and fs_err:
         raise RuntimeError(f"fs_usage failed: {fs_err.strip()}")
     events = parse_fsusage_transcript(io.StringIO(fs_out))
-    attestation = build_read_isolation_attestation(
-        **attestation_inputs,
-        events=events,
-        denied_paths=policy_payload.get("ordered_denied_read_rows", []),
-    )
-    return attestation, events
+    diagnostic = {
+        "schema_version": "agu.task0258-fsusage-diagnostic-projection.v1",
+        "status": "external_kernel_audit_required",
+        "event_count": len(events),
+        "evidence_class": "diagnostic_only",
+        "production_capability": False,
+        "p5_ready": False,
+    }
+    return diagnostic, events
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -262,9 +256,9 @@ def main() -> int:
         sudo_password=__import__("os").environ.get("AGU_SUDO_PASSWORD"),
     )
     atomic_write_json(args.out, attestation)
-    print(f"events={len(events)} denied={attestation['denied_read_attempt_count']}")
-    print(f"projection={attestation['read_event_projection_sha256']}")
-    print(f"attestation written to {args.out}")
+    print(f"events={len(events)}")
+    print(f"status={attestation['status']}")
+    print(f"diagnostic projection written to {args.out}")
     return 0
 
 

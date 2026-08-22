@@ -36,6 +36,8 @@ from app.analysis.task0258_v2_artifacts import (
     verify_postpublication_verification,
 )
 from app.analysis.task0258_v2_fs import (
+    FlockHandle,
+    active_flock,
     atomic_write_bytes,
     exclusive_flock,
     read_regular_file_no_follow,
@@ -297,7 +299,7 @@ def read_published_candidate_receipt_bundle(
     candidate_dir: Path,
     output_flock_path: Path,
     expected_payload: Mapping[str, object] | None = None,
-    output_lock_held: bool = False,
+    output_lock: FlockHandle | None = None,
 ) -> bytes:
     """Reopen a published bundle and candidate under the same output locks."""
     bundle_path = Path(bundle_path)
@@ -311,7 +313,11 @@ def read_published_candidate_receipt_bundle(
         raise ValueError("candidate receipt bundle path is not authorized")
     _require_output_parent_flock(candidate_dir.parent, output_flock_path)
     lock_path = bundle_path.parent / ".candidate-receipt-bundle.lock"
-    output_lock_context = nullcontext() if output_lock_held else exclusive_flock(output_flock_path)
+    if output_lock is None:
+        output_lock = active_flock(output_flock_path)
+    if output_lock is not None:
+        output_lock.assert_held(output_flock_path)
+    output_lock_context = nullcontext(output_lock) if output_lock is not None else exclusive_flock(output_flock_path)
     with output_lock_context:
         with exclusive_flock(lock_path):
             verify_generation_directory(candidate_dir, CANDIDATE_MEMBER_PATHS)
@@ -401,7 +407,7 @@ def seal_verified_result(
     registry_payload: object,
     *,
     flock_path: Path,
-    output_lock_held: bool = False,
+    output_lock: FlockHandle | None = None,
 ) -> Path:
     """No-clobber publish ``verified_result_v2/verification_registry.json``."""
     if not isinstance(registry_payload, Mapping):
@@ -429,7 +435,7 @@ def seal_verified_result(
         flock_path=flock_path,
         stage_name=f".{authorization_sha256}.verified-result-v2-stage",
         pre_publish_validator=validate_topology,
-        lock_held=output_lock_held,
+        held_lock=output_lock,
     )
 
 
@@ -472,7 +478,7 @@ def seal_postverification_failure(
     failure_payload: object,
     *,
     flock_path: Path,
-    output_lock_held: bool = False,
+    output_lock: FlockHandle | None = None,
 ) -> Path:
     """No-clobber publish ``postverification_failure_v2/failure.json``."""
     if not isinstance(failure_payload, Mapping):
@@ -507,7 +513,7 @@ def seal_postverification_failure(
         flock_path=flock_path,
         stage_name=f".{authorization_sha256}.postverification-failure-v2-stage",
         pre_publish_validator=validate_topology,
-        lock_held=output_lock_held,
+        held_lock=output_lock,
     )
 
 

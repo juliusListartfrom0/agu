@@ -131,6 +131,9 @@ def build_capability_report(*, signed_artifact: Path | None = None) -> dict[str,
         executable = Path(temporary_directory) / "es_read_isolation_audit"
         compile_result = _run(
             clang_path,
+            "-Wall",
+            "-Wextra",
+            "-Werror",
             "-O2",
             "-isysroot",
             str(sdk_path),
@@ -179,9 +182,9 @@ def main() -> int:
         help="inspect this signed executable or .systemextension instead of the temporary compile",
     )
     parser.add_argument(
-        "--require-ready",
+        "--require-capability",
         action="store_true",
-        help="return nonzero unless the capability is fully authorized",
+        help="return nonzero unless the artifact is signed with the Endpoint Security entitlement",
     )
     args = parser.parse_args()
     report = build_capability_report(signed_artifact=args.signed_artifact)
@@ -189,7 +192,8 @@ def main() -> int:
         print(json.dumps(report, sort_keys=True, separators=(",", ":")))
     else:
         print(report["status"])
-    return 0 if not args.require_ready or report["status"] == "authorized" else 1
+    capability_ready = report["status"] in {"requires_external_user_approval", "authorized"}
+    return 0 if not args.require_capability or capability_ready else 1
 
 
 if __name__ == "__main__":

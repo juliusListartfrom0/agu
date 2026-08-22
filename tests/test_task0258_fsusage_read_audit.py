@@ -167,7 +167,7 @@ def test_run_read_audit_reaps_fs_usage_after_worker_finishes(monkeypatch):
             return self.returncode
 
     worker = FinishedWorker()
-    diagnostic = DiagnosticProcess()
+    diagnostic_process = DiagnosticProcess()
     popen_calls = 0
 
     def fake_popen(argv, **kwargs):
@@ -175,8 +175,8 @@ def test_run_read_audit_reaps_fs_usage_after_worker_finishes(monkeypatch):
         popen_calls += 1
         if popen_calls == 1:
             return worker
-        diagnostic.stdin = kwargs.get("stdin")
-        return diagnostic
+        diagnostic_process.stdin = kwargs.get("stdin")
+        return diagnostic_process
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     sha = "0" * 64
@@ -193,10 +193,18 @@ def test_run_read_audit_reaps_fs_usage_after_worker_finishes(monkeypatch):
         "permit_artifact_sha256": sha,
         "finalize_artifact_sha256": sha,
     }
-    with pytest.raises(PermissionError, match="externally authenticated"):
-        run_read_audit(worker_argv=["worker"], policy_payload={}, attestation_inputs=inputs)
+    report, events = run_read_audit(worker_argv=["worker"], policy_payload={}, attestation_inputs=inputs)
+    assert events == []
+    assert report == {
+        "schema_version": "agu.task0258-fsusage-diagnostic-projection.v1",
+        "status": "external_kernel_audit_required",
+        "event_count": 0,
+        "evidence_class": "diagnostic_only",
+        "production_capability": False,
+        "p5_ready": False,
+    }
 
-    assert diagnostic.reaped is True
+    assert diagnostic_process.reaped is True
 
 
 def test_run_read_audit_reaps_worker_when_diagnostic_drain_cleanup_fails(monkeypatch):

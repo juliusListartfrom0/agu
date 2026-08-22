@@ -71,7 +71,7 @@ def _simulate_endpoint_security_diagnostic() -> dict[str, object]:
         '"global_seq_num":100,"path":"/private/tmp/simulation-input.json",'
         '"result_type":"auth","result_auth":"allow"}\n'
         '{"event":"fork","pid":43,"pidversion":8,"ppid":42,"seq_num":11,'
-        '"global_seq_num":102,"path":null,"result_type":"flags","result_flags":3}\n'
+        '"global_seq_num":101,"path":null,"result_type":"flags","result_flags":3}\n'
     )
     finalization = {
         "record_type": "final",
@@ -81,6 +81,8 @@ def _simulate_endpoint_security_diagnostic() -> dict[str, object]:
         "sequence_gap": False,
         "protocol_error": False,
         "timed_out": False,
+        "target_exit_observed": True,
+        "interrupted": False,
     }
     transcript = event_rows + json.dumps(finalization, separators=(",", ":")) + "\n"
     events = parse_endpoint_security_transcript(io.StringIO(transcript))
